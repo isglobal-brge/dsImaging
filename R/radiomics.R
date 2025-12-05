@@ -89,21 +89,12 @@ ds_radiomics <- function(vault,
 
   on_error <- match.arg(on_error)
 
-  # Validate inputs
-
-  if (!inherits(vault, "DSVaultCollection")) {
-    stop("vault must be a DSVaultCollection object from dsVault package")
-  }
-
-  # Get image list from vault
-  vault_hashes <- vault$list_hashes()
-
-  if (nrow(vault_hashes) == 0) {
-    stop("No images found in vault collection")
-  }
+  # Step 0: Validate inputs (vault, image formats, HPC methods)
+  validation <- validate_radiomics_inputs(vault, hpc_config, verbose = verbose)
+  vault_hashes <- validation$vault_hashes
 
   if (verbose) {
-    message(sprintf("Processing %d images from collection '%s'...",
+    message(sprintf("\nProcessing %d valid images from collection '%s'...",
                     nrow(vault_hashes), vault$collection))
   }
 
