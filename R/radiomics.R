@@ -50,10 +50,10 @@
 #' )
 #'
 #' # Full extraction (wait for results)
-#' features <- ds_radiomics(vault, hpc)
+#' features <- RadiomicsDS(vault, hpc)
 #'
 #' # Submit only, check status later
-#' status <- ds_radiomics(vault, hpc, wait = FALSE)
+#' status <- RadiomicsDS(vault, hpc, wait = FALSE)
 #' status$pending   # How many still running
 #' status$completed # How many done
 #'
@@ -64,7 +64,7 @@
 #' }
 #'
 #' # With custom parameters
-#' features <- ds_radiomics(
+#' features <- RadiomicsDS(
 #'   vault, hpc,
 #'   lungmask_model = "R231CovidWeb",
 #'   feature_classes = c("firstorder", "shape"),
@@ -72,7 +72,7 @@
 #'   on_error = "stop"  # Fail if any image fails
 #' )
 #' }
-ds_radiomics <- function(vault,
+RadiomicsDS <- function(vault,
                           hpc_config,
                           lungmask_model = "R231",
                           feature_classes = c("firstorder", "shape", "glcm",
