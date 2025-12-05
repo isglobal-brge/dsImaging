@@ -93,6 +93,9 @@ ds_radiomics <- function(vault,
   validation <- validate_radiomics_inputs(vault, hpc_config, verbose = verbose)
   vault_hashes <- validation$vault_hashes
 
+  # Disclosure check: ensure image count meets threshold before processing
+  check_image_disclosure(nrow(vault_hashes), verbose = verbose)
+
   if (verbose) {
     message(sprintf("\nProcessing %d valid images from collection '%s'...",
                     nrow(vault_hashes), vault$collection))
@@ -208,6 +211,9 @@ ds_radiomics <- function(vault,
     warning("No features extracted from pipeline results")
     return(data.frame())
   }
+
+  # Disclosure check: ensure result row count meets threshold before returning
+  check_result_disclosure(features_df, verbose = verbose)
 
   if (verbose) {
     id_cols <- c("filename", "image_hash", "pipeline_hash")

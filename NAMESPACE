@@ -2,6 +2,8 @@
 
 export(DSJobTracker)
 export(check_hpc_methods)
+export(check_image_disclosure)
+export(check_result_disclosure)
 export(create_lungmask_pipeline)
 export(create_lungmask_pyradiomics_pipeline)
 export(create_pyradiomics_pipeline)
