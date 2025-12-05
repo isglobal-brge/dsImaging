@@ -1,0 +1,24 @@
+Package: dsImaging
+Title: DataSHIELD Medical Imaging Analysis
+Version: 0.1.0
+Authors@R:
+    c(person("David", "Sarrat González", , "david.sarrat@isglobal.org", role = c("aut", "cre")),
+      person("Xavier", "Escribà-Montagut", , "xavier.escriba@isglobal.org", role = c("aut")),
+      person("Juan R", "González", , "juanr.gonzalez@isglobal.org", role = c("aut")))
+Description: Modular framework for distributed medical imaging analysis using
+    DataSHIELD infrastructure. Connects vault storage (dsVault) with HPC
+    processing (dsHPC) to extract radiomic features from medical images.
+    Supports lung segmentation (lungmask) and radiomic feature extraction
+    (pyradiomics) pipelines.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.2.3
+Imports:
+    dsVault,
+    dsHPC,
+    R6,
+    jsonlite
+Suggests:
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3

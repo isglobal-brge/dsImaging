@@ -1,0 +1,29 @@
+# R package build artifacts
+*.tar.gz
+*.Rcheck/
+*.Rproj.user
+
+# RStudio
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+
+# Documentation
+docs/
+man/*.Rd
+
+# Byte-compiled / optimized
+*.dll
+*.so
+*.dylib
+
+# Output files
+output/
+*.csv
+*.rds
+
+# Temporary files
+*~
+\#*\#
+.DS_Store
