@@ -21,4 +21,6 @@ Imports:
     jsonlite
 Suggests:
     testthat (>= 3.0.0)
+AssignMethods:
+    RadiomicsDS
 Config/testthat/edition: 3
