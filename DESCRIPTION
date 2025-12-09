@@ -24,6 +24,7 @@ Suggests:
     dsBase
 Config/testthat/edition: 3
 AssignMethods:
-    RadiomicsDS,
+    RadiomicsDS
+AggregateMethods:
     ImageSyncDS,
     LungmaskDS

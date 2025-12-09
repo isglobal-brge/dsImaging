@@ -7,149 +7,131 @@
 
 #' Sync Vault Images to HPC Storage
 #'
-#' Server-side assign function to synchronize medical images from a vault
-#' collection to HPC storage. This is typically the first step before
-#' running any processing pipelines.
+#' Server-side AGGREGATE function to synchronize medical images from a vault
+#' collection to HPC storage. Returns only aggregate counts for disclosure
+#' control - no individual file information or hashes are returned to the client.
 #'
 #' @param collection A DSVaultCollection object (from dsVault package).
 #' @param hpc_unit An HPC API configuration (from dsHPC::create_api_config).
-#' @param verbose Print progress messages (default: TRUE).
+#' @param verbose Print progress messages (default: FALSE).
 #'
-#' @return A list with sync results:
+#' @return A list with aggregate sync status (safe for disclosure):
 #'   - total: Total files in vault
 #'   - existing: Files already in HPC
 #'   - uploaded: Files uploaded this run
 #'   - failed: Files that failed to upload
-#'   - hashes: Data frame with file names and their SHA-256 hashes
+#'   - success: TRUE if no failures, FALSE otherwise
+#'
+#' @details
+#' This is an AGGREGATE function - it returns only safe aggregate counts to
+#' the client. Individual file names, hashes, and error details stay on the
+#' server for disclosure control.
 #'
 #' @export
 #'
 #' @examples
 #' \dontrun{
-#' vault <- dsVault::DSVaultCollection$new(
-#'   endpoint = "http://localhost:8000",
-#'   collection = "ct-scans",
-#'   api_key = "your-vault-key"
+#' # From client side:
+#' status <- ds.image.sync(
+#'   collection.resource = "project.vault",
+#'   hpc.resource = "project.hpc"
 #' )
-#' hpc <- dsHPC::create_api_config(
-#'   base_url = "http://localhost",
-#'   port = 8001,
-#'   api_key = "your-hpc-key"
-#' )
-#'
-#' # Sync images to HPC
-#' sync_result <- ImageSyncDS(collection, hpc_unit)
-#' sync_result$uploaded  # How many were uploaded
-#' sync_result$hashes    # Data frame with file info
-#'
-#' # Then use the hashes for lungmask or other processing
+#' status$total     # Total files processed
+#' status$uploaded  # How many were uploaded
+#' status$failed    # How many failed
+#' status$success   # TRUE if all succeeded
 #' }
-ImageSyncDS <- function(collection, hpc_unit, verbose = TRUE) {
+ImageSyncDS <- function(collection, hpc_unit, verbose = FALSE) {
   # Validate collection
   if (!inherits(collection, "DSVaultCollection")) {
     stop("collection must be a DSVaultCollection object", call. = FALSE)
   }
 
   # Get collection hashes
-  if (verbose) message("Checking collection files...")
   collection_hashes <- collection$list_hashes()
 
   if (nrow(collection_hashes) == 0) {
-    if (verbose) message("No files in collection.")
     return(list(
-      total = 0,
-      existing = 0,
-      uploaded = 0,
-      failed = 0,
-      hashes = data.frame(
-        name = character(),
-        hash_sha256 = character(),
-        stringsAsFactors = FALSE
-      )
+      total = 0L,
+      existing = 0L,
+      uploaded = 0L,
+      failed = 0L,
+      success = TRUE
     ))
   }
 
   # Disclosure check
   check_image_disclosure(nrow(collection_hashes), verbose = verbose)
 
-  if (verbose) {
-    message(sprintf("Found %d files in collection '%s'",
-                    nrow(collection_hashes), collection$collection))
-  }
-
   # Sync to HPC (reuse existing internal function)
   sync_result <- sync_to_hpc(collection, hpc_unit, verbose = verbose)
 
-  # Return result with hashes for subsequent operations
+  # Return ONLY safe aggregate counts - no hashes, no filenames
   list(
-    total = sync_result$total,
-    existing = sync_result$existing,
-    uploaded = sync_result$uploaded,
-    failed = sync_result$failed,
-    hashes = collection_hashes
+    total = as.integer(sync_result$total),
+    existing = as.integer(sync_result$existing),
+    uploaded = as.integer(sync_result$uploaded),
+    failed = as.integer(sync_result$failed),
+    success = sync_result$failed == 0
   )
 }
 
 
 #' Run Lungmask Segmentation
 #'
-#' Server-side assign function to run lung segmentation on medical images
-#' using lungmask. Images must already be available in HPC storage
-#' (use ImageSyncDS first).
+#' Server-side AGGREGATE function to run lung segmentation on medical images
+#' using lungmask. Requires that images have been synced to HPC first via
+#' ImageSyncDS. Returns only aggregate counts for disclosure control.
 #'
+#' @param collection A DSVaultCollection object (from dsVault package).
 #' @param hpc_unit An HPC API configuration (from dsHPC::create_api_config).
-#' @param image_hashes Character vector of SHA-256 hashes for images to process.
-#' @param filenames Optional character vector of filenames (for tracking).
 #' @param model Lungmask model to use. Options: "R231" (default),
 #'   "R231CovidWeb", "LTRCLobes", "LTRCLobes_R231".
 #' @param force_cpu Force CPU execution (default: TRUE).
-#' @param wait If TRUE (default), wait for all jobs to complete and return
-#'   mask hashes. If FALSE, return job tracker immediately.
-#' @param timeout Maximum wait time in seconds when wait=TRUE (default: 600).
+#' @param timeout Maximum wait time in seconds (default: 600).
 #' @param polling_interval Polling interval in seconds (default: 10).
-#' @param on_error How to handle failed jobs: "exclude" (default) or "stop".
-#' @param verbose Print progress messages (default: TRUE).
+#' @param verbose Print progress messages (default: FALSE).
 #'
-#' @return Depends on `wait` parameter:
-#'   - If `wait=TRUE`: Data frame with columns:
-#'     - filename: Original filename
-#'     - image_hash: SHA-256 hash of input image
-#'     - mask_hash: SHA-256 hash of generated mask
-#'     - pipeline_hash: Pipeline execution hash
-#'   - If `wait=FALSE`: List with job status and tracker object
+#' @return A list with aggregate status (safe for disclosure):
+#'   - total: Total images processed
+#'   - completed: Successfully processed
+#'   - failed: Failed to process
+#'   - success: TRUE if no failures, FALSE otherwise
+#'
+#' @details
+#' This is an AGGREGATE function - it returns only safe aggregate counts to
+#' the client. Individual file names, hashes, and mask results stay on the
+#' server for disclosure control.
+#'
+#' The function internally syncs images if needed, then runs lungmask on all
+#' images in the collection.
 #'
 #' @export
 #'
 #' @examples
 #' \dontrun{
-#' # First sync images
-#' sync_result <- ImageSyncDS(vault, hpc)
-#'
-#' # Then run lungmask
-#' masks <- LungmaskDS(
-#'   hpc_unit,
-#'   image_hashes = sync_result$hashes$hash_sha256,
-#'   filenames = sync_result$hashes$name
+#' # From client side:
+#' status <- ds.lungmask(
+#'   collection.resource = "project.vault",
+#'   hpc.resource = "project.hpc",
+#'   model = "R231"
 #' )
-#'
-#' # masks$mask_hash can now be used with pyradiomics
+#' status$total      # Total images
+#' status$completed  # Successful
+#' status$failed     # Failed
+#' status$success    # TRUE if all succeeded
 #' }
-LungmaskDS <- function(hpc_unit,
-                       image_hashes,
-                       filenames = NULL,
+LungmaskDS <- function(collection,
+                       hpc_unit,
                        model = "R231",
                        force_cpu = TRUE,
-                       wait = TRUE,
                        timeout = 600,
                        polling_interval = 10,
-                       on_error = c("exclude", "stop"),
-                       verbose = TRUE) {
+                       verbose = FALSE) {
 
-  on_error <- match.arg(on_error)
-
-  # Validate inputs
-  if (!is.character(image_hashes) || length(image_hashes) == 0) {
-    stop("image_hashes must be a non-empty character vector", call. = FALSE)
+  # Validate collection
+  if (!inherits(collection, "DSVaultCollection")) {
+    stop("collection must be a DSVaultCollection object", call. = FALSE)
   }
 
   # Check HPC has lungmask method
@@ -158,23 +140,29 @@ LungmaskDS <- function(hpc_unit,
     stop("HPC does not have 'lungmask' method available", call. = FALSE)
   }
 
+  # Get collection hashes (stays on server)
+  collection_hashes <- collection$list_hashes()
+
+  if (nrow(collection_hashes) == 0) {
+    return(list(
+      total = 0L,
+      completed = 0L,
+      failed = 0L,
+      success = TRUE
+    ))
+  }
+
   # Disclosure check
-  check_image_disclosure(length(image_hashes), verbose = verbose)
+  check_image_disclosure(nrow(collection_hashes), verbose = verbose)
 
-  if (is.null(filenames)) {
-    filenames <- rep(NA_character_, length(image_hashes))
-  }
-
-  if (verbose) {
-    message(sprintf("Submitting %d lungmask jobs (model: %s)...",
-                    length(image_hashes), model))
-  }
+  # Sync to HPC first (internal, no return to client)
+  sync_to_hpc(collection, hpc_unit, verbose = verbose)
 
   # Submit lungmask pipelines
   submission_results <- submit_lungmask_batch(
     hpc_unit = hpc_unit,
-    image_hashes = image_hashes,
-    filenames = filenames,
+    image_hashes = collection_hashes$hash_sha256,
+    filenames = collection_hashes$name,
     model = model,
     force_cpu = force_cpu,
     verbose = verbose
@@ -190,83 +178,31 @@ LungmaskDS <- function(hpc_unit,
     if (is.na(val) || is.null(val)) 0L else as.integer(val)
   }
   n_submitted <- get_count("pending")
-  n_failed_submit <- get_count("submit_failed")
-
-  if (verbose) {
-    message(sprintf("Submitted: %d, Failed to submit: %d",
-                    n_submitted, n_failed_submit))
-  }
 
   if (n_submitted == 0) {
-    stop("No lungmask jobs were submitted successfully", call. = FALSE)
-  }
-
-  # Wait or return tracker
-  if (wait) {
-    if (verbose) message("\nWaiting for lungmask results...")
-    tracker$wait(timeout = timeout, interval = polling_interval, verbose = verbose)
-  } else {
-    if (verbose) message("\nChecking initial status...")
-    tracker$poll(verbose = verbose)
-  }
-
-  # Get current counts
-  counts <- tracker$status_counts()
-  n_pending <- get_count("pending") + get_count("running")
-  n_completed <- get_count("completed")
-  n_failed <- get_count("failed") + get_count("error") + get_count("submit_failed")
-
-  # If not waiting and jobs still pending, return status
-  if (!wait && n_pending > 0) {
-    if (verbose) {
-      message(sprintf("\nJobs still running: %d pending, %d completed, %d failed",
-                      n_pending, n_completed, n_failed))
-      message("Use status$tracker$poll() to check progress")
-    }
     return(list(
-      total = length(image_hashes),
-      pending = as.integer(n_pending),
-      completed = as.integer(n_completed),
-      failed = as.integer(n_failed),
-      tracker = tracker
+      total = as.integer(nrow(collection_hashes)),
+      completed = 0L,
+      failed = as.integer(nrow(collection_hashes)),
+      success = FALSE
     ))
   }
 
-  # Check for errors
-  if (tracker$has_errors()) {
-    failed_jobs <- tracker$get_failed()
-    n_failed <- nrow(failed_jobs)
+  # Wait for completion
+  tracker$wait(timeout = timeout, interval = polling_interval, verbose = verbose)
 
-    if (on_error == "stop") {
-      stop(sprintf("%d lungmask jobs failed:\n%s",
-                   n_failed,
-                   paste(sprintf("  - %s: %s",
-                                 failed_jobs$filename,
-                                 failed_jobs$error_message),
-                         collapse = "\n")), call. = FALSE)
-    } else {
-      if (verbose) {
-        warning(sprintf("%d jobs failed and will be excluded from results", n_failed))
-      }
-    }
-  }
+  # Get final counts
+  counts <- tracker$status_counts()
+  n_completed <- get_count("completed")
+  n_failed <- get_count("failed") + get_count("error") + get_count("submit_failed")
 
-  # Extract mask results
-  masks_df <- tracker$extract_masks(exclude_errors = TRUE)
-
-  if (nrow(masks_df) == 0) {
-    warning("No masks extracted from lungmask results")
-    return(data.frame())
-  }
-
-  # Disclosure check on results
-  check_result_disclosure(masks_df, verbose = verbose)
-
-  if (verbose) {
-    message(sprintf("\nExtracted %d lung masks", nrow(masks_df)))
-  }
-
-  return(masks_df)
+  # Return ONLY safe aggregate counts
+  list(
+    total = as.integer(nrow(collection_hashes)),
+    completed = as.integer(n_completed),
+    failed = as.integer(n_failed),
+    success = n_failed == 0
+  )
 }
 
 
