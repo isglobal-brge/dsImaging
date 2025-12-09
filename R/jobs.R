@@ -12,8 +12,8 @@ DSJobTracker <- R6::R6Class(
     #' @field jobs Data frame tracking all submitted jobs.
     jobs = NULL,
 
-    #' @field hpc_config HPC API configuration for polling.
-    hpc_config = NULL,
+    #' @field hpc_unit HPC API configuration for polling.
+    hpc_unit = NULL,
 
     #' @field created_at Timestamp when tracker was created.
     created_at = NULL,
@@ -22,10 +22,10 @@ DSJobTracker <- R6::R6Class(
     #' Create a new job tracker.
     #'
     #' @param submission_results Data frame from pipeline submission.
-    #' @param hpc_config HPC API configuration.
+    #' @param hpc_unit HPC API configuration.
     #'
     #' @return A new `DSJobTracker` object.
-    initialize = function(submission_results, hpc_config) {
+    initialize = function(submission_results, hpc_unit) {
       self$jobs <- submission_results
       self$jobs$status <- ifelse(
         is.na(self$jobs$pipeline_hash),
@@ -36,7 +36,7 @@ DSJobTracker <- R6::R6Class(
       self$jobs$error_message <- NA_character_
       self$jobs$completed_at <- as.POSIXct(NA)
 
-      self$hpc_config <- hpc_config
+      self$hpc_unit <- hpc_unit
       self$created_at <- Sys.time()
     },
 
@@ -78,7 +78,7 @@ DSJobTracker <- R6::R6Class(
         pipeline_hash <- self$jobs$pipeline_hash[i]
 
         tryCatch({
-          result <- dsHPC::get_pipeline_status(self$hpc_config, pipeline_hash)
+          result <- dsHPC::get_pipeline_status(self$hpc_unit, pipeline_hash)
 
           if (result$status == "completed") {
             self$jobs$status[i] <- "completed"

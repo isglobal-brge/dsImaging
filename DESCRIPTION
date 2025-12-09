@@ -20,7 +20,10 @@ Imports:
     R6,
     jsonlite
 Suggests:
-    testthat (>= 3.0.0)
-AssignMethods:
-    RadiomicsDS
+    testthat (>= 3.0.0),
+    dsBase
 Config/testthat/edition: 3
+AssignMethods:
+    RadiomicsDS,
+    ImageSyncDS,
+    LungmaskDS

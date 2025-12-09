@@ -137,7 +137,7 @@ required_radiomics_methods <- function() {
 #' Queries the HPC API to verify that all methods required by the
 #' radiomics pipeline are available. Uses dsHPC::has_methods() internally.
 #'
-#' @param hpc_config HPC API configuration from dsHPC::create_api_config().
+#' @param hpc_unit HPC API configuration from dsHPC::create_api_config().
 #' @param required_methods Character vector of method names to check.
 #'   Defaults to methods required for radiomics pipeline.
 #' @param stop_if_missing If TRUE (default), throws an error if any
@@ -157,13 +157,13 @@ required_radiomics_methods <- function() {
 #' hpc <- dsHPC::create_api_config(...)
 #' check_hpc_methods(hpc)
 #' }
-check_hpc_methods <- function(hpc_config,
+check_hpc_methods <- function(hpc_unit,
                                required_methods = required_radiomics_methods(),
                                stop_if_missing = TRUE,
                                verbose = TRUE) {
   # Use dsHPC::has_methods() to check availability
   check_result <- tryCatch(
-    dsHPC::has_methods(hpc_config, required_methods),
+    dsHPC::has_methods(hpc_unit, required_methods),
     error = function(e) {
       stop(sprintf("Failed to query HPC methods: %s", e$message))
     }
@@ -208,34 +208,34 @@ check_hpc_methods <- function(hpc_config,
 #' - Validates vault connection and filters valid image formats
 #' - Checks HPC connection and required methods availability
 #'
-#' @param vault A DSVaultCollection object.
-#' @param hpc_config HPC API configuration.
+#' @param collection A DSVaultCollection object.
+#' @param hpc_unit HPC API configuration.
 #' @param verbose Print validation progress (default: TRUE).
 #'
 #' @return A list with:
-#'   - vault_hashes: Filtered data frame of valid image hashes
+#'   - collection_hashes: Filtered data frame of valid image hashes
 #'   - n_images: Number of valid images
 #'   - hpc_methods: Result from check_hpc_methods()
 #'
 #' @keywords internal
-validate_radiomics_inputs <- function(vault, hpc_config, verbose = TRUE) {
-  # Step 1: Validate vault and filter images
+validate_radiomics_inputs <- function(collection, hpc_unit, verbose = TRUE) {
+  # Step 1: Validate collection and filter images
   if (verbose) message("Validating inputs...")
 
-  if (!inherits(vault, "DSVaultCollection")) {
-    stop("vault must be a DSVaultCollection object from dsVault package")
+  if (!inherits(collection, "DSVaultCollection")) {
+    stop("collection must be a DSVaultCollection object from dsVault package")
   }
 
-  vault_hashes <- vault$list_hashes()
+  collection_hashes <- collection$list_hashes()
 
   if (verbose) {
-    message(sprintf("  Found %d files in vault collection '%s'",
-                    nrow(vault_hashes), vault$collection))
+    message(sprintf("  Found %d files in collection '%s'",
+                    nrow(collection_hashes), collection$collection))
   }
 
   # Filter to valid image formats
   valid_hashes <- filter_valid_images(
-    vault_hashes,
+    collection_hashes,
     stop_if_empty = TRUE,
     verbose = verbose
   )
@@ -244,7 +244,7 @@ validate_radiomics_inputs <- function(vault, hpc_config, verbose = TRUE) {
   if (verbose) message("  Checking HPC methods availability...")
 
   methods_check <- check_hpc_methods(
-    hpc_config,
+    hpc_unit,
     required_methods = required_radiomics_methods(),
     stop_if_missing = TRUE,
     verbose = FALSE  # We handle messaging
@@ -256,7 +256,7 @@ validate_radiomics_inputs <- function(vault, hpc_config, verbose = TRUE) {
   }
 
   list(
-    vault_hashes = valid_hashes,
+    collection_hashes = valid_hashes,
     n_images = nrow(valid_hashes),
     hpc_methods = methods_check
   )

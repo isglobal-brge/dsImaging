@@ -4,8 +4,8 @@
 #' vault collection, processed via HPC. Automatically syncs files to HPC before
 #' submitting jobs.
 #'
-#' @param vault A DSVaultCollection object (from dsVault package).
-#' @param hpc_config An HPC API configuration (from dsHPC::create_api_config).
+#' @param collection A DSVaultCollection object (from dsVault package).
+#' @param hpc_unit An HPC API configuration (from dsHPC::create_api_config).
 #' @param lungmask_model Lungmask model to use. Options: "R231" (default),
 #'   "R231CovidWeb", "LTRCLobes", "LTRCLobes_R231".
 #' @param feature_classes Radiomic feature classes to extract. Options:
@@ -50,10 +50,10 @@
 #' )
 #'
 #' # Full extraction (wait for results)
-#' features <- RadiomicsDS(vault, hpc)
+#' features <- RadiomicsDS(collection, hpc)
 #'
 #' # Submit only, check status later
-#' status <- RadiomicsDS(vault, hpc, wait = FALSE)
+#' status <- RadiomicsDS(collection, hpc, wait = FALSE)
 #' status$pending   # How many still running
 #' status$completed # How many done
 #'
@@ -65,15 +65,15 @@
 #'
 #' # With custom parameters
 #' features <- RadiomicsDS(
-#'   vault, hpc,
+#'   collection, hpc,
 #'   lungmask_model = "R231CovidWeb",
 #'   feature_classes = c("firstorder", "shape"),
 #'   bin_width = 32,
 #'   on_error = "stop"  # Fail if any image fails
 #' )
 #' }
-RadiomicsDS <- function(vault,
-                          hpc_config,
+RadiomicsDS <- function(collection,
+                          hpc_unit,
                           lungmask_model = "R231",
                           feature_classes = c("firstorder", "shape", "glcm",
                                               "glrlm", "glszm", "gldm", "ngtdm"),
@@ -89,21 +89,21 @@ RadiomicsDS <- function(vault,
 
   on_error <- match.arg(on_error)
 
-  # Step 0: Validate inputs (vault, image formats, HPC methods)
-  validation <- validate_radiomics_inputs(vault, hpc_config, verbose = verbose)
-  vault_hashes <- validation$vault_hashes
+  # Step 0: Validate inputs (collection, image formats, HPC methods)
+  validation <- validate_radiomics_inputs(collection, hpc_unit, verbose = verbose)
+  collection_hashes <- validation$collection_hashes
 
   # Disclosure check: ensure image count meets threshold before processing
-  check_image_disclosure(nrow(vault_hashes), verbose = verbose)
+  check_image_disclosure(nrow(collection_hashes), verbose = verbose)
 
   if (verbose) {
     message(sprintf("\nProcessing %d valid images from collection '%s'...",
-                    nrow(vault_hashes), vault$collection))
+                    nrow(collection_hashes), collection$collection))
   }
 
-  # Step 1: Sync vault files to HPC
-  if (verbose) message("\n[1/3] Syncing vault files to HPC...")
-  sync_result <- sync_to_hpc(vault, hpc_config, verbose = verbose)
+  # Step 1: Sync collection files to HPC
+  if (verbose) message("\n[1/3] Syncing collection files to HPC...")
+  sync_result <- sync_to_hpc(collection, hpc_unit, verbose = verbose)
 
   if (sync_result$failed > 0) {
     warning(sprintf("%d files failed to sync to HPC", sync_result$failed))
@@ -117,9 +117,9 @@ RadiomicsDS <- function(vault,
   # Step 2: Submit all pipelines
   if (verbose) message("\n[2/3] Submitting pipelines...")
   submission_results <- submit_batch_pipelines(
-    hpc_config = hpc_config,
-    image_hashes = vault_hashes$hash_sha256,
-    filenames = vault_hashes$name,
+    hpc_unit = hpc_unit,
+    image_hashes = collection_hashes$hash_sha256,
+    filenames = collection_hashes$name,
     lungmask_model = lungmask_model,
     feature_classes = feature_classes,
     bin_width = bin_width,
@@ -129,7 +129,7 @@ RadiomicsDS <- function(vault,
   )
 
   # Create job tracker
-  tracker <- DSJobTracker$new(submission_results, hpc_config)
+  tracker <- DSJobTracker$new(submission_results, hpc_unit)
 
   # Summary after submit
   counts <- tracker$status_counts()
@@ -176,7 +176,7 @@ RadiomicsDS <- function(vault,
       message("Use status$tracker$poll() to check progress, or call again with wait=TRUE")
     }
     return(list(
-      total = nrow(vault_hashes),
+      total = nrow(collection_hashes),
       pending = as.integer(n_pending),
       completed = as.integer(n_completed),
       failed = as.integer(n_failed),
@@ -227,7 +227,7 @@ RadiomicsDS <- function(vault,
 
 
 # Internal: Submit batch of pipelines
-submit_batch_pipelines <- function(hpc_config,
+submit_batch_pipelines <- function(hpc_unit,
                                     image_hashes,
                                     filenames = NULL,
                                     lungmask_model = "R231",
@@ -258,7 +258,7 @@ submit_batch_pipelines <- function(hpc_config,
         force_cpu = force_cpu
       )
 
-      response <- dsHPC::submit_pipeline(hpc_config, pipeline)
+      response <- dsHPC::submit_pipeline(hpc_unit, pipeline)
 
       results[[length(results) + 1]] <- data.frame(
         image_hash = image_hash,
@@ -297,24 +297,24 @@ submit_batch_pipelines <- function(hpc_config,
 # Internal sync functions
 # ============================================================================
 
-# Sync vault files to HPC
-sync_to_hpc <- function(vault, hpc_config, verbose = TRUE) {
-  # Get vault hashes
-  if (verbose) message("Checking vault files...")
-  vault_hashes <- vault$list_hashes()
+# Sync collection files to HPC
+sync_to_hpc <- function(collection, hpc_unit, verbose = TRUE) {
+  # Get collection hashes
+  if (verbose) message("Checking collection files...")
+  collection_hashes <- collection$list_hashes()
 
-  if (nrow(vault_hashes) == 0) {
-    if (verbose) message("No files in vault.")
+  if (nrow(collection_hashes) == 0) {
+    if (verbose) message("No files in collection.")
     return(list(total = 0, existing = 0, missing = 0, uploaded = 0, failed = 0))
   }
 
   if (verbose) {
-    message(sprintf("Found %d files in vault", nrow(vault_hashes)))
+    message(sprintf("Found %d files in collection", nrow(collection_hashes)))
   }
 
   # Check which exist in HPC
   if (verbose) message("Checking HPC file storage...")
-  check_result <- check_hpc_hashes(hpc_config, vault_hashes$hash_sha256)
+  check_result <- check_hpc_hashes(hpc_unit, collection_hashes$hash_sha256)
 
   n_existing <- length(check_result$existing)
   n_missing <- length(check_result$missing)
@@ -328,7 +328,7 @@ sync_to_hpc <- function(vault, hpc_config, verbose = TRUE) {
   if (n_missing == 0) {
     if (verbose) message("All files already available in HPC.")
     return(list(
-      total = nrow(vault_hashes),
+      total = nrow(collection_hashes),
       existing = n_existing,
       missing = 0,
       uploaded = 0,
@@ -338,10 +338,10 @@ sync_to_hpc <- function(vault, hpc_config, verbose = TRUE) {
 
   # Upload missing files
   if (verbose) message("\nUploading missing files...")
-  upload_result <- upload_vault_to_hpc(
-    vault = vault,
-    hpc_config = hpc_config,
-    vault_hashes = vault_hashes,
+  upload_result <- upload_collection_to_hpc(
+    collection = collection,
+    hpc_unit = hpc_unit,
+    collection_hashes = collection_hashes,
     missing_hashes = check_result$missing,
     verbose = verbose
   )
@@ -352,7 +352,7 @@ sync_to_hpc <- function(vault, hpc_config, verbose = TRUE) {
   }
 
   list(
-    total = nrow(vault_hashes),
+    total = nrow(collection_hashes),
     existing = n_existing,
     missing = n_missing,
     uploaded = upload_result$uploaded,
@@ -362,12 +362,12 @@ sync_to_hpc <- function(vault, hpc_config, verbose = TRUE) {
 
 
 # Check which hashes exist in HPC
-check_hpc_hashes <- function(hpc_config, hashes) {
+check_hpc_hashes <- function(hpc_unit, hashes) {
   if (length(hashes) == 0) {
     return(list(existing = character(), missing = character()))
   }
 
-  result <- dsHPC::check_existing_hashes(hpc_config, unique(hashes))
+  result <- dsHPC::check_existing_hashes(hpc_unit, unique(hashes))
 
   list(
     existing = result$existing_hashes %||% character(),
@@ -376,15 +376,15 @@ check_hpc_hashes <- function(hpc_config, hashes) {
 }
 
 
-# Upload missing files from vault to HPC
-upload_vault_to_hpc <- function(vault, hpc_config, vault_hashes, missing_hashes,
-                                 verbose = TRUE) {
+# Upload missing files from collection to HPC
+upload_collection_to_hpc <- function(collection, hpc_unit, collection_hashes,
+                                      missing_hashes, verbose = TRUE) {
   if (length(missing_hashes) == 0) {
     return(list(uploaded = 0, failed = 0, errors = list()))
   }
 
   # Filter to only missing files
-  missing_files <- vault_hashes[vault_hashes$hash_sha256 %in% missing_hashes, ]
+  missing_files <- collection_hashes[collection_hashes$hash_sha256 %in% missing_hashes, ]
 
   uploaded <- 0
   failed <- 0
@@ -401,11 +401,11 @@ upload_vault_to_hpc <- function(vault, hpc_config, vault_hashes, missing_hashes,
     }
 
     tryCatch({
-      # Download from vault (in memory)
-      content <- vault$download(filename)
+      # Download from collection (in memory)
+      content <- collection$download(filename)
 
       # Upload to HPC
-      result_hash <- dsHPC::upload_file(hpc_config, content, filename)
+      result_hash <- dsHPC::upload_file(hpc_unit, content, filename)
 
       # Verify hash
       if (result_hash != expected_hash) {
