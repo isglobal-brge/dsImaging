@@ -111,8 +111,8 @@ create_pyradiomics_pipeline <- function(image_hash,
                  paste(invalid, collapse = ", "),
                  paste(valid_classes, collapse = ", ")))
   }
-  # Reconstruct clean feature_classes string from validated values
-  feature_classes <- paste(provided_classes, collapse = ",")
+  # Reconstruct clean feature_classes string from validated values (sorted for determinism)
+  feature_classes <- paste(sort(unique(provided_classes)), collapse = ",")
 
   # Validate bin_width is numeric and reasonable
   if (!is.numeric(bin_width) || bin_width <= 0 || bin_width > 1000) {
@@ -207,8 +207,9 @@ create_lungmask_pyradiomics_pipeline <- function(image_hash,
     feature_classes <- paste(feature_classes, collapse = ",")
   }
 
-  # Validate feature classes (sanitize input - only allow alphanumeric and commas)
-  valid_classes <- c("firstorder", "shape", "glcm", "glrlm", "glszm", "gldm", "ngtdm")
+  # Validate feature classes (sanitize input - only allow known values)
+  valid_classes <- c("firstorder", "shape", "glcm", "glrlm", "glszm",
+                     "gldm", "ngtdm")
   provided_classes <- trimws(strsplit(feature_classes, ",")[[1]])
   invalid <- setdiff(provided_classes, valid_classes)
   if (length(invalid) > 0) {
@@ -216,8 +217,8 @@ create_lungmask_pyradiomics_pipeline <- function(image_hash,
                  paste(invalid, collapse = ", "),
                  paste(valid_classes, collapse = ", ")))
   }
-  # Reconstruct clean feature_classes string from validated values
-  feature_classes <- paste(provided_classes, collapse = ",")
+  # Reconstruct clean feature_classes string (sorted for determinism)
+  feature_classes <- paste(sort(unique(provided_classes)), collapse = ",")
 
   # Validate bin_width is numeric and reasonable
   if (!is.numeric(bin_width) || bin_width <= 0 || bin_width > 1000) {

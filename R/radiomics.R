@@ -90,6 +90,29 @@ RadiomicsDS <- function(collection,
 
   on_error <- match.arg(on_error)
 
+  # Validate and sanitize lungmask_model (whitelist)
+  valid_models <- c("R231", "R231CovidWeb", "LTRCLobes", "LTRCLobes_R231")
+  if (!lungmask_model %in% valid_models) {
+    stop(sprintf("Invalid lungmask_model '%s'. Must be one of: %s",
+                 lungmask_model, paste(valid_models, collapse = ", ")))
+  }
+
+  # Validate and sanitize feature_classes (whitelist + sort for determinism)
+  # Handle both vector and comma-separated string input for backwards compatibility
+  valid_classes <- c("firstorder", "shape", "glcm", "glrlm", "glszm", "gldm", "ngtdm")
+  if (is.character(feature_classes) && length(feature_classes) == 1 && grepl(",", feature_classes)) {
+    # It's a comma-separated string - split it
+    feature_classes <- trimws(strsplit(feature_classes, ",")[[1]])
+  }
+  invalid_classes <- setdiff(feature_classes, valid_classes)
+  if (length(invalid_classes) > 0) {
+    stop(sprintf("Invalid feature_classes: %s. Valid options: %s",
+                 paste(invalid_classes, collapse = ", "),
+                 paste(valid_classes, collapse = ", ")))
+  }
+  # Sort alphabetically for determinism and convert to comma-separated string
+  feature_classes <- paste(sort(unique(feature_classes)), collapse = ",")
+
   # Step 0: Validate inputs (collection, image formats, HPC methods)
   validation <- validate_radiomics_inputs(collection, hpc_unit, verbose = verbose)
   collection_hashes <- validation$collection_hashes
@@ -110,10 +133,7 @@ RadiomicsDS <- function(collection,
     warning(sprintf("%d files failed to sync to HPC", sync_result$failed))
   }
 
-  # Convert feature_classes to comma-separated string if vector
-  if (is.character(feature_classes) && length(feature_classes) > 1) {
-    feature_classes <- paste(feature_classes, collapse = ",")
-  }
+  # feature_classes is already validated, sorted, and converted to string above
 
   # Step 2: Submit all pipelines
   if (verbose) message("\n[2/3] Submitting pipelines...")
