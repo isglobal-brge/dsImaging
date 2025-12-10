@@ -8,7 +8,8 @@
 #'   - "R231CovidWeb": COVID-19 optimized
 #'   - "LTRCLobes": Lobe segmentation
 #'   - "LTRCLobes_R231": Combined lobe segmentation
-#' @param force_cpu Force CPU execution (default: TRUE). Set FALSE to use GPU if available.
+#' @param force_cpu Force CPU execution (default: FALSE). When FALSE, GPU is used
+#'   if available, with automatic fallback to CPU if not.
 #'
 #' @return Pipeline definition list ready for submission.
 #' @export
@@ -23,7 +24,7 @@
 #' }
 create_lungmask_pipeline <- function(image_hash,
                                       model = "R231",
-                                      force_cpu = TRUE) {
+                                      force_cpu = FALSE) {
   # Validate model
 
 valid_models <- c("R231", "R231CovidWeb", "LTRCLobes", "LTRCLobes_R231")
@@ -161,7 +162,8 @@ create_pyradiomics_pipeline <- function(image_hash,
 #' @param feature_classes Feature classes for pyradiomics (default: all).
 #' @param bin_width Bin width for discretization (default: 25).
 #' @param normalize Normalize image (default: FALSE).
-#' @param force_cpu Force CPU for lungmask (default: TRUE).
+#' @param force_cpu Force CPU for lungmask (default: FALSE). When FALSE, GPU is
+#'   used if available, with automatic fallback to CPU if not.
 #' @param resample_spacing Optional resampling spacing for pyradiomics.
 #'
 #' @return Pipeline definition list ready for submission.
@@ -191,7 +193,7 @@ create_lungmask_pyradiomics_pipeline <- function(image_hash,
                                                                       "glrlm", "glszm", "gldm", "ngtdm"),
                                                   bin_width = 25,
                                                   normalize = FALSE,
-                                                  force_cpu = TRUE,
+                                                  force_cpu = FALSE,
                                                   resample_spacing = NULL) {
   # Validate lungmask model
   valid_models <- c("R231", "R231CovidWeb", "LTRCLobes", "LTRCLobes_R231")

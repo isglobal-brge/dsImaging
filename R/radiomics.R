@@ -13,7 +13,8 @@
 #'   Default extracts all.
 #' @param bin_width Bin width for intensity discretization (default: 25).
 #' @param normalize Normalize image before feature extraction (default: FALSE).
-#' @param force_cpu Force CPU execution for lungmask (default: TRUE).
+#' @param force_cpu Force CPU execution for lungmask (default: FALSE). When FALSE,
+#'   GPU is used if available, with automatic fallback to CPU if not.
 #' @param wait If TRUE (default), wait for all jobs to complete and return
 #'   features data frame. If FALSE, return job status immediately after submit.
 #' @param timeout Maximum wait time in seconds when wait=TRUE (default: 600).
@@ -79,7 +80,7 @@ RadiomicsDS <- function(collection,
                                               "glrlm", "glszm", "gldm", "ngtdm"),
                           bin_width = 25,
                           normalize = FALSE,
-                          force_cpu = TRUE,
+                          force_cpu = FALSE,
                           wait = TRUE,
                           timeout = 600,
                           polling_interval = 10,

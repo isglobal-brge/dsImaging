@@ -87,7 +87,8 @@ ImageSyncDS <- function(collection, hpc_unit, verbose = FALSE) {
 #' @param hpc_unit An HPC API configuration (from dsHPC::create_api_config).
 #' @param model Lungmask model to use. Options: "R231" (default),
 #'   "R231CovidWeb", "LTRCLobes", "LTRCLobes_R231".
-#' @param force_cpu Force CPU execution (default: TRUE).
+#' @param force_cpu Force CPU execution (default: FALSE). When FALSE, GPU is
+#'   used if available, with automatic fallback to CPU if not.
 #' @param timeout Maximum wait time in seconds (default: 600).
 #' @param polling_interval Polling interval in seconds (default: 10).
 #' @param verbose Print progress messages (default: FALSE).
@@ -124,7 +125,7 @@ ImageSyncDS <- function(collection, hpc_unit, verbose = FALSE) {
 LungmaskDS <- function(collection,
                        hpc_unit,
                        model = "R231",
-                       force_cpu = TRUE,
+                       force_cpu = FALSE,
                        timeout = 600,
                        polling_interval = 10,
                        verbose = FALSE) {
