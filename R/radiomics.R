@@ -291,18 +291,30 @@ submit_batch_pipelines <- function(hpc_unit,
       )
 
     }, error = function(e) {
+      error_msg <- e$message
+
+      # Check if this is a "previously failed" error
+      # The backend only returns this for non-retriable errors (genuine failures)
+      # Retriable errors (OOM, timeouts, etc.) are automatically retried by the backend
+      if (grepl("Pipeline previously failed", error_msg, fixed = TRUE)) {
+        if (verbose) {
+          message("    SKIPPED (non-retriable error)")
+        }
+      } else {
+        if (verbose) {
+          message(sprintf("    ERROR: %s", error_msg))
+        }
+      }
+
+      # Mark as failed - will be excluded from results by extract_features
       results[[length(results) + 1]] <<- data.frame(
         image_hash = image_hash,
         filename = filename,
         pipeline_hash = NA_character_,
         status = "failed",
-        error = e$message,
+        error = error_msg,
         stringsAsFactors = FALSE
       )
-
-      if (verbose) {
-        message(sprintf("    ERROR: %s", e$message))
-      }
     })
   }
 

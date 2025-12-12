@@ -213,9 +213,16 @@ DSJobTracker <- R6::R6Class(
       }
 
       features_list <- list()
+      skipped_count <- 0
 
       for (i in seq_len(nrow(completed))) {
         output <- completed$result[[i]]
+
+        # Check if output has error format (should be excluded)
+        if (!is.null(output$error) || !is.null(output$status) && output$status == "error") {
+          skipped_count <- skipped_count + 1
+          next
+        }
 
         # Try different paths where features might be stored
         features <- NULL
@@ -227,21 +234,46 @@ DSJobTracker <- R6::R6Class(
           features <- output$data$features
         }
 
+        # Validate features have the expected format (should have numeric feature columns)
         if (!is.null(features)) {
-          if (is.list(features) && !is.data.frame(features)) {
-            features_df <- as.data.frame(features, stringsAsFactors = FALSE)
-          } else if (is.data.frame(features)) {
-            features_df <- features
-          } else {
-            features_df <- as.data.frame(t(features), stringsAsFactors = FALSE)
-          }
+          tryCatch({
+            if (is.list(features) && !is.data.frame(features)) {
+              # Check it's not an error object disguised as features
+              if (!is.null(features$error) || !is.null(features$message)) {
+                skipped_count <- skipped_count + 1
+                next
+              }
+              features_df <- as.data.frame(features, stringsAsFactors = FALSE)
+            } else if (is.data.frame(features)) {
+              features_df <- features
+            } else {
+              features_df <- as.data.frame(t(features), stringsAsFactors = FALSE)
+            }
 
-          features_df$pipeline_hash <- completed$pipeline_hash[i]
-          features_df$image_hash <- completed$image_hash[i]
-          features_df$filename <- completed$filename[i]
+            # Validate: must have at least one numeric column (actual features)
+            numeric_cols <- sapply(features_df, function(x) is.numeric(x) || !is.na(suppressWarnings(as.numeric(x[1]))))
+            if (sum(numeric_cols) == 0) {
+              skipped_count <- skipped_count + 1
+              next
+            }
 
-          features_list[[length(features_list) + 1]] <- features_df
+            features_df$pipeline_hash <- completed$pipeline_hash[i]
+            features_df$image_hash <- completed$image_hash[i]
+            features_df$filename <- completed$filename[i]
+
+            features_list[[length(features_list) + 1]] <- features_df
+
+          }, error = function(e) {
+            # If conversion fails, skip this result
+            skipped_count <<- skipped_count + 1
+          })
+        } else {
+          skipped_count <- skipped_count + 1
         }
+      }
+
+      if (skipped_count > 0 && exclude_errors) {
+        # Silently excluded malformed results
       }
 
       if (length(features_list) == 0) {
