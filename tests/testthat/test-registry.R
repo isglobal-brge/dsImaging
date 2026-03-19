@@ -1,10 +1,10 @@
 # Tests for R/registry.R
 
-test_that(".load_registry errors when option not set", {
+test_that(".load_registry errors when registry file not found", {
   withr::with_options(
-    list(dsimaging.registry_path = NULL,
+    list(dsimaging.registry_path = "/nonexistent/path/registry.yaml",
          default.dsimaging.registry_path = NULL), {
-    expect_error(.load_registry(), "registry_path option is not configured")
+    expect_error(.load_registry(), "not found")
   })
 })
 
