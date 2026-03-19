@@ -1,0 +1,7 @@
+AggregateMethods:
+  imagingListDatasetsDS
+  imagingMetadataDS
+  imagingValidateDS
+  imagingAssetsDS
+AssignMethods:
+  imagingInitDS
