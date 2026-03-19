@@ -341,16 +341,31 @@ claim_or_reuse_generation <- function(dataset_id, kind, derivation_hash,
       return(list(action = "reuse_asset", asset_id = existing_asset))
     }
 
-    # 2. Running/pending generation?
+    # 2. Running/pending generation (not stale)?
     gen <- DBI::dbGetQuery(db,
-      "SELECT generation_id, state, published_asset_id FROM asset_generations
+      "SELECT generation_id, state, published_asset_id, updated_at
+       FROM asset_generations
        WHERE dataset_id = ? AND derivation_hash = ? AND state IN ('PENDING','RUNNING')
        LIMIT 1",
       params = list(dataset_id, derivation_hash))
     if (nrow(gen) > 0) {
-      DBI::dbExecute(db, "COMMIT")
-      return(list(action = "reuse_generation", generation_id = gen$generation_id[1],
-                   state = gen$state[1]))
+      # Check if stale (>2 hours old with no update)
+      updated <- tryCatch(
+        as.POSIXct(gen$updated_at[1], format = "%Y-%m-%dT%H:%M:%OS", tz = "UTC"),
+        error = function(e) Sys.time())
+      age_hours <- as.numeric(difftime(Sys.time(), updated, units = "hours"))
+      if (age_hours < 2) {
+        DBI::dbExecute(db, "COMMIT")
+        return(list(action = "reuse_generation", generation_id = gen$generation_id[1],
+                     state = gen$state[1]))
+      }
+      # Stale generation -- mark as FAILED and continue to create new
+      DBI::dbExecute(db,
+        "UPDATE asset_generations SET state = 'FAILED',
+         error = 'Stale generation (>2h without update)', updated_at = ?
+         WHERE generation_id = ?",
+        params = list(format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC"),
+                       gen$generation_id[1]))
     }
 
     # 3. Create new generation
@@ -440,6 +455,34 @@ get_generation_items <- function(generation_id, status = NULL) {
 #'
 #' @return Character; the published asset_id, or NULL if validation fails.
 #' @export
+#' Mark a generation as FAILED (called when the job fails)
+#' @export
+fail_generation <- function(generation_id, error = NULL) {
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+  now <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
+  DBI::dbExecute(db,
+    "UPDATE asset_generations SET state = 'FAILED', error = ?, updated_at = ?
+     WHERE generation_id = ? AND state IN ('PENDING', 'RUNNING')",
+    params = list(error %||% "Job failed", now, generation_id))
+}
+
+#' Clean up stale generations (called periodically)
+#' @export
+cleanup_stale_generations <- function(max_age_hours = 2) {
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+  cutoff <- format(Sys.time() - max_age_hours * 3600,
+    "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
+  n <- DBI::dbExecute(db,
+    "UPDATE asset_generations SET state = 'FAILED',
+     error = 'Stale generation cleaned up', updated_at = ?
+     WHERE state IN ('PENDING', 'RUNNING') AND updated_at < ?",
+    params = list(format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC"), cutoff))
+  n
+}
+
+#' Publish a completed generation as an active asset
 publish_generation <- function(generation_id, path_or_root, description = NULL,
                                 parent_asset_ids = character(0),
                                 provenance = NULL, alias = NULL) {
