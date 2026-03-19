@@ -149,6 +149,7 @@ register_derived_asset <- function(dataset_id, kind, path_or_root,
                                     provenance = NULL,
                                     created_by = NULL,
                                     created_by_job = NULL,
+                                    description = NULL,
                                     alias = NULL) {
   db <- .asset_db_connect()
   on.exit(.asset_db_close(db))
@@ -158,7 +159,8 @@ register_derived_asset <- function(dataset_id, kind, path_or_root,
     parent_asset_ids = parent_asset_ids,
     provenance = provenance,
     created_by = created_by,
-    created_by_job = created_by_job)
+    created_by_job = created_by_job,
+    description = description)
 
   if (!is.null(alias)) {
     .asset_set_alias(db, dataset_id, alias, asset_id)

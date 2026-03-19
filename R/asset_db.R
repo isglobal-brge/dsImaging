@@ -54,6 +54,7 @@
       created_by       TEXT,
       created_by_job   TEXT,
       path_or_root     TEXT,
+      description      TEXT,
       manifest_json    TEXT,
       provenance_json  TEXT,
       tags             TEXT
@@ -120,7 +121,8 @@
                              modality = NULL,
                              visibility = "global",
                              tags = NULL,
-                             manifest = NULL) {
+                             manifest = NULL,
+                             description = NULL) {
   # Check for duplicate by derivation_hash
   if (!is.null(derivation_hash)) {
     existing <- DBI::dbGetQuery(db,
@@ -145,13 +147,14 @@
     DBI::dbExecute(db,
       "INSERT INTO assets (asset_id, dataset_id, kind, modality, status,
                            visibility, derivation_hash, created_at, created_by,
-                           created_by_job, path_or_root, manifest_json,
-                           provenance_json, tags)
-       VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                           created_by_job, path_or_root, description,
+                           manifest_json, provenance_json, tags)
+       VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       params = list(asset_id, dataset_id, kind, modality %||% NA_character_,
         visibility, derivation_hash %||% NA_character_, now,
         created_by %||% NA_character_, created_by_job %||% NA_character_,
-        path_or_root, mani_json, prov_json, tags %||% NA_character_))
+        path_or_root, description %||% NA_character_,
+        mani_json, prov_json, tags %||% NA_character_))
 
     # Record lineage
     for (parent_id in parent_asset_ids) {
@@ -192,7 +195,8 @@
   }
 
   sql <- paste("SELECT asset_id, kind, modality, visibility, derivation_hash,",
-               "created_at, created_by, created_by_job, path_or_root, tags",
+               "created_at, created_by, created_by_job, path_or_root,",
+               "description, tags",
                "FROM assets WHERE", where, "ORDER BY created_at DESC")
   DBI::dbGetQuery(db, sql, params = params)
 }
