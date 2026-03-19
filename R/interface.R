@@ -14,41 +14,67 @@
 imagingInitDS <- function(resource_symbol) {
   obj <- get(resource_symbol, envir = parent.frame())
 
+  # Path 1: Raw Resource from datashield.assign.resource()
+  # In Opal, this is a resourcer::Resource object (not yet resolved)
+  if (inherits(obj, "Resource") || (is.list(obj) && !is.null(obj$url))) {
+    url <- obj$url %||% ""
+    if (grepl("^imaging\\+dataset://", url)) {
+      # Resolve the imaging+dataset:// URL ourselves
+      parsed <- .parse_imaging_url(url)
+      if (!is.null(parsed$manifest_path)) {
+        manifest <- parse_manifest(parsed$manifest_path)
+      } else if (!is.null(parsed$dataset_id)) {
+        manifest_path <- resolve_dataset(parsed$dataset_id)
+        manifest <- parse_manifest(manifest_path)
+      } else {
+        stop("Cannot resolve imaging+dataset:// URL: ", url, call. = FALSE)
+      }
+      desc <- imaging_dataset_descriptor(manifest)
+      return(.make_imaging_handle(desc, resource_symbol))
+    }
+  }
+
+  # Path 2: Already-resolved ImagingDatasetResourceClient
   if (inherits(obj, "ImagingDatasetResourceClient")) {
     desc <- obj$asImagingDescriptor()
-    handle <- list(
-      source      = "imaging_resource",
-      dataset_id  = desc$dataset_id,
-      descriptor  = desc,
-      manifest    = desc$manifest,
-      created_at  = Sys.time()
-    )
-
-    # Store in package environment for aggregate methods
-    key <- paste0("imaging_", resource_symbol)
-    assign(key, handle, envir = .dsimaging_env)
-
-    return(handle)
+    return(.make_imaging_handle(desc, resource_symbol))
   }
 
-  # Also accept FlowerDatasetDescriptor / ImagingDatasetDescriptor
+  # Path 3: FlowerDatasetDescriptor / ImagingDatasetDescriptor
   if (inherits(obj, "ImagingDatasetDescriptor") ||
       inherits(obj, "FlowerDatasetDescriptor")) {
-    handle <- list(
-      source      = "descriptor",
-      dataset_id  = obj$dataset_id,
-      descriptor  = obj,
-      manifest    = obj$manifest,
-      created_at  = Sys.time()
-    )
-    key <- paste0("imaging_", resource_symbol)
-    assign(key, handle, envir = .dsimaging_env)
-    return(handle)
+    return(.make_imaging_handle(obj, resource_symbol))
   }
 
-  stop("Symbol '", resource_symbol, "' is not an ImagingDatasetResourceClient ",
-       "or ImagingDatasetDescriptor. Assign an imaging+dataset:// resource first.",
+  # Path 4: dataset_id string (convenience for server-side scripting)
+  if (is.character(obj) && length(obj) == 1L && grepl("^[a-z0-9]", obj)) {
+    tryCatch({
+      manifest_path <- resolve_dataset(obj)
+      manifest <- parse_manifest(manifest_path)
+      desc <- imaging_dataset_descriptor(manifest)
+      return(.make_imaging_handle(desc, resource_symbol))
+    }, error = function(e) NULL)
+  }
+
+  stop("Symbol '", resource_symbol, "' is not a recognized imaging resource. ",
+       "Supported: Resource (imaging+dataset://), ImagingDatasetResourceClient, ",
+       "ImagingDatasetDescriptor, or dataset_id string.",
        call. = FALSE)
+}
+
+#' Create an imaging handle from a descriptor
+#' @keywords internal
+.make_imaging_handle <- function(desc, symbol) {
+  handle <- list(
+    source      = "imaging_resource",
+    dataset_id  = desc$dataset_id,
+    descriptor  = desc,
+    manifest    = desc$manifest,
+    created_at  = Sys.time()
+  )
+  key <- paste0("imaging_", symbol)
+  assign(key, handle, envir = .dsimaging_env)
+  handle
 }
 
 #' List Available Imaging Datasets
