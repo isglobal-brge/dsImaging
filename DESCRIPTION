@@ -3,9 +3,9 @@ Type: Package
 Title: DataSHIELD Medical Imaging Datasets
 Version: 0.1.0
 Authors@R:
-    c(person("David", "Sarrat Gonz\u00e1lez", , "david.sarrat@isglobal.org", role = c("aut", "cre")),
-      person("Xavier", "Escrib\u00e0-Montagut", , "xavier.escriba@isglobal.org", role = c("aut")),
-      person("Juan R", "Gonz\u00e1lez", , "juanr.gonzalez@isglobal.org", role = c("aut")))
+    c(person("David", "Sarrat González", , "david.sarrat@isglobal.org", role = c("aut", "cre")),
+      person("Xavier", "Escribà-Montagut", , "xavier.escriba@isglobal.org", role = c("aut")),
+      person("Juan R", "González", , "juanr.gonzalez@isglobal.org", role = c("aut")))
 Description: Server-side DataSHIELD package for medical imaging datasets.
     Provides manifest-based dataset descriptors, resource resolvers for the
     resourcer ecosystem (imaging+dataset:// URLs), and DataSHIELD methods
