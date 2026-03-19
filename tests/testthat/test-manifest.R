@@ -107,3 +107,100 @@ test_that("validate_asset rejects unknown asset type", {
     "Unknown asset type"
   )
 })
+
+# -- v2 asset type tests --
+
+test_that("validate_asset accepts wsi_root", {
+  expect_invisible(
+    validate_asset(list(type = "wsi_root", root = "/srv/wsi"), "slides")
+  )
+})
+
+test_that("validate_asset validates wsi_root tile_size", {
+  expect_error(
+    validate_asset(list(type = "wsi_root", root = "/srv/wsi",
+                         tile_size = -1), "slides"),
+    "tile_size"
+  )
+})
+
+test_that("validate_asset validates wsi_root magnification", {
+  expect_error(
+    validate_asset(list(type = "wsi_root", root = "/srv/wsi",
+                         magnification = "bad"), "slides"),
+    "magnification"
+  )
+})
+
+test_that("validate_asset accepts dicom_series_root", {
+  expect_invisible(
+    validate_asset(list(type = "dicom_series_root",
+                         root = "/srv/dicom_series"), "series")
+  )
+})
+
+test_that("validate_asset accepts rt_struct_root", {
+  expect_invisible(
+    validate_asset(list(type = "rt_struct_root",
+                         root = "/srv/rt_structs"), "contours")
+  )
+})
+
+test_that("validate_asset accepts rt_dose_file", {
+  expect_invisible(
+    validate_asset(list(type = "rt_dose_file",
+                         file = "/srv/rt/dose.dcm"), "dose")
+  )
+})
+
+test_that("validate_asset accepts rt_plan_file", {
+  expect_invisible(
+    validate_asset(list(type = "rt_plan_file",
+                         file = "/srv/rt/plan.dcm"), "plan")
+  )
+})
+
+test_that("validate_asset accepts multimodal_ref", {
+  expect_invisible(
+    validate_asset(list(type = "multimodal_ref",
+                         manifest = "/srv/other/manifest.yml"), "pet_scan")
+  )
+})
+
+test_that("validate_asset rejects multimodal_ref without manifest", {
+  expect_error(
+    validate_asset(list(type = "multimodal_ref"), "pet"),
+    "missing 'manifest'"
+  )
+})
+
+test_that("parse_manifest accepts v2 asset types", {
+  tmp <- tempfile(fileext = ".yml")
+  on.exit(unlink(tmp))
+
+  yaml::write_yaml(list(
+    version = 1,
+    dataset_id = "pathology.breast.v1",
+    modality = "wsi",
+    metadata = list(file = "/srv/data/samples.csv", format = "csv"),
+    assets = list(
+      slides = list(
+        type = "wsi_root",
+        root = "/srv/data/wsi",
+        path_col = "slide_path",
+        tile_size = 512L,
+        magnification = 20
+      ),
+      radiomics = list(
+        type = "feature_table",
+        file = "/srv/data/features.parquet",
+        join_key = "slide_id"
+      )
+    )
+  ), tmp)
+
+  manifest <- parse_manifest(tmp)
+  expect_equal(manifest$dataset_id, "pathology.breast.v1")
+  expect_equal(manifest$assets$slides$type, "wsi_root")
+  expect_equal(manifest$assets$slides$tile_size, 512L)
+})

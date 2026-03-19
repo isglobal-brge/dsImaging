@@ -63,18 +63,101 @@ imagingInitDS <- function(resource_symbol) {
 }
 
 #' Create an imaging handle from a descriptor
+#'
+#' Also performs disclosure check: blocks creation if the dataset has
+#' fewer samples than the nfilter threshold.
+#'
 #' @keywords internal
 .make_imaging_handle <- function(desc, symbol) {
+  # Count samples from metadata file to enforce nfilter
+  n_samples <- .count_samples_from_manifest(desc$manifest)
+  .assert_min_samples(n_samples, context = paste0("dataset '", desc$dataset_id, "'"))
+
   handle <- list(
     source      = "imaging_resource",
     dataset_id  = desc$dataset_id,
     descriptor  = desc,
     manifest    = desc$manifest,
+    n_samples   = n_samples,
     created_at  = Sys.time()
   )
   key <- paste0("imaging_", symbol)
   assign(key, handle, envir = .dsimaging_env)
   handle
+}
+
+#' Count samples from a manifest's metadata file
+#' @keywords internal
+.count_samples_from_manifest <- function(manifest) {
+  meta <- manifest$metadata
+  if (is.null(meta) || is.null(meta$file) || !file.exists(meta$file)) {
+    return(NA_integer_)
+  }
+
+  fmt <- meta$format %||% .guess_format(meta$file)
+  if (identical(fmt, "parquet") && requireNamespace("arrow", quietly = TRUE)) {
+    return(nrow(arrow::read_parquet(meta$file, as_data_frame = FALSE)))
+  }
+  if (identical(fmt, "csv")) {
+    return(length(readLines(meta$file)) - 1L)
+  }
+  NA_integer_
+}
+
+# --- Disclosure controls ---
+
+#' Get the nfilter threshold for minimum sample counts
+#'
+#' Uses DataSHIELD's standard \code{nfilter.subset} option, with
+#' dsFlower's \code{dsflower.min_train_rows} as an additional floor
+#' if dsFlower is loaded.
+#'
+#' @return Integer; the minimum number of samples to avoid disclosure.
+#' @keywords internal
+.nfilter_threshold <- function() {
+  # Standard DataSHIELD nfilter
+  nfilter <- as.numeric(getOption("nfilter.subset",
+                                   getOption("default.nfilter.subset", 3)))
+
+  # If dsFlower is loaded, also consider its trust profile minimum
+  if (requireNamespace("dsFlower", quietly = TRUE)) {
+    tryCatch({
+      trust <- dsFlower:::.flowerTrustProfile()
+      nfilter <- max(nfilter, trust$min_train_rows)
+    }, error = function(e) NULL)
+  }
+
+  as.integer(nfilter)
+}
+
+#' Bucket a count to avoid exact disclosure
+#'
+#' Replaces exact counts with bucketed ranges when below a threshold,
+#' following DataSHIELD disclosure conventions.
+#'
+#' @param n Integer; the exact count.
+#' @param threshold Integer; minimum count for exact reporting.
+#' @return Integer; the original count if above threshold, or NA.
+#' @keywords internal
+.safe_count <- function(n, threshold = NULL) {
+  if (is.null(threshold)) threshold <- .nfilter_threshold()
+  if (is.null(n) || is.na(n)) return(NA_integer_)
+  if (n < threshold) return(NA_integer_)
+  as.integer(n)
+}
+
+#' Assert that a dataset has enough samples
+#'
+#' @param n_samples Integer; number of samples.
+#' @param context Character; context for error message.
+#' @keywords internal
+.assert_min_samples <- function(n_samples, context = "dataset") {
+  threshold <- .nfilter_threshold()
+  if (!is.null(n_samples) && !is.na(n_samples) && n_samples < threshold) {
+    stop("Disclosive: ", context, " has fewer than ", threshold,
+         " samples. Operation blocked.", call. = FALSE)
+  }
+  invisible(TRUE)
 }
 
 #' List Available Imaging Datasets
@@ -151,17 +234,21 @@ imagingMetadataDS <- function(handle_symbol) {
     }
   }
 
+  # Disclosure control: suppress exact n_samples if below nfilter
+  safe_n <- .safe_count(n_samples)
+
   list(
     dataset_id    = manifest$dataset_id,
     title         = manifest$title %||% "(untitled)",
     modality      = manifest$modality %||% "unknown",
     task_types    = manifest$task_types %||% character(0),
     templates     = manifest$compatible_templates %||% character(0),
-    n_samples     = n_samples,
+    n_samples     = safe_n,
     columns       = columns,
     id_col        = meta$id_col %||% NULL,
     label_col     = meta$label_col %||% NULL,
-    n_assets      = length(manifest$assets %||% list())
+    n_assets      = length(manifest$assets %||% list()),
+    n_samples_sufficient = !is.na(safe_n)
   )
 }
 

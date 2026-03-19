@@ -65,11 +65,14 @@ validate_asset_roots <- function(manifest) {
   results <- list()
   assets <- manifest$assets %||% list()
 
+  dir_types <- c("image_root", "wsi_root", "dicom_series_root", "rt_struct_root")
+  file_types <- c("feature_table", "rt_dose_file", "rt_plan_file")
+
   for (name in names(assets)) {
     asset <- assets[[name]]
     asset_type <- asset$type %||% "unknown"
 
-    if (identical(asset_type, "image_root")) {
+    if (asset_type %in% dir_types) {
       root <- asset$root
       exists <- !is.null(root) && dir.exists(root)
       results[[name]] <- list(
@@ -78,12 +81,21 @@ validate_asset_roots <- function(manifest) {
         exists = exists,
         valid  = exists
       )
-    } else if (identical(asset_type, "feature_table")) {
+    } else if (asset_type %in% file_types) {
       fpath <- asset$file
       exists <- !is.null(fpath) && file.exists(fpath)
       results[[name]] <- list(
         type   = asset_type,
         file   = fpath,
+        exists = exists,
+        valid  = exists
+      )
+    } else if (identical(asset_type, "multimodal_ref")) {
+      mpath <- asset$manifest
+      exists <- !is.null(mpath) && file.exists(mpath)
+      results[[name]] <- list(
+        type   = asset_type,
+        manifest = mpath,
         exists = exists,
         valid  = exists
       )

@@ -1,7 +1,12 @@
 AggregateMethods:
-  imagingListDatasetsDS
-  imagingMetadataDS
-  imagingValidateDS
-  imagingAssetsDS
+  imagingListDatasetsDS,
+  imagingMetadataDS,
+  imagingValidateDS,
+  imagingAssetsDS,
+  imagingAssetCatalogDS,
+  imagingAssetDetailDS,
+  imagingAliasesDS,
+  imagingLineageDS,
+  imagingDeduplicateDS
 AssignMethods:
   imagingInitDS
