@@ -10,15 +10,16 @@
 #' @keywords internal
 .load_registry <- function() {
   registry_path <- getOption("dsimaging.registry_path",
-                              getOption("default.dsimaging.registry_path", NULL))
+                    getOption("default.dsimaging.registry_path", NULL))
 
+  # Batteries-included: try default path if no option set
   if (is.null(registry_path) || !nzchar(registry_path)) {
-    stop("dsimaging.registry_path option is not configured. ",
-         "Contact your server administrator.", call. = FALSE)
+    registry_path <- "/var/lib/dsimaging/registry.yaml"
   }
 
   if (!file.exists(registry_path)) {
-    stop("Dataset registry file not found: ", registry_path, call. = FALSE)
+    stop("Dataset registry not found at: ", registry_path,
+         ". Create it or set dsimaging.registry_path option.", call. = FALSE)
   }
 
   yaml::read_yaml(registry_path)

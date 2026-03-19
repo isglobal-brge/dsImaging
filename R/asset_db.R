@@ -31,7 +31,7 @@
   # Default: alongside the registry
   reg_path <- getOption("dsimaging.registry_path",
                 getOption("default.dsimaging.registry_path", NULL))
-  if (!is.null(reg_path))
+  if (!is.null(reg_path) && nzchar(reg_path))
     return(file.path(dirname(reg_path), "imaging_assets.sqlite"))
 
   # Final fallback
@@ -80,9 +80,44 @@
       FOREIGN KEY (asset_id) REFERENCES assets(asset_id)
     )")
 
+  DBI::dbExecute(db, "
+    CREATE TABLE IF NOT EXISTS asset_generations (
+      generation_id     TEXT PRIMARY KEY,
+      dataset_id        TEXT NOT NULL,
+      kind              TEXT NOT NULL,
+      derivation_hash   TEXT NOT NULL,
+      visibility        TEXT NOT NULL DEFAULT 'private',
+      state             TEXT NOT NULL DEFAULT 'PENDING',
+      owner_id          TEXT NOT NULL,
+      created_by_job    TEXT,
+      expected_n        INTEGER,
+      completed_n       INTEGER DEFAULT 0,
+      failed_n          INTEGER DEFAULT 0,
+      published_asset_id TEXT,
+      spec_json         TEXT,
+      error             TEXT,
+      created_at        TEXT NOT NULL,
+      updated_at        TEXT NOT NULL
+    )")
+
+  DBI::dbExecute(db, "
+    CREATE TABLE IF NOT EXISTS asset_items (
+      generation_id     TEXT NOT NULL,
+      sample_id         TEXT NOT NULL,
+      status            TEXT NOT NULL DEFAULT 'pending',
+      artifact_relpath  TEXT,
+      checksum          TEXT,
+      error             TEXT,
+      PRIMARY KEY (generation_id, sample_id),
+      FOREIGN KEY (generation_id) REFERENCES asset_generations(generation_id)
+    )")
+
   DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_assets_dataset ON assets(dataset_id)")
   DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_assets_hash ON assets(derivation_hash)")
   DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_assets_kind ON assets(dataset_id, kind)")
+  DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_gen_hash ON asset_generations(dataset_id, derivation_hash)")
+  DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_gen_state ON asset_generations(state)")
+  DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_items_gen ON asset_items(generation_id)")
 }
 
 #' @keywords internal
@@ -272,8 +307,177 @@
 #' @export
 compute_derivation_hash <- function(...) {
   params <- list(...)
-  # Sort by name for determinism
   params <- params[order(names(params))]
   blob <- jsonlite::toJSON(params, auto_unbox = TRUE, digits = 10)
   digest::digest(blob, algo = "sha256", serialize = FALSE)
+}
+
+# =============================================================================
+# Generation management (for partial runs, resume, dedup of in-flight work)
+# =============================================================================
+
+#' Claim or reuse a generation
+#'
+#' Three outcomes:
+#' - ACTIVE asset exists -> reuse_asset
+#' - RUNNING/PENDING generation exists -> reuse_generation
+#' - Nothing -> create new generation (run_new)
+#'
+#' @return Named list with action, asset_id or generation_id.
+#' @export
+claim_or_reuse_generation <- function(dataset_id, kind, derivation_hash,
+                                       visibility = "global", owner_id = NULL,
+                                       job_id = NULL, expected_n = NULL,
+                                       spec = NULL) {
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+
+  DBI::dbExecute(db, "BEGIN IMMEDIATE")
+  tryCatch({
+    # 1. Active asset with this hash?
+    existing_asset <- .asset_find_by_hash(db, dataset_id, derivation_hash)
+    if (!is.null(existing_asset)) {
+      DBI::dbExecute(db, "COMMIT")
+      return(list(action = "reuse_asset", asset_id = existing_asset))
+    }
+
+    # 2. Running/pending generation?
+    gen <- DBI::dbGetQuery(db,
+      "SELECT generation_id, state, published_asset_id FROM asset_generations
+       WHERE dataset_id = ? AND derivation_hash = ? AND state IN ('PENDING','RUNNING')
+       LIMIT 1",
+      params = list(dataset_id, derivation_hash))
+    if (nrow(gen) > 0) {
+      DBI::dbExecute(db, "COMMIT")
+      return(list(action = "reuse_generation", generation_id = gen$generation_id[1],
+                   state = gen$state[1]))
+    }
+
+    # 3. Create new generation
+    hex <- paste(sample(c(0:9, letters[1:6]), 8, replace = TRUE), collapse = "")
+    gen_id <- paste0("gen_", format(Sys.time(), "%Y%m%d_%H%M%S"), "_", hex)
+    now <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
+    spec_json <- if (!is.null(spec))
+      as.character(jsonlite::toJSON(spec, auto_unbox = TRUE)) else NA_character_
+
+    DBI::dbExecute(db,
+      "INSERT INTO asset_generations (generation_id, dataset_id, kind, derivation_hash,
+        visibility, state, owner_id, created_by_job, expected_n, spec_json,
+        created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?)",
+      params = list(gen_id, dataset_id, kind, derivation_hash,
+        visibility, owner_id %||% NA_character_, job_id %||% NA_character_,
+        as.integer(expected_n %||% NA_integer_), spec_json, now, now))
+
+    DBI::dbExecute(db, "COMMIT")
+    list(action = "run_new", generation_id = gen_id)
+  }, error = function(e) {
+    tryCatch(DBI::dbExecute(db, "ROLLBACK"), error = function(e2) NULL)
+    stop(e)
+  })
+}
+
+#' Update generation state
+#' @export
+update_generation <- function(generation_id, ...) {
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+  updates <- list(...)
+  updates$updated_at <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
+  set_clauses <- paste0(names(updates), " = ?")
+  sql <- paste0("UPDATE asset_generations SET ",
+                paste(set_clauses, collapse = ", "),
+                " WHERE generation_id = ?")
+  DBI::dbExecute(db, sql, params = c(unname(updates), list(generation_id)))
+}
+
+#' Record per-sample item status
+#' @export
+record_item_status <- function(generation_id, sample_id, status,
+                                artifact_relpath = NULL, checksum = NULL,
+                                error = NULL) {
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+  DBI::dbExecute(db,
+    "INSERT OR REPLACE INTO asset_items (generation_id, sample_id, status,
+      artifact_relpath, checksum, error)
+     VALUES (?, ?, ?, ?, ?, ?)",
+    params = list(generation_id, sample_id, status,
+      artifact_relpath %||% NA_character_,
+      checksum %||% NA_character_,
+      error %||% NA_character_))
+}
+
+#' Get generation summary
+#' @export
+get_generation <- function(generation_id) {
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+  row <- DBI::dbGetQuery(db,
+    "SELECT * FROM asset_generations WHERE generation_id = ?",
+    params = list(generation_id))
+  if (nrow(row) == 0) return(NULL)
+  as.list(row[1, ])
+}
+
+#' Get items for a generation (for resume)
+#' @export
+get_generation_items <- function(generation_id, status = NULL) {
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+  if (is.null(status))
+    DBI::dbGetQuery(db, "SELECT * FROM asset_items WHERE generation_id = ?",
+      params = list(generation_id))
+  else
+    DBI::dbGetQuery(db,
+      "SELECT * FROM asset_items WHERE generation_id = ? AND status = ?",
+      params = list(generation_id, status))
+}
+
+#' Publish a completed generation as an active asset
+#'
+#' Only if completed_n == expected_n (no partial publishes).
+#'
+#' @return Character; the published asset_id, or NULL if validation fails.
+#' @export
+publish_generation <- function(generation_id, path_or_root, description = NULL,
+                                parent_asset_ids = character(0),
+                                provenance = NULL, alias = NULL) {
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+
+  gen <- DBI::dbGetQuery(db,
+    "SELECT * FROM asset_generations WHERE generation_id = ?",
+    params = list(generation_id))
+  if (nrow(gen) == 0) stop("Generation not found.", call. = FALSE)
+  gen <- as.list(gen[1, ])
+
+  # Validate completeness
+  if (!is.na(gen$expected_n) && gen$completed_n < gen$expected_n) {
+    update_generation(generation_id, state = "PARTIAL")
+    return(NULL)
+  }
+
+  # Register as active asset
+  asset_id <- .asset_register(db, gen$dataset_id, gen$kind, path_or_root,
+    derivation_hash = gen$derivation_hash,
+    parent_asset_ids = parent_asset_ids,
+    provenance = provenance,
+    created_by = gen$owner_id,
+    created_by_job = gen$created_by_job,
+    visibility = gen$visibility,
+    description = description)
+
+  # Update generation
+  now <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
+  DBI::dbExecute(db,
+    "UPDATE asset_generations SET state = 'ACTIVE', published_asset_id = ?,
+     updated_at = ? WHERE generation_id = ?",
+    params = list(asset_id, now, generation_id))
+
+  if (!is.null(alias)) {
+    .asset_set_alias(db, gen$dataset_id, alias, asset_id)
+  }
+
+  asset_id
 }
