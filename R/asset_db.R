@@ -112,12 +112,26 @@
       FOREIGN KEY (generation_id) REFERENCES asset_generations(generation_id)
     )")
 
+  DBI::dbExecute(db, "
+    CREATE TABLE IF NOT EXISTS content_fingerprints (
+      dataset_id   TEXT NOT NULL,
+      sample_id    TEXT NOT NULL,
+      file_path    TEXT NOT NULL,
+      fingerprint  TEXT NOT NULL,
+      file_size    INTEGER NOT NULL,
+      file_mtime   REAL NOT NULL,
+      computed_at  TEXT NOT NULL,
+      PRIMARY KEY (dataset_id, sample_id)
+    )")
+
   DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_assets_dataset ON assets(dataset_id)")
   DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_assets_hash ON assets(derivation_hash)")
   DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_assets_kind ON assets(dataset_id, kind)")
   DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_gen_hash ON asset_generations(dataset_id, derivation_hash)")
   DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_gen_state ON asset_generations(state)")
   DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_items_gen ON asset_items(generation_id)")
+  DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_fp_dataset ON content_fingerprints(dataset_id)")
+  DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_fp_fingerprint ON content_fingerprints(fingerprint)")
 }
 
 #' @keywords internal
@@ -297,6 +311,20 @@
   row$asset_id[1]
 }
 
+#' Find an active asset by derivation hash
+#'
+#' Public wrapper for deduplication lookups.
+#'
+#' @param dataset_id Character; the dataset.
+#' @param derivation_hash Character; the hash to look up.
+#' @return Character asset_id if found, NULL otherwise.
+#' @export
+find_asset_by_hash <- function(dataset_id, derivation_hash) {
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+  .asset_find_by_hash(db, dataset_id, derivation_hash)
+}
+
 #' Compute a derivation hash from parameters
 #'
 #' Used by dsRadiomics, dsImaging clients to generate a content address
@@ -404,6 +432,32 @@ update_generation <- function(generation_id, ...) {
                 paste(set_clauses, collapse = ", "),
                 " WHERE generation_id = ?")
   DBI::dbExecute(db, sql, params = c(unname(updates), list(generation_id)))
+}
+
+#' Atomically increment a generation counter
+#'
+#' Uses SQL `SET field = field + 1` to avoid read-modify-write races
+#' when multiple per-image jobs complete concurrently.
+#'
+#' @param generation_id Character.
+#' @param field Character; "completed_n" or "failed_n".
+#' @param n Integer; amount to increment (default 1).
+#' @return The new value of the field.
+#' @export
+increment_generation_counter <- function(generation_id, field, n = 1L) {
+  if (!field %in% c("completed_n", "failed_n"))
+    stop("Only completed_n and failed_n can be incremented.", call. = FALSE)
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+  now <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
+  sql <- paste0("UPDATE asset_generations SET ", field, " = ", field, " + ?,
+                  updated_at = ? WHERE generation_id = ?")
+  DBI::dbExecute(db, sql, params = list(as.integer(n), now, generation_id))
+  row <- DBI::dbGetQuery(db,
+    paste0("SELECT ", field, " FROM asset_generations WHERE generation_id = ?"),
+    params = list(generation_id))
+  if (nrow(row) == 0) return(0L)
+  as.integer(row[[1]][1])
 }
 
 #' Record per-sample item status
@@ -523,4 +577,117 @@ publish_generation <- function(generation_id, path_or_root, description = NULL,
   }
 
   asset_id
+}
+
+# =============================================================================
+# Content fingerprinting (per-image deduplication)
+# =============================================================================
+
+#' Compute collection fingerprints and diff against stored state
+#'
+#' Runs the Python fingerprinting helper on the image root, compares
+#' against stored fingerprints in the database, and returns a diff
+#' with new/changed/unchanged samples.
+#'
+#' @param dataset_id Character; the dataset.
+#' @param image_root Character; path to the image directory.
+#' @return Named list: new (character), changed (character),
+#'   unchanged (character), fingerprints (named list of fp strings).
+#' @export
+compute_collection_fingerprints <- function(dataset_id, image_root) {
+  if (!dir.exists(image_root))
+    stop("Image root does not exist: ", image_root, call. = FALSE)
+
+  # Run Python fingerprinter
+  script <- system.file("python", "fingerprint_images.py", package = "dsImaging")
+  if (!nzchar(script))
+    stop("fingerprint_images.py not found in dsImaging", call. = FALSE)
+
+  tmp <- tempfile(fileext = ".json")
+  on.exit(unlink(tmp), add = TRUE)
+
+  python <- getOption("dsimaging.python",
+    getOption("default.dsimaging.python", "python3"))
+  res <- system2(python,
+    args = c(shQuote(script), "--image-root", shQuote(image_root),
+             "--output", shQuote(tmp)),
+    stdout = TRUE, stderr = TRUE)
+
+  if (!file.exists(tmp))
+    stop("Fingerprinting failed:\n", paste(res, collapse = "\n"), call. = FALSE)
+
+  new_fps <- jsonlite::fromJSON(tmp, simplifyVector = FALSE)
+
+  # Load stored fingerprints
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db), add = TRUE)
+
+  stored <- DBI::dbGetQuery(db,
+    "SELECT sample_id, fingerprint FROM content_fingerprints WHERE dataset_id = ?",
+    params = list(dataset_id))
+  stored_map <- stats::setNames(stored$fingerprint, stored$sample_id)
+
+  # Diff
+  new_ids <- character(0)
+  changed_ids <- character(0)
+  unchanged_ids <- character(0)
+  fp_map <- list()
+
+  now <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
+
+  DBI::dbExecute(db, "BEGIN IMMEDIATE")
+  tryCatch({
+    for (entry in new_fps) {
+      sid <- entry$sample_id
+      fp <- entry$fingerprint
+      fp_map[[sid]] <- fp
+
+      if (is.null(stored_map[sid]) || is.na(stored_map[sid])) {
+        new_ids <- c(new_ids, sid)
+      } else if (stored_map[[sid]] != fp) {
+        changed_ids <- c(changed_ids, sid)
+      } else {
+        unchanged_ids <- c(unchanged_ids, sid)
+        next
+      }
+
+      # Upsert fingerprint
+      DBI::dbExecute(db,
+        "INSERT OR REPLACE INTO content_fingerprints
+         (dataset_id, sample_id, file_path, fingerprint, file_size, file_mtime, computed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        params = list(dataset_id, sid, entry$file_path, fp,
+                       as.integer(entry$file_size), as.numeric(entry$file_mtime), now))
+    }
+    DBI::dbExecute(db, "COMMIT")
+  }, error = function(e) {
+    tryCatch(DBI::dbExecute(db, "ROLLBACK"), error = function(e2) NULL)
+    stop(e)
+  })
+
+  list(
+    new = new_ids,
+    changed = changed_ids,
+    unchanged = unchanged_ids,
+    fingerprints = fp_map,
+    total = length(new_fps)
+  )
+}
+
+#' Compute a per-image derivation hash
+#'
+#' Combines the image fingerprint with processor identity and parameters
+#' to produce a content-addressable hash for a single image derivation.
+#'
+#' @param fingerprint Character; the image content fingerprint.
+#' @param processor Character; processor identifier (e.g. "totalsegmentator_total").
+#' @param params Named list; processing parameters.
+#' @return Character; SHA-256 hex digest.
+#' @export
+compute_image_derivation_hash <- function(fingerprint, processor, params = list()) {
+  compute_derivation_hash(
+    fingerprint = fingerprint,
+    processor = processor,
+    params = params
+  )
 }
