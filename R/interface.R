@@ -120,7 +120,8 @@ imagingInitDS <- function(resource_symbol) {
   # If dsFlower is loaded, also consider its trust profile minimum
   if (requireNamespace("dsFlower", quietly = TRUE)) {
     tryCatch({
-      trust <- dsFlower:::.flowerTrustProfile()
+      trust <- tryCatch(dsFlower::flowerTrustProfile(), error = function(e) NULL)
+      if (is.null(trust)) trust <- list(min_train_rows = 0)
       nfilter <- max(nfilter, trust$min_train_rows)
     }, error = function(e) NULL)
   }
