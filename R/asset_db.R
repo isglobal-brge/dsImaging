@@ -606,8 +606,7 @@ compute_collection_fingerprints <- function(dataset_id, image_root) {
   tmp <- tempfile(fileext = ".json")
   on.exit(unlink(tmp), add = TRUE)
 
-  python <- getOption("dsimaging.python",
-    getOption("default.dsimaging.python", "python3"))
+  python <- .python3()
   res <- system2(python,
     args = c(shQuote(script), "--image-root", shQuote(image_root),
              "--output", shQuote(tmp)),
