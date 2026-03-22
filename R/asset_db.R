@@ -100,11 +100,14 @@
       updated_at        TEXT NOT NULL
     )")
 
+  # Status state machine: pending -> claimed -> running -> completed | failed | skipped
   DBI::dbExecute(db, "
     CREATE TABLE IF NOT EXISTS asset_items (
       generation_id     TEXT NOT NULL,
       sample_id         TEXT NOT NULL,
       status            TEXT NOT NULL DEFAULT 'pending',
+      claimed_by        TEXT,
+      claimed_at        TEXT,
       artifact_relpath  TEXT,
       checksum          TEXT,
       error             TEXT,
@@ -112,17 +115,47 @@
       FOREIGN KEY (generation_id) REFERENCES asset_generations(generation_id)
     )")
 
+  # Schema migration for existing DBs
+  tryCatch({
+    cols <- DBI::dbListFields(db, "asset_items")
+    if (!"claimed_by" %in% cols)
+      DBI::dbExecute(db, "ALTER TABLE asset_items ADD COLUMN claimed_by TEXT")
+    if (!"claimed_at" %in% cols)
+      DBI::dbExecute(db, "ALTER TABLE asset_items ADD COLUMN claimed_at TEXT")
+  }, error = function(e) NULL)
+
+  # Sample manifests: abstracts multi-file samples (DICOM series, bundles)
   DBI::dbExecute(db, "
-    CREATE TABLE IF NOT EXISTS content_fingerprints (
-      dataset_id   TEXT NOT NULL,
-      sample_id    TEXT NOT NULL,
-      file_path    TEXT NOT NULL,
-      fingerprint  TEXT NOT NULL,
-      file_size    INTEGER NOT NULL,
-      file_mtime   REAL NOT NULL,
-      computed_at  TEXT NOT NULL,
+    CREATE TABLE IF NOT EXISTS sample_manifests (
+      dataset_id     TEXT NOT NULL,
+      sample_id      TEXT NOT NULL,
+      source_kind    TEXT NOT NULL DEFAULT 'single_file',
+      manifest_json  TEXT NOT NULL,
+      content_hash   TEXT,
+      created_at     TEXT NOT NULL,
+      updated_at     TEXT NOT NULL,
       PRIMARY KEY (dataset_id, sample_id)
     )")
+
+  DBI::dbExecute(db, "
+    CREATE TABLE IF NOT EXISTS content_fingerprints (
+      dataset_id    TEXT NOT NULL,
+      sample_id     TEXT NOT NULL,
+      file_path     TEXT NOT NULL,
+      fingerprint   TEXT NOT NULL,
+      content_hash  TEXT,
+      file_size     INTEGER NOT NULL,
+      file_mtime    REAL NOT NULL,
+      computed_at   TEXT NOT NULL,
+      PRIMARY KEY (dataset_id, sample_id)
+    )")
+
+  # Schema migration for existing DBs
+  tryCatch({
+    cols <- DBI::dbListFields(db, "content_fingerprints")
+    if (!"content_hash" %in% cols)
+      DBI::dbExecute(db, "ALTER TABLE content_fingerprints ADD COLUMN content_hash TEXT")
+  }, error = function(e) NULL)
 
   DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_assets_dataset ON assets(dataset_id)")
   DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_assets_hash ON assets(derivation_hash)")
@@ -132,6 +165,7 @@
   DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_items_gen ON asset_items(generation_id)")
   DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_fp_dataset ON content_fingerprints(dataset_id)")
   DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_fp_fingerprint ON content_fingerprints(fingerprint)")
+  DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_fp_content_hash ON content_fingerprints(content_hash)")
 }
 
 #' @keywords internal
@@ -477,6 +511,127 @@ record_item_status <- function(generation_id, sample_id, status,
       error %||% NA_character_))
 }
 
+#' Complete a per-image item atomically
+#'
+#' Performs ALL of these in a single SQLite transaction:
+#'   1. Update asset_items row (status, artifact, error)
+#'   2. Increment the appropriate generation counter (completed_n or failed_n)
+#'   3. Optionally register a per-image asset (for cross-user dedup)
+#'
+#' This eliminates the race condition where a crash between separate
+#' record_item_status + increment_generation_counter calls leaves
+#' counters out of sync.
+#'
+#' @param generation_id Character.
+#' @param sample_id Character.
+#' @param status Character; "completed" or "failed".
+#' @param artifact_relpath Character or NULL.
+#' @param checksum Character or NULL.
+#' @param error Character or NULL.
+#' @param register_asset Named list or NULL. If provided, must contain:
+#'   dataset_id, kind, path_or_root, derivation_hash, provenance, created_by_job.
+#' @return Invisible TRUE on success.
+#' @export
+complete_item_atomic <- function(generation_id, sample_id, status,
+                                  artifact_relpath = NULL, checksum = NULL,
+                                  error = NULL, register_asset = NULL) {
+  if (!status %in% c("completed", "failed", "skipped"))
+    stop("status must be 'completed', 'failed', or 'skipped'", call. = FALSE)
+
+  counter_field <- if (status == "completed") "completed_n" else "failed_n"
+  now <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
+
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+
+  DBI::dbExecute(db, "BEGIN IMMEDIATE")
+  tryCatch({
+    # 1. Update item status
+    DBI::dbExecute(db,
+      "INSERT OR REPLACE INTO asset_items (generation_id, sample_id, status,
+        artifact_relpath, checksum, error)
+       VALUES (?, ?, ?, ?, ?, ?)",
+      params = list(generation_id, sample_id, status,
+        artifact_relpath %||% NA_character_,
+        checksum %||% NA_character_,
+        error %||% NA_character_))
+
+    # 2. Atomically increment counter
+    if (status != "skipped") {
+      DBI::dbExecute(db,
+        paste0("UPDATE asset_generations SET ", counter_field, " = ", counter_field,
+               " + 1, updated_at = ? WHERE generation_id = ?"),
+        params = list(now, generation_id))
+    }
+
+    # 3. Optionally register per-image asset (cross-user dedup)
+    if (!is.null(register_asset)) {
+      .asset_register(db,
+        dataset_id = register_asset$dataset_id,
+        kind = register_asset$kind %||% "per_image_result",
+        path_or_root = register_asset$path_or_root,
+        derivation_hash = register_asset$derivation_hash,
+        provenance = register_asset$provenance,
+        created_by_job = register_asset$created_by_job,
+        description = register_asset$description %||%
+          paste0("Per-image result: ", sample_id))
+    }
+
+    DBI::dbExecute(db, "COMMIT")
+  }, error = function(e) {
+    tryCatch(DBI::dbExecute(db, "ROLLBACK"), error = function(e2) NULL)
+    stop(e)
+  })
+
+  invisible(TRUE)
+}
+
+#' Atomically claim N pending items for processing
+#'
+#' Selects up to \code{n} items with status "pending", marks them
+#' "claimed", and returns their sample_ids. Uses BEGIN IMMEDIATE
+#' so concurrent callers never claim the same items.
+#'
+#' @param generation_id Character.
+#' @param n Integer; max items to claim.
+#' @param claimer_id Character or NULL; identifier for the claimer.
+#' @return Character vector of claimed sample_ids (may be empty).
+#' @export
+claim_pending_items <- function(generation_id, n, claimer_id = NULL) {
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+  now <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
+
+  DBI::dbExecute(db, "BEGIN IMMEDIATE")
+  tryCatch({
+    pending <- DBI::dbGetQuery(db,
+      "SELECT sample_id FROM asset_items
+       WHERE generation_id = ? AND status = 'pending'
+       ORDER BY sample_id LIMIT ?",
+      params = list(generation_id, as.integer(n)))
+
+    if (nrow(pending) == 0) {
+      DBI::dbExecute(db, "COMMIT")
+      return(character(0))
+    }
+
+    ids <- pending$sample_id
+    placeholders <- paste(rep("?", length(ids)), collapse = ",")
+    DBI::dbExecute(db,
+      paste0("UPDATE asset_items SET status = 'claimed', claimed_by = ?,
+              claimed_at = ? WHERE generation_id = ? AND sample_id IN (",
+             placeholders, ")"),
+      params = c(list(claimer_id %||% NA_character_, now, generation_id),
+                  as.list(ids)))
+
+    DBI::dbExecute(db, "COMMIT")
+    ids
+  }, error = function(e) {
+    tryCatch(DBI::dbExecute(db, "ROLLBACK"), error = function(e2) NULL)
+    character(0)
+  })
+}
+
 #' Get generation summary
 #' @export
 get_generation <- function(generation_id) {
@@ -594,11 +749,11 @@ publish_generation <- function(generation_id, path_or_root, description = NULL,
 #' @return Named list: new (character), changed (character),
 #'   unchanged (character), fingerprints (named list of fp strings).
 #' @export
-compute_collection_fingerprints <- function(dataset_id, image_root) {
+compute_collection_fingerprints <- function(dataset_id, image_root,
+                                              compute_content_hash = TRUE) {
   if (!dir.exists(image_root))
     stop("Image root does not exist: ", image_root, call. = FALSE)
 
-  # Run Python fingerprinter
   script <- system.file("python", "fingerprint_images.py", package = "dsImaging")
   if (!nzchar(script))
     stop("fingerprint_images.py not found in dsImaging", call. = FALSE)
@@ -607,17 +762,18 @@ compute_collection_fingerprints <- function(dataset_id, image_root) {
   on.exit(unlink(tmp), add = TRUE)
 
   python <- .python3()
-  res <- system2(python,
-    args = c(shQuote(script), "--image-root", shQuote(image_root),
-             "--output", shQuote(tmp)),
-    stdout = TRUE, stderr = TRUE)
+  py_args <- c(shQuote(script), "--image-root", shQuote(image_root),
+               "--output", shQuote(tmp))
+  if (isTRUE(compute_content_hash))
+    py_args <- c(py_args, "--compute-content-hash")
+
+  res <- system2(python, args = py_args, stdout = TRUE, stderr = TRUE)
 
   if (!file.exists(tmp))
     stop("Fingerprinting failed:\n", paste(res, collapse = "\n"), call. = FALSE)
 
   new_fps <- jsonlite::fromJSON(tmp, simplifyVector = FALSE)
 
-  # Load stored fingerprints
   db <- .asset_db_connect()
   on.exit(.asset_db_close(db), add = TRUE)
 
@@ -626,11 +782,11 @@ compute_collection_fingerprints <- function(dataset_id, image_root) {
     params = list(dataset_id))
   stored_map <- stats::setNames(stored$fingerprint, stored$sample_id)
 
-  # Diff
   new_ids <- character(0)
   changed_ids <- character(0)
   unchanged_ids <- character(0)
   fp_map <- list()
+  ch_map <- list()  # content_hash map
 
   now <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
 
@@ -640,6 +796,8 @@ compute_collection_fingerprints <- function(dataset_id, image_root) {
       sid <- entry$sample_id
       fp <- entry$fingerprint
       fp_map[[sid]] <- fp
+      if (!is.null(entry$content_hash))
+        ch_map[[sid]] <- entry$content_hash
 
       if (is.null(stored_map[sid]) || is.na(stored_map[sid])) {
         new_ids <- c(new_ids, sid)
@@ -650,13 +808,15 @@ compute_collection_fingerprints <- function(dataset_id, image_root) {
         next
       }
 
-      # Upsert fingerprint
       DBI::dbExecute(db,
         "INSERT OR REPLACE INTO content_fingerprints
-         (dataset_id, sample_id, file_path, fingerprint, file_size, file_mtime, computed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+         (dataset_id, sample_id, file_path, fingerprint, content_hash,
+          file_size, file_mtime, computed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         params = list(dataset_id, sid, entry$file_path, fp,
-                       as.integer(entry$file_size), as.numeric(entry$file_mtime), now))
+                       entry$content_hash %||% NA_character_,
+                       as.integer(entry$file_size),
+                       as.numeric(entry$file_mtime), now))
     }
     DBI::dbExecute(db, "COMMIT")
   }, error = function(e) {
@@ -669,24 +829,101 @@ compute_collection_fingerprints <- function(dataset_id, image_root) {
     changed = changed_ids,
     unchanged = unchanged_ids,
     fingerprints = fp_map,
+    content_hashes = ch_map,
     total = length(new_fps)
   )
 }
 
 #' Compute a per-image derivation hash
 #'
-#' Combines the image fingerprint with processor identity and parameters
-#' to produce a content-addressable hash for a single image derivation.
+#' Combines the image identity with processor and parameters to produce
+#' a content-addressable hash. Prefers content_hash (strong, full-file)
+#' over fingerprint (fast, scan-level) for true content addressing.
 #'
-#' @param fingerprint Character; the image content fingerprint.
-#' @param processor Character; processor identifier (e.g. "totalsegmentator_total").
+#' @param content_hash Character or NULL; strong full-file SHA-256.
+#' @param fingerprint Character or NULL; fast scan fingerprint (fallback).
+#' @param processor Character; processor identifier.
 #' @param params Named list; processing parameters.
 #' @return Character; SHA-256 hex digest.
 #' @export
-compute_image_derivation_hash <- function(fingerprint, processor, params = list()) {
+compute_image_derivation_hash <- function(content_hash = NULL, fingerprint = NULL,
+                                           processor, params = list()) {
+  identity <- content_hash %||% fingerprint
+  if (is.null(identity))
+    stop("Either content_hash or fingerprint required.", call. = FALSE)
   compute_derivation_hash(
-    fingerprint = fingerprint,
+    image_identity = identity,
     processor = processor,
     params = params
   )
+}
+
+# =============================================================================
+# Sample manifests (multi-file sample support)
+# =============================================================================
+
+#' Upsert a sample manifest
+#'
+#' Describes the structure of a sample (single file, DICOM series, bundle).
+#'
+#' @param dataset_id Character.
+#' @param sample_id Character.
+#' @param source_kind Character; "single_file", "dicom_series", "multi_file_bundle".
+#' @param manifest Named list with file references.
+#' @param content_hash Character or NULL; overall content hash.
+#' @export
+upsert_sample_manifest <- function(dataset_id, sample_id, source_kind,
+                                    manifest, content_hash = NULL) {
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+  now <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
+  mj <- as.character(jsonlite::toJSON(manifest, auto_unbox = TRUE))
+  DBI::dbExecute(db,
+    "INSERT OR REPLACE INTO sample_manifests
+     (dataset_id, sample_id, source_kind, manifest_json, content_hash,
+      created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)",
+    params = list(dataset_id, sample_id, source_kind, mj,
+                   content_hash %||% NA_character_, now, now))
+}
+
+#' Get a sample manifest
+#' @return Named list or NULL.
+#' @export
+get_sample_manifest <- function(dataset_id, sample_id) {
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+  row <- DBI::dbGetQuery(db,
+    "SELECT * FROM sample_manifests WHERE dataset_id = ? AND sample_id = ?",
+    params = list(dataset_id, sample_id))
+  if (nrow(row) == 0) return(NULL)
+  out <- as.list(row[1, ])
+  out$manifest <- jsonlite::fromJSON(out$manifest_json, simplifyVector = FALSE)
+  out$manifest_json <- NULL
+  out
+}
+
+#' Get the primary file path for a sample
+#'
+#' Resolves from manifest if available, otherwise returns NULL.
+#' Backward-compatible: works with single_file samples.
+#'
+#' @return Character or NULL.
+#' @export
+get_sample_primary_path <- function(dataset_id, sample_id) {
+  sm <- get_sample_manifest(dataset_id, sample_id)
+  if (is.null(sm)) return(NULL)
+  sm$manifest$primary_path %||% sm$manifest$files[[1]]$path
+}
+
+#' List sample manifests for a dataset
+#' @return Data.frame.
+#' @export
+list_sample_manifests <- function(dataset_id) {
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+  DBI::dbGetQuery(db,
+    "SELECT sample_id, source_kind, content_hash, updated_at
+     FROM sample_manifests WHERE dataset_id = ? ORDER BY sample_id",
+    params = list(dataset_id))
 }

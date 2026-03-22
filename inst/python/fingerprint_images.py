@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """Content fingerprinting for medical images.
 
-Computes a fast, content-addressable fingerprint for each image file
-in a directory. The fingerprint is:
+Two levels of hashing:
 
-    SHA-256(file_size_bytes || mtime_ns || first_4096_bytes || last_4096_bytes)
+1. Fast fingerprint (always computed):
+   SHA-256(file_size || mtime || first_4096_bytes || last_4096_bytes)
+   Purpose: fast change detection between scans. O(1) memory.
 
-This avoids reading the full file (which can be >1GB for NIfTI/DICOM)
-while still detecting changes reliably. Streaming, O(1) memory per file.
+2. Content hash (optional, --compute-content-hash):
+   SHA-256(full file contents), streamed in 64KB chunks.
+   Purpose: true content identity for deduplication, provenance, publication.
 
-Output: JSON array of {sample_id, file_path, fingerprint, file_size, file_mtime}.
+The fingerprint is for scan speed. The content_hash is for correctness.
 """
 
 import argparse
@@ -20,10 +22,11 @@ import struct
 import sys
 
 CHUNK_SIZE = 4096
+HASH_CHUNK = 65536
 
 
 def fingerprint_file(path):
-    """Compute fingerprint for a single file."""
+    """Fast fingerprint: size + mtime + head + tail."""
     stat = os.stat(path)
     file_size = stat.st_size
     file_mtime = stat.st_mtime
@@ -35,13 +38,23 @@ def fingerprint_file(path):
     with open(path, "rb") as f:
         head = f.read(CHUNK_SIZE)
         h.update(head)
-
         if file_size > CHUNK_SIZE:
             f.seek(max(0, file_size - CHUNK_SIZE))
-            tail = f.read(CHUNK_SIZE)
-            h.update(tail)
+            h.update(f.read(CHUNK_SIZE))
 
     return h.hexdigest(), file_size, file_mtime
+
+
+def content_hash_file(path):
+    """Strong content hash: full-file SHA-256, streamed."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(HASH_CHUNK)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def sample_id_from_filename(filename):
@@ -49,11 +62,8 @@ def sample_id_from_filename(filename):
     name = filename
     for ext in (".nii.gz", ".nii", ".nrrd", ".mha", ".mhd", ".dcm"):
         if name.lower().endswith(ext):
-            name = name[: -len(ext)]
-            break
-    else:
-        name = os.path.splitext(name)[0]
-    return name
+            return name[: -len(ext)]
+    return os.path.splitext(name)[0]
 
 
 def main():
@@ -62,6 +72,8 @@ def main():
                         help="Directory containing image files")
     parser.add_argument("--output", required=True,
                         help="Output JSON file path")
+    parser.add_argument("--compute-content-hash", action="store_true",
+                        help="Also compute full-file SHA-256 (slower but strong)")
     args = parser.parse_args()
 
     if not os.path.isdir(args.image_root):
@@ -75,20 +87,24 @@ def main():
             continue
         try:
             fp, fsize, fmtime = fingerprint_file(filepath)
-            results.append({
+            entry = {
                 "sample_id": sample_id_from_filename(filename),
                 "file_path": filepath,
                 "fingerprint": fp,
                 "file_size": fsize,
                 "file_mtime": fmtime,
-            })
+            }
+            if args.compute_content_hash:
+                entry["content_hash"] = content_hash_file(filepath)
+            results.append(entry)
         except Exception as e:
             print(f"  Warning: skipping {filename}: {e}", file=sys.stderr)
 
     with open(args.output, "w") as f:
         json.dump(results, f)
 
-    print(f"Fingerprinted {len(results)} files")
+    mode = "fingerprint + content_hash" if args.compute_content_hash else "fingerprint only"
+    print(f"Fingerprinted {len(results)} files ({mode})")
 
 
 if __name__ == "__main__":
