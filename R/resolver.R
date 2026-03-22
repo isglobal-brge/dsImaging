@@ -17,28 +17,25 @@ ImagingDatasetResourceResolver <- NULL
 .build_resolver_class <- function() {
   if (!requireNamespace("resourcer", quietly = TRUE)) return(NULL)
 
-  R6_class <- resourcer::ResourceResolver
-
-  ImagingDatasetResourceResolver <<- R6::R6Class(
+  cls <- R6::R6Class(
     "ImagingDatasetResourceResolver",
-    inherit = R6_class,
+    inherit = resourcer::ResourceResolver,
     public = list(
-      #' @description Check if this resolver handles the given resource.
-      #' @param x A resource object.
-      #' @return Logical.
       isFor = function(x) {
         url <- x$url %||% ""
         grepl("^imaging\\+dataset://", url)
       },
-
-      #' @description Create a ResourceClient for the resource.
-      #' @param x A resource object.
-      #' @return An ImagingDatasetResourceClient.
       newClient = function(x) {
-        ImagingDatasetResourceClient$new(x)
+        .dsimaging_env$client_class$new(x)
       }
     )
   )
+
+  .dsimaging_env$resolver_class <- cls
+  # Also set the exported variable if not locked
+  tryCatch(
+    ImagingDatasetResourceResolver <<- cls,
+    error = function(e) NULL)
 }
 
 # Build on load if resourcer is available

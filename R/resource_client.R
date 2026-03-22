@@ -15,7 +15,7 @@ ImagingDatasetResourceClient <- NULL
 
   RC_class <- resourcer::ResourceClient
 
-  ImagingDatasetResourceClient <<- R6::R6Class(
+  cls <- R6::R6Class(
     "ImagingDatasetResourceClient",
     inherit = RC_class,
     private = list(
@@ -72,7 +72,7 @@ ImagingDatasetResourceClient <- NULL
     )
   )
 
-  ImagingDatasetResourceClient$set("private", ".resolve", function() {
+  cls$set("private", ".resolve", function() {
     resource <- self$getResource()
     url <- resource$url %||% ""
     parsed <- .parse_imaging_url(url)
@@ -126,6 +126,11 @@ ImagingDatasetResourceClient <- NULL
          "': not in registry and no S3 credentials in resource.",
          call. = FALSE)
   })
+
+  .dsimaging_env$client_class <- cls
+  tryCatch(
+    ImagingDatasetResourceClient <<- cls,
+    error = function(e) NULL)
 }
 
 #' Parse an imaging+dataset:// URL
