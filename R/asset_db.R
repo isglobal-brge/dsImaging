@@ -886,6 +886,60 @@ compute_image_derivation_hash <- function(content_hash = NULL, fingerprint = NUL
   )
 }
 
+#' Store content hashes from a hash index into the local SQLite
+#'
+#' Public API for domain packages (dsRadiomics) that need to persist
+#' content hashes after reading them from an S3 hash index.
+#'
+#' @param dataset_id Character.
+#' @param sample_ids Character vector.
+#' @param content_hashes Character vector (same length as sample_ids).
+#' @export
+#' Get stored content hashes for specific samples
+#'
+#' @param dataset_id Character.
+#' @param sample_ids Character vector of sample IDs.
+#' @return Named list mapping sample_id -> content_hash.
+#' @export
+get_content_hashes <- function(dataset_id, sample_ids) {
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+  placeholders <- paste(rep("?", length(sample_ids)), collapse = ",")
+  fps <- DBI::dbGetQuery(db,
+    paste0("SELECT sample_id, content_hash FROM content_fingerprints
+            WHERE dataset_id = ? AND sample_id IN (", placeholders, ")"),
+    params = c(list(dataset_id), as.list(sample_ids)))
+  stats::setNames(as.list(fps$content_hash), fps$sample_id)
+}
+
+#' Store content hashes from a hash index into the local SQLite
+#'
+#' @param dataset_id Character.
+#' @param sample_ids Character vector.
+#' @param content_hashes Character vector (same length as sample_ids).
+#' @export
+store_content_hashes <- function(dataset_id, sample_ids, content_hashes) {
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+  now <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
+  DBI::dbExecute(db, "BEGIN IMMEDIATE")
+  tryCatch({
+    for (i in seq_along(sample_ids)) {
+      DBI::dbExecute(db,
+        "INSERT OR REPLACE INTO content_fingerprints
+         (dataset_id, sample_id, file_path, fingerprint, content_hash,
+          file_size, file_mtime, computed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        params = list(dataset_id, sample_ids[i], "", content_hashes[i],
+                       content_hashes[i], 0L, 0, now))
+    }
+    DBI::dbExecute(db, "COMMIT")
+  }, error = function(e) {
+    tryCatch(DBI::dbExecute(db, "ROLLBACK"), error = function(e2) NULL)
+    stop(e)
+  })
+}
+
 # =============================================================================
 # Sample manifests (multi-file sample support)
 # =============================================================================

@@ -22,20 +22,21 @@ imagingInitDS <- function(resource_symbol) {
       # Resolve the imaging+dataset:// URL ourselves
       parsed <- .parse_imaging_url(url)
       if (!is.null(parsed$dataset_id)) {
-        resolved <- resolve_dataset(parsed$dataset_id)
-        manifest <- parse_manifest(resolved$manifest_uri, resolved$backend)
-      } else {
-        stop("Cannot resolve imaging+dataset:// URL: ", url, call. = FALSE)
+        resolved <- tryCatch(resolve_dataset(parsed$dataset_id), error = function(e) NULL)
+        if (!is.null(resolved)) {
+          manifest <- parse_manifest(resolved$manifest_uri, resolved$backend)
+          desc <- imaging_dataset_descriptor(manifest)
+          return(.make_imaging_handle(desc, resource_symbol, backend = resolved$backend))
+        }
       }
-      desc <- imaging_dataset_descriptor(manifest)
-      return(.make_imaging_handle(desc, resource_symbol))
+      stop("Cannot resolve imaging+dataset:// URL: ", url, call. = FALSE)
     }
   }
 
   # Path 2: Already-resolved ImagingDatasetResourceClient
   if (inherits(obj, "ImagingDatasetResourceClient")) {
     desc <- obj$asImagingDescriptor()
-    return(.make_imaging_handle(desc, resource_symbol))
+    return(.make_imaging_handle(desc, resource_symbol, backend = obj$getBackend()))
   }
 
   # Path 3: FlowerDatasetDescriptor / ImagingDatasetDescriptor
@@ -50,7 +51,7 @@ imagingInitDS <- function(resource_symbol) {
       resolved <- resolve_dataset(obj)
       manifest <- parse_manifest(resolved$manifest_uri, resolved$backend)
       desc <- imaging_dataset_descriptor(manifest)
-      return(.make_imaging_handle(desc, resource_symbol))
+      return(.make_imaging_handle(desc, resource_symbol, backend = resolved$backend))
     }, error = function(e) NULL)
   }
 
@@ -66,7 +67,7 @@ imagingInitDS <- function(resource_symbol) {
 #' fewer samples than the nfilter threshold.
 #'
 #' @keywords internal
-.make_imaging_handle <- function(desc, symbol) {
+.make_imaging_handle <- function(desc, symbol, backend = NULL) {
   # Count samples from metadata file to enforce nfilter
   n_samples <- .count_samples_from_manifest(desc$manifest)
   .assert_min_samples(n_samples, context = paste0("dataset '", desc$dataset_id, "'"))
@@ -76,12 +77,48 @@ imagingInitDS <- function(resource_symbol) {
     dataset_id  = desc$dataset_id,
     descriptor  = desc,
     manifest    = desc$manifest,
+    backend     = backend,
     n_samples   = n_samples,
     created_at  = Sys.time()
   )
   key <- paste0("imaging_", symbol)
   assign(key, handle, envir = .dsimaging_env)
   handle
+}
+
+#' Get the storage backend from an imaging handle
+#'
+#' Used by dsRadiomics to access S3/MinIO for dataset images.
+#' The backend is stored when imagingInitDS creates the handle.
+#'
+#' @param handle_symbol Character; the symbol name of the imaging handle.
+#' @return A dsimaging_backend object, or NULL if no backend.
+#' @export
+imagingGetBackendDS <- function(handle_symbol) {
+  key <- paste0("imaging_", handle_symbol)
+  handle <- get0(key, envir = .dsimaging_env)
+  if (is.null(handle)) {
+    # Try to get from the calling environment
+    handle <- tryCatch(get(handle_symbol, envir = parent.frame()),
+                        error = function(e) NULL)
+  }
+  if (is.null(handle)) return(NULL)
+  handle$backend
+}
+
+#' Get the manifest from an imaging handle
+#'
+#' @param handle_symbol Character; the symbol name.
+#' @return Parsed manifest list, or NULL.
+#' @export
+imagingGetManifestDS <- function(handle_symbol) {
+  for (sym in c(handle_symbol, "img", "img_res", "imaging", "res")) {
+    key <- paste0("imaging_", sym)
+    handle <- get0(key, envir = .dsimaging_env)
+    if (!is.null(handle) && !is.null(handle$manifest))
+      return(handle$manifest)
+  }
+  NULL
 }
 
 #' Count samples from a manifest's metadata file
