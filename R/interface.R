@@ -21,11 +21,9 @@ imagingInitDS <- function(resource_symbol) {
     if (grepl("^imaging\\+dataset://", url)) {
       # Resolve the imaging+dataset:// URL ourselves
       parsed <- .parse_imaging_url(url)
-      if (!is.null(parsed$manifest_path)) {
-        manifest <- parse_manifest(parsed$manifest_path)
-      } else if (!is.null(parsed$dataset_id)) {
-        manifest_path <- resolve_dataset(parsed$dataset_id)
-        manifest <- parse_manifest(manifest_path)
+      if (!is.null(parsed$dataset_id)) {
+        resolved <- resolve_dataset(parsed$dataset_id)
+        manifest <- parse_manifest(resolved$manifest_uri, resolved$backend)
       } else {
         stop("Cannot resolve imaging+dataset:// URL: ", url, call. = FALSE)
       }
@@ -49,8 +47,8 @@ imagingInitDS <- function(resource_symbol) {
   # Path 4: dataset_id string (convenience for server-side scripting)
   if (is.character(obj) && length(obj) == 1L && grepl("^[a-z0-9]", obj)) {
     tryCatch({
-      manifest_path <- resolve_dataset(obj)
-      manifest <- parse_manifest(manifest_path)
+      resolved <- resolve_dataset(obj)
+      manifest <- parse_manifest(resolved$manifest_uri, resolved$backend)
       desc <- imaging_dataset_descriptor(manifest)
       return(.make_imaging_handle(desc, resource_symbol))
     }, error = function(e) NULL)

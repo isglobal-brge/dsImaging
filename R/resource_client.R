@@ -20,7 +20,8 @@ ImagingDatasetResourceClient <- NULL
     inherit = RC_class,
     private = list(
       .manifest = NULL,
-      .dataset_id = NULL
+      .dataset_id = NULL,
+      .backend = NULL
     ),
     public = list(
       #' @description Create a new ImagingDatasetResourceClient.
@@ -31,61 +32,55 @@ ImagingDatasetResourceClient <- NULL
       },
 
       #' @description Get the parsed manifest.
-      #' @return List; the validated manifest.
-      getManifest = function() {
-        private$.manifest
-      },
+      getManifest = function() private$.manifest,
 
       #' @description Get the dataset_id.
-      #' @return Character.
-      getDatasetId = function() {
-        private$.dataset_id
-      },
+      getDatasetId = function() private$.dataset_id,
+
+      #' @description Get the storage backend.
+      getBackend = function() private$.backend,
 
       #' @description Get the metadata as a data.frame.
-      #'
-      #' Reads the metadata file from the manifest (samples table).
-      #' This is what \code{resourcer::as.data.frame()} would call.
-      #'
-      #' @return A data.frame.
       asDataFrame = function() {
         meta <- private$.manifest$metadata
-        if (is.null(meta) || is.null(meta$file)) {
-          stop("No metadata file in manifest.", call. = FALSE)
+        if (is.null(meta) || is.null(meta$uri))
+          stop("No metadata URI in manifest.", call. = FALSE)
+
+        fmt <- meta$format %||% .guess_format(meta$uri)
+
+        # Download metadata file if on S3
+        if (grepl("^s3://", meta$uri)) {
+          tmp <- tempfile(fileext = paste0(".", fmt))
+          backend_get_file(private$.backend, meta$uri, tmp)
+          local_path <- tmp
+        } else {
+          local_path <- meta$uri
         }
 
-        fmt <- meta$format %||% .guess_format(meta$file)
         if (identical(fmt, "parquet")) {
-          if (!requireNamespace("arrow", quietly = TRUE)) {
+          if (!requireNamespace("arrow", quietly = TRUE))
             stop("arrow package required for Parquet metadata.", call. = FALSE)
-          }
-          return(as.data.frame(arrow::read_parquet(meta$file)))
+          return(as.data.frame(arrow::read_parquet(local_path)))
         }
-        utils::read.csv(meta$file, stringsAsFactors = FALSE)
+        utils::read.csv(local_path, stringsAsFactors = FALSE)
       },
 
       #' @description Create an ImagingDatasetDescriptor.
-      #' @return An ImagingDatasetDescriptor.
       asImagingDescriptor = function() {
         imaging_dataset_descriptor(private$.manifest)
       }
     )
   )
 
-  # Add private resolve method
   ImagingDatasetResourceClient$set("private", ".resolve", function() {
     url <- self$getResource()$url %||% ""
     parsed <- .parse_imaging_url(url)
 
-    if (!is.null(parsed$manifest_path)) {
-      # Direct manifest path
-      private$.manifest <- parse_manifest(parsed$manifest_path)
-      private$.dataset_id <- private$.manifest$dataset_id
-    } else if (!is.null(parsed$dataset_id)) {
-      # Registry lookup
-      private$.dataset_id <- parsed$dataset_id
-      manifest_path <- resolve_dataset(parsed$dataset_id)
-      private$.manifest <- parse_manifest(manifest_path)
+    if (!is.null(parsed$dataset_id)) {
+      resolved <- resolve_dataset(parsed$dataset_id)
+      private$.dataset_id <- resolved$dataset_id
+      private$.backend <- resolved$backend
+      private$.manifest <- parse_manifest(resolved$manifest_uri, resolved$backend)
     } else {
       stop("Cannot resolve imaging+dataset:// URL: ", url, call. = FALSE)
     }
@@ -93,30 +88,16 @@ ImagingDatasetResourceClient <- NULL
 }
 
 #' Parse an imaging+dataset:// URL
-#'
-#' @param url Character; the URL to parse.
-#' @return Named list with \code{dataset_id} and/or \code{manifest_path}.
 #' @keywords internal
 .parse_imaging_url <- function(url) {
-  # Remove scheme
   body <- sub("^imaging\\+dataset://", "", url)
-
-  # Check for query parameter: manifest?path=/path/to/manifest.yml
-  if (grepl("\\?path=", body)) {
-    path <- sub("^manifest\\?path=", "", body)
-    path <- utils::URLdecode(path)
-    return(list(dataset_id = NULL, manifest_path = path))
-  }
-
-  # Otherwise the body is a dataset_id
   dataset_id <- utils::URLdecode(body)
-  list(dataset_id = dataset_id, manifest_path = NULL)
+  list(dataset_id = dataset_id)
 }
 
 #' Guess file format from extension
 #' @keywords internal
 .guess_format <- function(path) {
   if (grepl("\\.parquet$", path, ignore.case = TRUE)) return("parquet")
-  if (grepl("\\.csv$", path, ignore.case = TRUE)) return("csv")
   "csv"
 }

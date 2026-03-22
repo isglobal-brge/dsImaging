@@ -1,37 +1,44 @@
 # Module: Dataset Registry
-# Maps dataset_id to manifest path via server-side YAML configuration.
+#
+# Maps dataset_id to manifest URI + backend config via YAML.
+# The registry itself can live locally or in S3.
 
 #' Load the dataset registry
 #'
-#' Reads the registry YAML file from the path specified in the server
-#' option \code{dsimaging.registry_path}.
-#'
-#' @return Named list mapping dataset_id to registry entry.
+#' @return Named list mapping dataset_id to registry entries.
 #' @keywords internal
 .load_registry <- function() {
-  registry_path <- getOption("dsimaging.registry_path",
-                    getOption("default.dsimaging.registry_path", NULL))
+  backend_type <- getOption("dsimaging.registry_backend",
+    getOption("default.dsimaging.registry_backend", "file"))
+  registry_uri <- getOption("dsimaging.registry_uri",
+    getOption("dsimaging.registry_path",
+      getOption("default.dsimaging.registry_path",
+                "/var/lib/dsimaging/registry.yaml")))
 
-  # Batteries-included: try default path if no option set
-  if (is.null(registry_path) || !nzchar(registry_path)) {
-    registry_path <- "/var/lib/dsimaging/registry.yaml"
+  if (identical(backend_type, "s3")) {
+    backend <- storage_backend("s3", config = list(
+      endpoint = getOption("dsimaging.s3_endpoint"),
+      credentials_ref = getOption("dsimaging.s3_credentials_ref")))
+    raw <- backend_fetch_manifest(backend, registry_uri)
+  } else {
+    if (!file.exists(registry_uri))
+      stop("Registry not found: ", registry_uri, call. = FALSE)
+    raw <- yaml::yaml.load_file(registry_uri)
   }
 
-  if (!file.exists(registry_path)) {
-    stop("Dataset registry not found at: ", registry_path,
-         ". Create it or set dsimaging.registry_path option.", call. = FALSE)
-  }
+  sv <- raw$schema_version
+  if (is.null(sv) || as.integer(sv) < 1L)
+    stop("Registry missing or invalid schema_version.", call. = FALSE)
 
-  yaml::read_yaml(registry_path)
+  # Remove schema_version from entries
+  raw$schema_version <- NULL
+  raw
 }
 
-#' Resolve a dataset_id to its manifest path
+#' Resolve a dataset_id to its backend, manifest, and publish config
 #'
-#' Looks up the dataset_id in the registry and returns the manifest path
-#' if the dataset is enabled.
-#'
-#' @param dataset_id Character; the dataset identifier.
-#' @return Character; path to the manifest YAML file.
+#' @param dataset_id Character.
+#' @return Named list: dataset_id, backend, manifest_uri, publish, entry.
 #' @keywords internal
 resolve_dataset <- function(dataset_id) {
   registry <- .load_registry()
@@ -39,30 +46,42 @@ resolve_dataset <- function(dataset_id) {
   entry <- registry[[dataset_id]]
   if (is.null(entry)) {
     available <- names(registry)
-    stop("Dataset '", dataset_id, "' not found in registry. ",
-         "Available: ", paste(available, collapse = ", "), call. = FALSE)
+    stop("Dataset '", dataset_id, "' not found. Available: ",
+         paste(available, collapse = ", "), call. = FALSE)
   }
 
-  if (!isTRUE(entry$enabled)) {
-    stop("Dataset '", dataset_id, "' is disabled in the registry.",
-         call. = FALSE)
+  backend_type <- entry$backend %||% "file"
+  backend <- storage_backend(backend_type, config = list(
+    endpoint = entry$endpoint,
+    credentials_ref = entry$credentials_ref,
+    region = entry$region
+  ))
+
+  # Build publish backend (may differ from source backend)
+  publish <- NULL
+  if (!is.null(entry$publish)) {
+    pub_type <- entry$publish$backend %||% backend_type
+    publish <- storage_backend(pub_type, config = list(
+      endpoint = entry$publish$endpoint %||% entry$endpoint,
+      credentials_ref = entry$publish$credentials_ref %||% entry$credentials_ref,
+      region = entry$publish$region %||% entry$region,
+      uri_prefix = entry$publish$uri_prefix
+    ))
   }
 
-  manifest_path <- entry$manifest
-  if (is.null(manifest_path) || !file.exists(manifest_path)) {
-    stop("Manifest for '", dataset_id, "' not found at: ",
-         manifest_path %||% "(not specified)", call. = FALSE)
-  }
-
-  manifest_path
+  list(
+    dataset_id = dataset_id,
+    backend = backend,
+    manifest_uri = entry$manifest_uri,
+    publish = publish,
+    entry = entry
+  )
 }
 
-#' List all enabled datasets in the registry
+#' List all datasets in the registry
 #'
-#' @return Named list of dataset entries that are enabled.
+#' @return Named list of dataset entries.
 #' @keywords internal
 list_datasets <- function() {
-  registry <- .load_registry()
-  enabled <- Filter(function(entry) isTRUE(entry$enabled), registry)
-  enabled
+  .load_registry()
 }

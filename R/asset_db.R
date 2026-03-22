@@ -43,22 +43,30 @@
 .asset_db_create_schema <- function(db) {
   DBI::dbExecute(db, "
     CREATE TABLE IF NOT EXISTS assets (
-      asset_id         TEXT PRIMARY KEY,
-      dataset_id       TEXT NOT NULL,
-      kind             TEXT NOT NULL,
-      modality         TEXT,
-      status           TEXT NOT NULL DEFAULT 'active',
-      visibility       TEXT NOT NULL DEFAULT 'global',
-      derivation_hash  TEXT,
-      created_at       TEXT NOT NULL,
-      created_by       TEXT,
-      created_by_job   TEXT,
-      path_or_root     TEXT,
-      description      TEXT,
-      manifest_json    TEXT,
-      provenance_json  TEXT,
-      tags             TEXT
+      asset_id          TEXT PRIMARY KEY,
+      dataset_id        TEXT NOT NULL,
+      kind              TEXT NOT NULL,
+      modality          TEXT,
+      status            TEXT NOT NULL DEFAULT 'active',
+      visibility        TEXT NOT NULL DEFAULT 'global',
+      storage_backend   TEXT NOT NULL DEFAULT 'file',
+      derivation_hash   TEXT,
+      created_at        TEXT NOT NULL,
+      created_by        TEXT,
+      created_by_job    TEXT,
+      path_or_root      TEXT,
+      description       TEXT,
+      manifest_json     TEXT,
+      provenance_json   TEXT,
+      tags              TEXT
     )")
+
+  # Migration for existing DBs
+  tryCatch({
+    cols <- DBI::dbListFields(db, "assets")
+    if (!"storage_backend" %in% cols)
+      DBI::dbExecute(db, "ALTER TABLE assets ADD COLUMN storage_backend TEXT NOT NULL DEFAULT 'file'")
+  }, error = function(e) NULL)
 
   DBI::dbExecute(db, "
     CREATE TABLE IF NOT EXISTS asset_parents (
@@ -203,6 +211,7 @@
                              created_by_job = NULL,
                              modality = NULL,
                              visibility = "global",
+                             storage_backend = "file",
                              tags = NULL,
                              manifest = NULL,
                              description = NULL) {
@@ -229,12 +238,14 @@
   tryCatch({
     DBI::dbExecute(db,
       "INSERT INTO assets (asset_id, dataset_id, kind, modality, status,
-                           visibility, derivation_hash, created_at, created_by,
-                           created_by_job, path_or_root, description,
+                           visibility, storage_backend, derivation_hash,
+                           created_at, created_by, created_by_job,
+                           path_or_root, description,
                            manifest_json, provenance_json, tags)
-       VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+       VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       params = list(asset_id, dataset_id, kind, modality %||% NA_character_,
-        visibility, derivation_hash %||% NA_character_, now,
+        visibility, storage_backend,
+        derivation_hash %||% NA_character_, now,
         created_by %||% NA_character_, created_by_job %||% NA_character_,
         path_or_root, description %||% NA_character_,
         mani_json, prov_json, tags %||% NA_character_))
@@ -694,7 +705,8 @@ cleanup_stale_generations <- function(max_age_hours = 2) {
 #' Publish a completed generation as an active asset
 publish_generation <- function(generation_id, path_or_root, description = NULL,
                                 parent_asset_ids = character(0),
-                                provenance = NULL, alias = NULL) {
+                                provenance = NULL, alias = NULL,
+                                publish_backend = NULL) {
   db <- .asset_db_connect()
   on.exit(.asset_db_close(db))
 
@@ -710,14 +722,30 @@ publish_generation <- function(generation_id, path_or_root, description = NULL,
     return(NULL)
   }
 
-  # Register as active asset
-  asset_id <- .asset_register(db, gen$dataset_id, gen$kind, path_or_root,
+  # Commit-by-catalog: upload to target backend if publish_backend provided,
+  # then register in SQLite (the INSERT is the atomic commit point)
+  final_uri <- path_or_root
+  backend_type <- "file"
+  if (!is.null(publish_backend)) {
+    prefix <- publish_backend$config$uri_prefix
+    if (is.null(prefix))
+      prefix <- if (publish_backend$type == "s3")
+        .build_s3_uri("assets", gen$dataset_id) else path_or_root
+    dest_uri <- paste0(sub("/$", "", prefix), "/", generation_id)
+    backend_put_directory(publish_backend, path_or_root, dest_uri)
+    final_uri <- dest_uri
+    backend_type <- publish_backend$type
+  }
+
+  # Register as active asset (this INSERT is the commit point)
+  asset_id <- .asset_register(db, gen$dataset_id, gen$kind, final_uri,
     derivation_hash = gen$derivation_hash,
     parent_asset_ids = parent_asset_ids,
     provenance = provenance,
     created_by = gen$owner_id,
     created_by_job = gen$created_by_job,
     visibility = gen$visibility,
+    storage_backend = backend_type,
     description = description)
 
   # Update generation

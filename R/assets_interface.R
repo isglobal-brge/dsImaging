@@ -150,6 +150,7 @@ register_derived_asset <- function(dataset_id, kind, path_or_root,
                                     created_by = NULL,
                                     created_by_job = NULL,
                                     description = NULL,
+                                    storage_backend = "file",
                                     alias = NULL) {
   db <- .asset_db_connect()
   on.exit(.asset_db_close(db))
@@ -160,6 +161,7 @@ register_derived_asset <- function(dataset_id, kind, path_or_root,
     provenance = provenance,
     created_by = created_by,
     created_by_job = created_by_job,
+    storage_backend = storage_backend,
     description = description)
 
   if (!is.null(alias)) {
@@ -167,6 +169,39 @@ register_derived_asset <- function(dataset_id, kind, path_or_root,
   }
 
   asset_id
+}
+
+#' Resolve a feature_table asset by alias or ID
+#'
+#' Returns the asset metadata needed by dsFlower to consume
+#' the feature table directly without materializing it in R.
+#'
+#' @param dataset_id Character.
+#' @param alias_or_id Character; alias name or asset_id.
+#' @return Named list: asset_id, uri (path_or_root), storage_backend,
+#'   derivation_hash, dataset_id.
+#' @export
+resolve_feature_table_asset <- function(dataset_id, alias_or_id) {
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+
+  resolved_id <- .asset_resolve_alias(db, dataset_id, alias_or_id)
+  asset_id <- resolved_id %||% alias_or_id
+
+  asset <- .asset_get(db, asset_id)
+  if (is.null(asset))
+    stop("Asset not found: ", alias_or_id, call. = FALSE)
+  if (asset$kind != "feature_table")
+    stop("Asset '", alias_or_id, "' is kind '", asset$kind,
+         "', not feature_table.", call. = FALSE)
+
+  list(
+    asset_id = asset$asset_id,
+    uri = asset$path_or_root,
+    storage_backend = asset$storage_backend %||% "file",
+    derivation_hash = asset$derivation_hash,
+    dataset_id = dataset_id
+  )
 }
 
 #' Promote an Alias

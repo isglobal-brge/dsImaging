@@ -1,71 +1,53 @@
-# Module: YAML Manifest Parsing and Validation
-# Parses dataset manifest files that describe imaging datasets.
+# Module: Manifest Parsing and Validation
+#
+# Manifests describe imaging datasets: assets (images, masks),
+# metadata, content hash index, and sample manifests.
+# All paths are URIs (s3:// or local absolute paths).
 
 #' Parse an imaging dataset manifest
 #'
-#' Reads and validates a YAML manifest file describing an imaging dataset.
+#' Fetches the manifest YAML from the given backend and validates it.
 #'
-#' @param path Character; path to the manifest YAML file.
+#' @param manifest_uri Character; URI of the manifest YAML.
+#' @param backend A dsimaging_backend object (from resolve_dataset).
 #' @return A validated manifest list.
 #' @keywords internal
-parse_manifest <- function(path) {
-  if (!file.exists(path)) {
-    stop("Manifest file not found: ", path, call. = FALSE)
-  }
-
-  manifest <- yaml::read_yaml(path)
-  validate_manifest(manifest, path)
+parse_manifest <- function(manifest_uri, backend) {
+  manifest <- backend_fetch_manifest(backend, manifest_uri)
+  validate_manifest(manifest, manifest_uri)
   manifest
 }
 
 #' Validate a parsed manifest
 #'
-#' Checks required fields, types, and security constraints.
-#'
 #' @param manifest List; parsed manifest.
-#' @param source Character; source path for error messages.
-#' @return Invisible TRUE on success; stops on failure.
+#' @param source Character; source URI for error messages.
 #' @keywords internal
 validate_manifest <- function(manifest, source = "manifest") {
-  # Required top-level fields
-
-  required <- c("version", "dataset_id", "modality", "metadata")
-  missing <- setdiff(required, names(manifest))
-  if (length(missing) > 0) {
-    stop("Manifest '", source, "' missing required fields: ",
-         paste(missing, collapse = ", "), call. = FALSE)
-  }
-
-  # Version check
-  if (!identical(as.integer(manifest$version), 1L)) {
-    stop("Unsupported manifest version: ", manifest$version,
-         ". Only version 1 is supported.", call. = FALSE)
-  }
-
-  # dataset_id format: dotted segments
-
-  if (!grepl("^[a-z0-9][a-z0-9._-]*$", manifest$dataset_id)) {
-    stop("Invalid dataset_id format: '", manifest$dataset_id, "'. ",
-         "Use lowercase alphanumeric with dots/hyphens/underscores.",
+  # schema_version
+  sv <- manifest$schema_version
+  if (is.null(sv) || as.integer(sv) < 1L)
+    stop("Manifest '", source, "' missing or invalid schema_version.",
          call. = FALSE)
-  }
 
-  # Metadata validation
+  # dataset_id
+  did <- manifest$dataset_id
+  if (is.null(did) || !grepl("^[a-z0-9][a-z0-9._-]*$", did))
+    stop("Manifest '", source, "': invalid or missing dataset_id.",
+         call. = FALSE)
+
+  # metadata
   meta <- manifest$metadata
-  if (is.null(meta$file)) {
-    stop("Manifest metadata must include 'file' field.", call. = FALSE)
-  }
-  .validate_safe_path(meta$file, "metadata.file")
+  if (is.null(meta) || is.null(meta$uri))
+    stop("Manifest '", source, "': metadata.uri required.", call. = FALSE)
+  .validate_uri(meta$uri, "metadata.uri")
 
   if (!is.null(meta$format)) {
-    valid_formats <- c("parquet", "csv")
-    if (!meta$format %in% valid_formats) {
-      stop("Unsupported metadata format: '", meta$format, "'. ",
-           "Supported: ", paste(valid_formats, collapse = ", "), call. = FALSE)
-    }
+    if (!meta$format %in% c("parquet", "csv"))
+      stop("Unsupported metadata format: ", meta$format, call. = FALSE)
   }
 
-  # Asset validation
+  # Assets
   if (!is.null(manifest$assets)) {
     for (name in names(manifest$assets)) {
       validate_asset(manifest$assets[[name]], name, source)
@@ -76,62 +58,35 @@ validate_manifest <- function(manifest, source = "manifest") {
 }
 
 #' Validate a single asset entry
-#'
-#' @param asset List; the asset definition.
-#' @param name Character; asset name for error messages.
-#' @param source Character; manifest source for error messages.
 #' @keywords internal
 validate_asset <- function(asset, name, source = "manifest") {
-  asset_type <- asset$type %||% "unknown"
+  if (is.null(asset$uri))
+    stop("Asset '", name, "' in ", source, ": uri required.", call. = FALSE)
+  .validate_uri(asset$uri, paste0("assets.", name, ".uri"))
 
-  # Directory-based assets (images, masks, WSI, DICOM series, RT objects)
-  dir_types <- c("image_root", "wsi_root", "dicom_series_root", "rt_struct_root")
-  if (asset_type %in% dir_types) {
-    if (is.null(asset$root)) {
-      stop("Asset '", name, "' in ", source, " missing 'root' field.",
-           call. = FALSE)
-    }
-    .validate_safe_path(asset$root, paste0("assets.", name, ".root"))
+  kind <- asset$kind
+  valid_kinds <- c("image_root", "mask_root", "feature_table",
+                    "wsi_root", "dicom_series_root",
+                    "rt_struct_root", "rt_dose_file", "rt_plan_file",
+                    "multimodal_ref")
+  if (!is.null(kind) && !kind %in% valid_kinds)
+    stop("Asset '", name, "': unknown kind '", kind, "'.", call. = FALSE)
 
-    # WSI-specific: validate optional tile/magnification params
-    if (identical(asset_type, "wsi_root")) {
-      if (!is.null(asset$tile_size) && (!is.numeric(asset$tile_size) ||
-          asset$tile_size < 1)) {
-        stop("Asset '", name, "': tile_size must be a positive integer.",
-             call. = FALSE)
-      }
-      if (!is.null(asset$magnification) && !is.numeric(asset$magnification)) {
-        stop("Asset '", name, "': magnification must be numeric.",
-             call. = FALSE)
-      }
-    }
+  invisible(TRUE)
+}
+
+#' Validate a URI (s3:// or local absolute path)
+#' @keywords internal
+.validate_uri <- function(uri, label = "uri") {
+  if (is.null(uri) || !nzchar(uri))
+    stop(label, ": URI is empty.", call. = FALSE)
+  if (grepl("^s3://", uri)) {
+    parsed <- .parse_s3_uri(uri)
+    if (!nzchar(parsed$bucket))
+      stop(label, ": invalid S3 URI: ", uri, call. = FALSE)
     return(invisible(TRUE))
   }
-
-  # File-based assets (feature tables, RT dose/plan files)
-  file_types <- c("feature_table", "rt_dose_file", "rt_plan_file")
-  if (asset_type %in% file_types) {
-    if (is.null(asset$file)) {
-      stop("Asset '", name, "' in ", source, " missing 'file' field.",
-           call. = FALSE)
-    }
-    .validate_safe_path(asset$file, paste0("assets.", name, ".file"))
-    return(invisible(TRUE))
-  }
-
-  # Multimodal reference: points to another manifest
-  if (identical(asset_type, "multimodal_ref")) {
-    if (is.null(asset$manifest)) {
-      stop("Asset '", name, "' in ", source,
-           " missing 'manifest' field (path to referenced manifest).",
-           call. = FALSE)
-    }
-    .validate_safe_path(asset$manifest, paste0("assets.", name, ".manifest"))
-    return(invisible(TRUE))
-  }
-
-  stop("Unknown asset type '", asset_type, "' for asset '", name,
-       "' in ", source, ". Supported types: ",
-       paste(c(dir_types, file_types, "multimodal_ref"), collapse = ", "),
-       ".", call. = FALSE)
+  if (!startsWith(uri, "/"))
+    stop(label, ": must be absolute path or s3:// URI: ", uri, call. = FALSE)
+  invisible(TRUE)
 }

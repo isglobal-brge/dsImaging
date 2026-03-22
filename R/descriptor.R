@@ -37,8 +37,8 @@ imaging_dataset_descriptor <- function(manifest) {
 #' @return An \code{ImagingDatasetDescriptor}.
 #' @export
 imaging_descriptor_from_id <- function(dataset_id) {
-  manifest_path <- resolve_dataset(dataset_id)
-  manifest <- parse_manifest(manifest_path)
+  resolved <- resolve_dataset(dataset_id)
+  manifest <- parse_manifest(resolved$manifest_uri, resolved$backend)
   imaging_dataset_descriptor(manifest)
 }
 
