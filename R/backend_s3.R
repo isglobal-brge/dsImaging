@@ -76,20 +76,57 @@
   result
 }
 
-#' List objects under a prefix
+#' List objects under a prefix (with pagination for >1000 objects)
 #' @return Character vector of keys.
 #' @keywords internal
-.s3_list <- function(config, bucket, prefix, max_keys = 10000L) {
-  result <- .s3_call(function() {
-    resp <- aws.s3::get_bucket(
-      bucket = bucket, prefix = prefix, max = max_keys,
-      key = config$access_key, secret = config$secret_key,
-      base_url = .s3_base_url(config$endpoint),
-      region = config$region,
-      use_https = .s3_use_https(config$endpoint))
-    vapply(resp, function(x) x$Key, character(1))
-  })
-  result
+.s3_list <- function(config, bucket, prefix) {
+  all_keys <- character(0)
+  marker <- ""
+
+  repeat {
+    resp <- .s3_call(function() {
+      aws.s3::get_bucket(
+        bucket = bucket, prefix = prefix, max = 1000L,
+        marker = if (nzchar(marker)) marker else NULL,
+        key = config$access_key, secret = config$secret_key,
+        base_url = .s3_base_url(config$endpoint),
+        region = config$region,
+        use_https = .s3_use_https(config$endpoint))
+    })
+
+    if (length(resp) == 0) break
+    keys <- vapply(resp, function(x) x$Key, character(1))
+    all_keys <- c(all_keys, keys)
+
+    # S3 returns IsTruncated; aws.s3::get_bucket returns attr "IsTruncated"
+    truncated <- attr(resp, "IsTruncated")
+    if (is.null(truncated) || !identical(tolower(as.character(truncated)), "true"))
+      break
+
+    marker <- keys[length(keys)]
+  }
+
+  all_keys
+}
+
+#' Auto-detect region for self-hosted S3 (MinIO, etc.)
+#'
+#' If endpoint looks like a direct IP/localhost, region should be ""
+#' to prevent aws.s3 from prepending region to hostname.
+#' @keywords internal
+.auto_region <- function(endpoint, explicit_region = NULL) {
+  if (!is.null(explicit_region) && nzchar(explicit_region))
+    return(explicit_region)
+  if (is.null(endpoint) || !nzchar(endpoint))
+    return("us-east-1")  # AWS default
+  host <- sub("^https?://", "", endpoint)
+  host <- sub(":[0-9]+$", "", host)
+  # IP addresses, localhost, .local -> self-hosted, no region prefix
+  if (grepl("^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$", host) ||
+      grepl("^localhost$", host, ignore.case = TRUE) ||
+      grepl("\\.local$", host, ignore.case = TRUE))
+    return("")
+  "us-east-1"
 }
 
 #' Resolve S3 credentials from ref or env vars
@@ -111,7 +148,7 @@
         access_key = cred$access_key %||% cred$identity,
         secret_key = cred$secret_key %||% cred$secret,
         endpoint = cred$endpoint,
-        region = cred$region %||% "us-east-1"))
+        region = cred$region))
     }
   }
 
@@ -119,10 +156,12 @@
   ak <- Sys.getenv("AWS_ACCESS_KEY_ID", "")
   sk <- Sys.getenv("AWS_SECRET_ACCESS_KEY", "")
   if (nzchar(ak) && nzchar(sk)) {
+    ep <- Sys.getenv("AWS_S3_ENDPOINT", "")
+    rg <- Sys.getenv("AWS_DEFAULT_REGION", "")
     return(list(
       access_key = ak, secret_key = sk,
-      endpoint = Sys.getenv("AWS_S3_ENDPOINT", ""),
-      region = Sys.getenv("AWS_DEFAULT_REGION", "us-east-1")))
+      endpoint = ep,
+      region = if (nzchar(rg)) rg else NULL))
   }
 
   stop("S3 credentials not found. Set credentials_ref in registry ",

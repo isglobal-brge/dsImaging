@@ -185,10 +185,12 @@ backend_put_directory <- function(backend, local_dir, uri_prefix) {
 #' @keywords internal
 .resolve_backend_s3_config <- function(backend) {
   creds <- .resolve_s3_credentials(backend$config$credentials_ref)
+  endpoint <- backend$config$endpoint %||% creds$endpoint %||% ""
+  explicit_region <- backend$config$region %||% creds$region
   list(
-    endpoint = backend$config$endpoint %||% creds$endpoint %||% "",
+    endpoint = endpoint,
     access_key = creds$access_key,
     secret_key = creds$secret_key,
-    region = backend$config$region %||% creds$region %||% "us-east-1"
+    region = .auto_region(endpoint, explicit_region)
   )
 }

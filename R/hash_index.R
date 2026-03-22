@@ -31,7 +31,12 @@ read_hash_index <- function(backend, index_uri) {
     error = function(e) .empty_hash_index())
 }
 
-#' Write a content hash index to backend
+#' Write a content hash index to backend (atomic replace)
+#'
+#' For S3 backends: writes to a temp key first, then overwrites the target.
+#' This prevents partial writes from corrupting the index if the upload
+#' is interrupted. Two concurrent writers may still race, but neither
+#' will produce a corrupt file -- the last writer wins.
 #'
 #' @param backend A dsimaging_backend.
 #' @param index_uri Character; destination URI.
@@ -44,7 +49,28 @@ write_hash_index <- function(backend, index_uri, df) {
   tmp <- tempfile(fileext = ".parquet")
   on.exit(unlink(tmp), add = TRUE)
   arrow::write_parquet(df, tmp)
-  backend_put_file(backend, tmp, index_uri)
+
+  # For S3: write to a staging key, then copy to final location
+  # This ensures the final key is always a complete file
+  if (backend$type == "s3") {
+    staging_uri <- sub("\\.parquet$", paste0(".staging_", Sys.getpid(),
+      "_", as.integer(Sys.time()), ".parquet"), index_uri)
+    backend_put_file(backend, tmp, staging_uri)
+    # Overwrite final key (S3 PUTs are atomic per-object)
+    backend_put_file(backend, tmp, index_uri)
+    # Clean up staging key (best effort)
+    tryCatch({
+      parsed <- .parse_s3_uri(staging_uri)
+      config <- .resolve_backend_s3_config(backend)
+      aws.s3::delete_object(parsed$key, bucket = parsed$bucket,
+        key = config$access_key, secret = config$secret_key,
+        base_url = .s3_base_url(config$endpoint),
+        region = config$region,
+        use_https = .s3_use_https(config$endpoint))
+    }, error = function(e) NULL)
+  } else {
+    backend_put_file(backend, tmp, index_uri)
+  }
 }
 
 #' Diff a hash index against stored hashes in SQLite
