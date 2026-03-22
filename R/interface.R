@@ -189,7 +189,11 @@ imagingGetManifestDS <- function(handle_symbol) {
 #' @keywords internal
 .assert_min_samples <- function(n_samples, context = "dataset") {
   threshold <- .nfilter_threshold()
-  if (!is.null(n_samples) && !is.na(n_samples) && n_samples < threshold) {
+  if (is.null(n_samples) || is.na(n_samples)) {
+    stop("Disclosive: ", context, " sample count is unknown. ",
+         "Cannot verify disclosure control. Operation blocked.", call. = FALSE)
+  }
+  if (n_samples < threshold) {
     stop("Disclosive: ", context, " has fewer than ", threshold,
          " samples. Operation blocked.", call. = FALSE)
   }
