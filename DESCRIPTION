@@ -23,12 +23,13 @@ Imports:
     digest,
     yaml,
     jsonlite,
-    utils
-Suggests:
+    utils,
     resourcer,
-    R6,
+    R6
+Suggests:
     dsFlower,
     arrow,
+    aws.s3 (>= 0.3.21),
     testthat (>= 3.0.0),
     withr
 AggregateMethods:
