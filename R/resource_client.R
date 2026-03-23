@@ -114,8 +114,15 @@ ImagingDatasetResourceClient <- R6::R6Class(
     return(list(dataset_id = dataset_id, params = list(), s3 = FALSE))
   }
 
-  # Format: host:port/bucket/collection (S3/MinIO)
-  # Split on first slash -> host, rest -> bucket/collection
+  # Format: host:port/bucket/collection[@region]
+  # Check for @region suffix
+  region_override <- ""
+  at_pos <- regexpr("@[a-z]", body)
+  if (at_pos > 0) {
+    region_override <- substr(body, at_pos + 1, nchar(body))
+    body <- substr(body, 1, at_pos - 1)
+  }
+
   first_slash <- regexpr("/", body)
   if (first_slash > 0) {
     host <- substr(body, 1, first_slash - 1)
@@ -129,12 +136,18 @@ ImagingDatasetResourceClient <- R6::R6Class(
       collection <- ""
     }
 
-    # Auto-detect endpoint scheme: IPs and known local hosts -> http, else https
+    # Auto-detect scheme: IPs and known local hosts -> http, else https
     scheme <- if (grepl("^(\\d|localhost|minio|host\\.docker)", host)) "http" else "https"
     endpoint <- paste0(scheme, "://", host)
 
-    # Auto-detect region: local/self-hosted -> empty, cloud -> us-east-1
-    region <- if (grepl("^(\\d|localhost|minio|\\.local|host\\.docker)", host)) "" else "us-east-1"
+    # Region: explicit @region wins, else auto-detect
+    region <- if (nzchar(region_override)) {
+      region_override
+    } else if (grepl("^(\\d|localhost|minio|\\.local|host\\.docker)", host)) {
+      ""
+    } else {
+      "us-east-1"
+    }
 
     dataset_id <- basename(sub("/$", "", collection))
     return(list(

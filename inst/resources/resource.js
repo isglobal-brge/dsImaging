@@ -1,18 +1,17 @@
 // Opal Resource Forms for dsImaging.
-// The user fills in simple fields; the URL is built/parsed automatically.
+// Two S3 variants: MinIO (simple) and AWS (with region selector).
 
 var dsImaging_resources = [
   {
-    name: "imaging-s3-collection",
-    title: "Imaging Collection (S3/MinIO)",
-    description: "An imaging dataset stored in S3 or MinIO. " +
-      "The collection must contain a manifest.yaml.",
+    name: "imaging-minio",
+    title: "Imaging Collection (MinIO / Self-hosted S3)",
+    description: "An imaging dataset in a MinIO or self-hosted S3 instance.",
     tags: ["imaging", "s3", "minio", "dsImaging"],
     parameters: {
       host: {
         type: "string",
         title: "Host",
-        description: "S3/MinIO host and port (e.g. minio:9000 or s3.amazonaws.com)",
+        description: "MinIO host and port (e.g. minio:9000)",
         required: true
       },
       bucket: {
@@ -32,41 +31,117 @@ var dsImaging_resources = [
       access_key: {
         type: "string",
         title: "Access Key",
-        description: "S3/MinIO access key",
+        description: "MinIO access key",
         required: true
       },
       secret_key: {
         type: "string",
         title: "Secret Key",
         format: "password",
-        description: "S3/MinIO secret key",
+        description: "MinIO secret key",
         required: true
       }
     },
     asUrl: function(parameters) {
-      // imaging+dataset://host:port/bucket/collection
       return "imaging+dataset://" + parameters.host + "/" +
         parameters.bucket + "/" + parameters.collection;
     },
-    asIdentity: function(credentials) {
-      return credentials.access_key;
-    },
-    asSecret: function(credentials) {
-      return credentials.secret_key;
-    },
+    asIdentity: function(credentials) { return credentials.access_key; },
+    asSecret: function(credentials) { return credentials.secret_key; },
     toParameters: function(url) {
-      // Parse: imaging+dataset://host:port/bucket/collection
-      var body = url.replace("imaging+dataset://", "");
-      var firstSlash = body.indexOf("/");
-      if (firstSlash < 0) return { host: body };
-      var host = body.substring(0, firstSlash);
-      var rest = body.substring(firstSlash + 1);
-      var secondSlash = rest.indexOf("/");
-      if (secondSlash < 0) return { host: host, bucket: rest };
+      var body = url.replace("imaging+dataset://", "").replace(/@.*$/, "");
+      var parts = body.split("/");
       return {
-        host: host,
-        bucket: rest.substring(0, secondSlash),
-        collection: rest.substring(secondSlash + 1)
+        host: parts[0] || "",
+        bucket: parts[1] || "",
+        collection: parts.slice(2).join("/")
+      };
+    }
+  },
+  {
+    name: "imaging-aws-s3",
+    title: "Imaging Collection (AWS S3)",
+    description: "An imaging dataset in Amazon S3.",
+    tags: ["imaging", "s3", "aws", "dsImaging"],
+    parameters: {
+      region: {
+        type: "string",
+        title: "AWS Region",
+        description: "Select the AWS region where the bucket is hosted.",
+        required: true,
+        "enum": [
+          { "key": "us-east-1",      "title": "US East (N. Virginia)" },
+          { "key": "us-east-2",      "title": "US East (Ohio)" },
+          { "key": "us-west-1",      "title": "US West (N. California)" },
+          { "key": "us-west-2",      "title": "US West (Oregon)" },
+          { "key": "eu-west-1",      "title": "EU (Ireland)" },
+          { "key": "eu-west-2",      "title": "EU (London)" },
+          { "key": "eu-west-3",      "title": "EU (Paris)" },
+          { "key": "eu-central-1",   "title": "EU (Frankfurt)" },
+          { "key": "eu-central-2",   "title": "EU (Zurich)" },
+          { "key": "eu-south-1",     "title": "EU (Milan)" },
+          { "key": "eu-south-2",     "title": "EU (Spain)" },
+          { "key": "eu-north-1",     "title": "EU (Stockholm)" },
+          { "key": "ap-northeast-1", "title": "Asia Pacific (Tokyo)" },
+          { "key": "ap-northeast-2", "title": "Asia Pacific (Seoul)" },
+          { "key": "ap-southeast-1", "title": "Asia Pacific (Singapore)" },
+          { "key": "ap-southeast-2", "title": "Asia Pacific (Sydney)" },
+          { "key": "ap-south-1",     "title": "Asia Pacific (Mumbai)" },
+          { "key": "ca-central-1",   "title": "Canada (Central)" },
+          { "key": "sa-east-1",      "title": "South America (Sao Paulo)" },
+          { "key": "me-south-1",     "title": "Middle East (Bahrain)" },
+          { "key": "af-south-1",     "title": "Africa (Cape Town)" }
+        ]
+      },
+      bucket: {
+        type: "string",
+        title: "Bucket",
+        description: "S3 bucket name",
+        required: true
+      },
+      collection: {
+        type: "string",
+        title: "Collection",
+        description: "Path within the bucket (e.g. datasets/lung_ct_v2)",
+        required: true
+      }
+    },
+    credentials: {
+      access_key: {
+        type: "string",
+        title: "AWS Access Key ID",
+        description: "IAM access key",
+        required: true
+      },
+      secret_key: {
+        type: "string",
+        title: "AWS Secret Access Key",
+        format: "password",
+        description: "IAM secret key",
+        required: true
+      }
+    },
+    asUrl: function(parameters) {
+      var host = "s3." + parameters.region + ".amazonaws.com";
+      return "imaging+dataset://" + host + "/" +
+        parameters.bucket + "/" + parameters.collection +
+        "@" + parameters.region;
+    },
+    asIdentity: function(credentials) { return credentials.access_key; },
+    asSecret: function(credentials) { return credentials.secret_key; },
+    toParameters: function(url) {
+      var body = url.replace("imaging+dataset://", "");
+      var region = "";
+      var atIdx = body.lastIndexOf("@");
+      if (atIdx > 0) {
+        region = body.substring(atIdx + 1);
+        body = body.substring(0, atIdx);
+      }
+      var parts = body.split("/");
+      return {
+        region: region,
+        bucket: parts[1] || "",
+        collection: parts.slice(2).join("/")
       };
     }
   },
