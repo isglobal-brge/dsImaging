@@ -35,7 +35,7 @@ ImagingDatasetResourceClient <- R6::R6Class(
         return(invisible(NULL))
       }
 
-      # Try 2: S3 credentials from Opal resource
+      # Try 2: S3 credentials from Opal resource (resource.js form)
       params <- parsed$params %||% list()
       endpoint <- params$endpoint %||% ""
       bucket <- params$bucket %||% "imaging-data"
@@ -108,8 +108,9 @@ ImagingDatasetResourceClient <- R6::R6Class(
 .parse_imaging_url <- function(url) {
   body <- sub("^imaging\\+dataset://", "", url)
   parts <- strsplit(body, "\\?", fixed = FALSE)[[1]]
-  dataset_id <- utils::URLdecode(parts[1])
+  path_part <- utils::URLdecode(parts[1])
 
+  # Parse query params
   params <- list()
   if (length(parts) > 1) {
     query <- parts[2]
@@ -120,7 +121,32 @@ ImagingDatasetResourceClient <- R6::R6Class(
     }
   }
 
-  list(dataset_id = dataset_id, params = params)
+  # Handle S3 URL format: s3/{bucket}/{collection_path}
+  if (grepl("^s3/", path_part)) {
+    s3_body <- sub("^s3/", "", path_part)
+    slash_pos <- regexpr("/", s3_body)
+    if (slash_pos > 0) {
+      params$bucket <- substr(s3_body, 1, slash_pos - 1)
+      params$prefix <- substr(s3_body, slash_pos + 1, nchar(s3_body))
+    } else {
+      params$bucket <- s3_body
+    }
+    # Use collection path as dataset_id
+    dataset_id <- params$prefix %||% params$bucket
+    # Clean trailing slashes
+    dataset_id <- sub("/$", "", dataset_id)
+    # Use last path component as short ID
+    short_id <- basename(dataset_id)
+    return(list(dataset_id = short_id, params = params, s3 = TRUE))
+  }
+
+  # Handle manifest URL: manifest?path=...
+  if (path_part == "manifest") {
+    return(list(dataset_id = NULL, params = params, manifest_path = params$path))
+  }
+
+  # Simple dataset_id format
+  list(dataset_id = path_part, params = params)
 }
 
 #' Guess file format from extension
