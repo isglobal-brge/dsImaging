@@ -5,9 +5,14 @@ var dsImaging = {
     "web": "https://github.com/isglobal-brge/dsImaging",
     "categories": [
       {
-        "name": "s3",
-        "title": "S3 / MinIO",
-        "description": "Imaging collections stored in S3-compatible object storage."
+        "name": "minio",
+        "title": "MinIO / Self-hosted",
+        "description": "Imaging collections stored in a self-hosted MinIO or S3-compatible instance."
+      },
+      {
+        "name": "aws",
+        "title": "Amazon Web Services",
+        "description": "Imaging collections stored in AWS S3."
       },
       {
         "name": "registry",
@@ -20,7 +25,7 @@ var dsImaging = {
         "name": "imaging-minio",
         "title": "Imaging Collection - MinIO / Self-hosted S3",
         "description": "An imaging dataset in a MinIO or self-hosted S3 instance. The collection must contain a manifest.yaml.",
-        "tags": ["s3"],
+        "tags": ["minio"],
         "parameters": {
           "$schema": "http://json-schema.org/schema#",
           "type": "array",
@@ -71,7 +76,7 @@ var dsImaging = {
         "name": "imaging-aws",
         "title": "Imaging Collection - AWS S3",
         "description": "An imaging dataset in Amazon S3.",
-        "tags": ["s3"],
+        "tags": ["aws"],
         "parameters": {
           "$schema": "http://json-schema.org/schema#",
           "type": "array",
