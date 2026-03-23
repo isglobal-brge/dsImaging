@@ -108,12 +108,6 @@ ImagingDatasetResourceClient <- R6::R6Class(
 .parse_imaging_url <- function(url) {
   body <- sub("^imaging\\+dataset://", "", url)
 
-  # Format: registry/{dataset_id}
-  if (grepl("^registry/", body)) {
-    dataset_id <- sub("^registry/", "", body)
-    return(list(dataset_id = dataset_id, params = list(), s3 = FALSE))
-  }
-
   # Format: host:port/bucket/collection[@region]
   # Check for @region suffix
   region_override <- ""

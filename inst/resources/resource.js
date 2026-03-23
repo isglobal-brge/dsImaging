@@ -14,11 +14,6 @@ var dsImaging = {
         "title": "Amazon Web Services",
         "description": "Imaging collections stored in AWS S3."
       },
-      {
-        "name": "registry",
-        "title": "Server Registry",
-        "description": "Datasets pre-configured in the server's dsImaging registry."
-      }
     ],
     "types": [
       {
@@ -146,29 +141,6 @@ var dsImaging = {
           "required": ["access_key", "secret_key"]
         }
       },
-      {
-        "name": "imaging-registry",
-        "title": "Imaging Dataset - Server Registry",
-        "description": "Reference a dataset pre-configured in the server's dsImaging registry.",
-        "tags": ["registry"],
-        "parameters": {
-          "$schema": "http://json-schema.org/schema#",
-          "type": "array",
-          "items": [
-            {
-              "key": "dataset_id",
-              "type": "string",
-              "title": "Dataset ID",
-              "description": "Registered identifier (e.g. radiology.chest_xray.v3)"
-            }
-          ],
-          "required": ["dataset_id"]
-        },
-        "credentials": {
-          "$schema": "http://json-schema.org/schema#",
-          "description": "No credentials required: the dataset is configured server-side."
-        }
-      }
     ]
   },
   asResource: function(type, name, params, credentials) {
@@ -192,17 +164,9 @@ var dsImaging = {
       };
     };
 
-    var toRegistryResource = function(name, params, credentials) {
-      return {
-        name: name,
-        url: "imaging+dataset://registry/" + params.dataset_id
-      };
-    };
-
     var factories = {
       "imaging-minio": toMinioResource,
-      "imaging-aws": toAwsResource,
-      "imaging-registry": toRegistryResource
+      "imaging-aws": toAwsResource
     };
 
     if (factories[type]) {
