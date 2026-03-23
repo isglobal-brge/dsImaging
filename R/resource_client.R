@@ -107,46 +107,50 @@ ImagingDatasetResourceClient <- R6::R6Class(
 #' @keywords internal
 .parse_imaging_url <- function(url) {
   body <- sub("^imaging\\+dataset://", "", url)
-  parts <- strsplit(body, "\\?", fixed = FALSE)[[1]]
-  path_part <- utils::URLdecode(parts[1])
 
-  # Parse query params
-  params <- list()
-  if (length(parts) > 1) {
-    query <- parts[2]
-    pairs <- strsplit(strsplit(query, "&")[[1]], "=")
-    for (pair in pairs) {
-      if (length(pair) == 2)
-        params[[pair[1]]] <- utils::URLdecode(pair[2])
-    }
+  # Format: registry/{dataset_id}
+  if (grepl("^registry/", body)) {
+    dataset_id <- sub("^registry/", "", body)
+    return(list(dataset_id = dataset_id, params = list(), s3 = FALSE))
   }
 
-  # Handle S3 URL format: s3/{bucket}/{collection_path}
-  if (grepl("^s3/", path_part)) {
-    s3_body <- sub("^s3/", "", path_part)
-    slash_pos <- regexpr("/", s3_body)
-    if (slash_pos > 0) {
-      params$bucket <- substr(s3_body, 1, slash_pos - 1)
-      params$prefix <- substr(s3_body, slash_pos + 1, nchar(s3_body))
+  # Format: host:port/bucket/collection (S3/MinIO)
+  # Split on first slash -> host, rest -> bucket/collection
+  first_slash <- regexpr("/", body)
+  if (first_slash > 0) {
+    host <- substr(body, 1, first_slash - 1)
+    rest <- substr(body, first_slash + 1, nchar(body))
+    second_slash <- regexpr("/", rest)
+    if (second_slash > 0) {
+      bucket <- substr(rest, 1, second_slash - 1)
+      collection <- substr(rest, second_slash + 1, nchar(rest))
     } else {
-      params$bucket <- s3_body
+      bucket <- rest
+      collection <- ""
     }
-    # Use collection path as dataset_id
-    dataset_id <- params$prefix %||% params$bucket
-    # Clean trailing slashes
-    dataset_id <- sub("/$", "", dataset_id)
-    # Use last path component as short ID
-    short_id <- basename(dataset_id)
-    return(list(dataset_id = short_id, params = params, s3 = TRUE))
+
+    # Auto-detect endpoint scheme: IPs and known local hosts -> http, else https
+    scheme <- if (grepl("^(\\d|localhost|minio|host\\.docker)", host)) "http" else "https"
+    endpoint <- paste0(scheme, "://", host)
+
+    # Auto-detect region: local/self-hosted -> empty, cloud -> us-east-1
+    region <- if (grepl("^(\\d|localhost|minio|\\.local|host\\.docker)", host)) "" else "us-east-1"
+
+    dataset_id <- basename(sub("/$", "", collection))
+    return(list(
+      dataset_id = dataset_id,
+      params = list(
+        endpoint = endpoint,
+        bucket = bucket,
+        prefix = collection,
+        region = region
+      ),
+      s3 = TRUE
+    ))
   }
 
-  # Handle manifest URL: manifest?path=...
-  if (path_part == "manifest") {
-    return(list(dataset_id = NULL, params = params, manifest_path = params$path))
-  }
-
-  # Simple dataset_id format
-  list(dataset_id = path_part, params = params)
+  # Fallback: bare dataset_id (legacy)
+  list(dataset_id = body, params = list(), s3 = FALSE)
 }
 
 #' Guess file format from extension
