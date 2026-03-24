@@ -124,6 +124,62 @@ imagingGetManifestDS <- function(handle_symbol) {
   NULL
 }
 
+#' Get an imaging handle by symbol
+#' @keywords internal
+.get_imaging_handle <- function(symbol) {
+  for (sym in c(symbol, "img", "img_res", "imaging", "res")) {
+    key <- paste0("imaging_", sym)
+    handle <- get0(key, envir = .dsimaging_env)
+    if (!is.null(handle)) return(handle)
+  }
+  NULL
+}
+
+#' List available label sets for an imaging dataset
+#'
+#' DataSHIELD AGGREGATE method. Returns the label sets defined in the
+#' dataset's manifest. The researcher can then choose which label set
+#' to use for training.
+#'
+#' @param handle_symbol Character; the imaging handle symbol.
+#' @return A data.frame with columns: name, type, columns, description.
+#' @export
+imagingLabelsDS <- function(handle_symbol) {
+  handle <- .get_imaging_handle(handle_symbol)
+  if (is.null(handle) || is.null(handle$manifest))
+    return(data.frame(name = character(0), type = character(0),
+                      columns = character(0), description = character(0),
+                      stringsAsFactors = FALSE))
+
+  labels <- handle$manifest$labels
+  if (is.null(labels) || length(labels) == 0)
+    return(data.frame(name = character(0), type = character(0),
+                      columns = character(0), description = character(0),
+                      stringsAsFactors = FALSE))
+
+  rows <- lapply(labels, function(lbl) {
+    data.frame(
+      name        = lbl$name %||% NA_character_,
+      type        = lbl$type %||% NA_character_,
+      columns     = paste(lbl$columns %||% character(0), collapse = ", "),
+      description = lbl$description %||% NA_character_,
+      stringsAsFactors = FALSE
+    )
+  })
+  do.call(rbind, rows)
+}
+
+#' Get a specific label set's URI from the manifest
+#' @keywords internal
+.get_label_uri <- function(manifest, label_set_name) {
+  labels <- manifest$labels
+  if (is.null(labels)) return(NULL)
+  for (lbl in labels) {
+    if (identical(lbl$name, label_set_name)) return(lbl$uri)
+  }
+  NULL
+}
+
 #' Count samples from a manifest's metadata file
 #' @keywords internal
 .count_samples_from_manifest <- function(manifest, backend = NULL) {

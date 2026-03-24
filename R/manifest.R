@@ -54,6 +54,18 @@ validate_manifest <- function(manifest, source = "manifest") {
     }
   }
 
+  # Labels (optional)
+  if (!is.null(manifest$labels)) {
+    for (lbl in manifest$labels) {
+      if (is.null(lbl$name))
+        stop("Label set in ", source, " missing 'name'.", call. = FALSE)
+      if (is.null(lbl$uri))
+        stop("Label set '", lbl$name, "' in ", source, " missing 'uri'.",
+             call. = FALSE)
+      .validate_uri(lbl$uri, paste0("labels.", lbl$name, ".uri"))
+    }
+  }
+
   invisible(TRUE)
 }
 
