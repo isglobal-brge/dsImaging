@@ -180,6 +180,75 @@ imagingLabelsDS <- function(handle_symbol) {
   NULL
 }
 
+#' List available mask assets for an imaging dataset
+#'
+#' DataSHIELD AGGREGATE method. Queries the asset catalog for segmentation
+#' mask assets that are ACTIVE, complete, and linked to the connected dataset.
+#'
+#' @param handle_symbol Character; the imaging handle symbol.
+#' @return A data.frame with columns: alias, provider, status, n_valid, created_at.
+#' @export
+imagingMasksDS <- function(handle_symbol) {
+  handle <- .get_imaging_handle(handle_symbol)
+  if (is.null(handle))
+    return(data.frame(alias = character(0), provider = character(0),
+                      status = character(0), n_valid = integer(0),
+                      created_at = character(0), stringsAsFactors = FALSE))
+
+  dataset_id <- handle$dataset_id
+
+  # Query asset_generations for segmentation generations on this dataset
+  tryCatch({
+    db <- .get_asset_db()
+    if (is.null(db)) return(.empty_masks_df())
+
+    gens <- DBI::dbGetQuery(db, paste0(
+      "SELECT generation_id, kind, state, spec_json, expected_n, completed_n, ",
+      "created_at FROM asset_generations WHERE dataset_id = ? AND ",
+      "kind LIKE '%seg%' AND state = 'PUBLISHED'"),
+      params = list(dataset_id))
+
+    if (nrow(gens) == 0) return(.empty_masks_df())
+
+    rows <- lapply(seq_len(nrow(gens)), function(i) {
+      spec <- tryCatch(
+        jsonlite::fromJSON(gens$spec_json[i], simplifyVector = FALSE),
+        error = function(e) list())
+      provider <- spec$processor %||% spec$segmenter %||% "unknown"
+      n_valid <- as.integer(gens$completed_n[i] %||% 0)
+      data.frame(
+        alias       = gens$generation_id[i],
+        provider    = provider,
+        status      = if (n_valid >= gens$expected_n[i]) "ready" else "partial",
+        n_valid     = n_valid,
+        created_at  = as.character(gens$created_at[i]),
+        stringsAsFactors = FALSE
+      )
+    })
+    result <- do.call(rbind, rows)
+    # Only return ready (non-partial) by default
+    result[result$status == "ready", , drop = FALSE]
+  }, error = function(e) .empty_masks_df())
+}
+
+#' @keywords internal
+.empty_masks_df <- function() {
+  data.frame(alias = character(0), provider = character(0),
+             status = character(0), n_valid = integer(0),
+             created_at = character(0), stringsAsFactors = FALSE)
+}
+
+#' Get the asset database connection
+#' @keywords internal
+.get_asset_db <- function() {
+  db_path <- getOption("dsimaging.asset_db",
+    file.path(getOption("dsimaging.data_dir", "/var/lib/dsimaging"),
+              "imaging_assets.sqlite"))
+  if (!file.exists(db_path)) return(NULL)
+  tryCatch(DBI::dbConnect(RSQLite::SQLite(), db_path),
+           error = function(e) NULL)
+}
+
 #' Count samples from a manifest's metadata file
 #' @keywords internal
 .count_samples_from_manifest <- function(manifest, backend = NULL) {
