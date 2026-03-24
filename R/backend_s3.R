@@ -124,6 +124,8 @@
   # IP addresses, localhost, .local -> self-hosted, no region prefix
   if (grepl("^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$", host) ||
       grepl("^localhost$", host, ignore.case = TRUE) ||
+      grepl("^minio", host, ignore.case = TRUE) ||
+      grepl("^host\\.docker", host, ignore.case = TRUE) ||
       grepl("\\.local$", host, ignore.case = TRUE))
     return("")
   "us-east-1"

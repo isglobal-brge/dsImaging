@@ -12,7 +12,10 @@
 #' @return An imaging handle object (assigned server-side).
 #' @export
 imagingInitDS <- function(resource_symbol) {
-  obj <- get(resource_symbol, envir = parent.frame())
+  # resource_symbol is a STRING (e.g. "img_res"), not the object itself.
+  # The ResourceClient is already in the session env from datashield.assign.resource().
+  # Pattern matches dsOMOP: omopInitDS("res") -> get("res", parent.frame())
+  obj <- get(resource_symbol, envir = parent.frame(), inherits = FALSE)
 
   # Path 1: Raw Resource from datashield.assign.resource()
   # In Opal, this is a resourcer::Resource object (not yet resolved)
@@ -68,8 +71,8 @@ imagingInitDS <- function(resource_symbol) {
 #'
 #' @keywords internal
 .make_imaging_handle <- function(desc, symbol, backend = NULL) {
-  # Count samples from metadata file to enforce nfilter
-  n_samples <- .count_samples_from_manifest(desc$manifest)
+  # Count samples from metadata (may need S3 download)
+  n_samples <- .count_samples_from_manifest(desc$manifest, backend)
   .assert_min_samples(n_samples, context = paste0("dataset '", desc$dataset_id, "'"))
 
   handle <- list(
@@ -123,19 +126,35 @@ imagingGetManifestDS <- function(handle_symbol) {
 
 #' Count samples from a manifest's metadata file
 #' @keywords internal
-.count_samples_from_manifest <- function(manifest) {
+.count_samples_from_manifest <- function(manifest, backend = NULL) {
   meta <- manifest$metadata
-  if (is.null(meta) || is.null(meta$file) || !file.exists(meta$file)) {
-    return(NA_integer_)
+  if (is.null(meta)) return(NA_integer_)
+
+  # Try local file first
+  local_file <- meta$file
+  if (!is.null(local_file) && file.exists(local_file)) {
+    fmt <- meta$format %||% .guess_format(local_file)
+    if (identical(fmt, "parquet") && requireNamespace("arrow", quietly = TRUE))
+      return(nrow(arrow::read_parquet(local_file, as_data_frame = FALSE)))
+    if (identical(fmt, "csv"))
+      return(length(readLines(local_file)) - 1L)
   }
 
-  fmt <- meta$format %||% .guess_format(meta$file)
-  if (identical(fmt, "parquet") && requireNamespace("arrow", quietly = TRUE)) {
-    return(nrow(arrow::read_parquet(meta$file, as_data_frame = FALSE)))
+  # Try S3 URI via backend
+  uri <- meta$uri
+  if (!is.null(uri) && grepl("^s3://", uri) && !is.null(backend)) {
+    tmp <- tempfile(fileext = if (grepl("\\.parquet$", uri)) ".parquet" else ".csv")
+    on.exit(unlink(tmp), add = TRUE)
+    tryCatch({
+      backend_get_file(backend, uri, tmp)
+      fmt <- meta$format %||% .guess_format(tmp)
+      if (identical(fmt, "parquet") && requireNamespace("arrow", quietly = TRUE))
+        return(nrow(arrow::read_parquet(tmp, as_data_frame = FALSE)))
+      if (identical(fmt, "csv"))
+        return(length(readLines(tmp)) - 1L)
+    }, error = function(e) NULL)
   }
-  if (identical(fmt, "csv")) {
-    return(length(readLines(meta$file)) - 1L)
-  }
+
   NA_integer_
 }
 

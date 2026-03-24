@@ -40,8 +40,18 @@ ImagingDatasetResourceClient <- R6::R6Class(
       endpoint <- params$endpoint %||% ""
       bucket <- params$bucket %||% "imaging-data"
       prefix <- params$prefix %||% paste0("datasets/", dataset_id)
-      ak <- resource$identity %||% ""
-      sk <- resource$secret %||% ""
+      # Opal may pass identity=NULL due to credential mapping quirks.
+      # Try multiple field names for robustness.
+      ak <- ""
+      for (field in c("identity", "identifier", "access_key", "username")) {
+        v <- resource[[field]]
+        if (!is.null(v) && nzchar(v)) { ak <- v; break }
+      }
+      sk <- ""
+      for (field in c("secret", "password", "secret_key")) {
+        v <- resource[[field]]
+        if (!is.null(v) && nzchar(v)) { sk <- v; break }
+      }
 
       if (nzchar(ak) && nzchar(sk)) {
         cred_ref <- paste0("resource_", dataset_id)
