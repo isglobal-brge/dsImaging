@@ -210,17 +210,18 @@ imagingMasksDS <- function(handle_symbol) {
 
     if (nrow(gens) == 0) return(.empty_masks_df())
 
+    profile <- getOption("dsflower.privacy_profile", "clinical_default")
     rows <- lapply(seq_len(nrow(gens)), function(i) {
       spec <- tryCatch(
         jsonlite::fromJSON(gens$spec_json[i], simplifyVector = FALSE),
         error = function(e) list())
       provider <- spec$processor %||% spec$segmenter %||% "unknown"
-      n_valid <- as.integer(gens$completed_n[i] %||% 0)
+      n_valid_raw <- as.integer(gens$completed_n[i] %||% 0)
       data.frame(
         alias       = gens$generation_id[i],
         provider    = provider,
-        status      = if (n_valid >= gens$expected_n[i]) "ready" else "partial",
-        n_valid     = n_valid,
+        status      = if (n_valid_raw >= gens$expected_n[i]) "ready" else "partial",
+        n_valid     = safe_metadata_count(n_valid_raw, profile = profile),
         created_at  = as.character(gens$created_at[i]),
         stringsAsFactors = FALSE
       )
@@ -250,6 +251,11 @@ imagingMasksDS <- function(handle_symbol) {
 }
 
 #' Count samples from a manifest's metadata file
+#'
+#' Returns the raw count for internal use (e.g. disclosure assertions).
+#' Call \code{safe_metadata_count()} on the result before returning to
+#' the client.
+#'
 #' @keywords internal
 .count_samples_from_manifest <- function(manifest, backend = NULL) {
   meta <- manifest$metadata
@@ -418,8 +424,8 @@ imagingMetadataDS <- function(handle_symbol) {
     }
   }
 
-  # Disclosure control: suppress exact n_samples if below nfilter
-  safe_n <- .safe_count(n_samples)
+  # Disclosure control: apply profile-aware count sanitization
+  safe_n <- safe_metadata_count(n_samples)
 
   list(
     dataset_id    = manifest$dataset_id,
