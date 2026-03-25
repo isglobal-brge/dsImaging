@@ -87,8 +87,63 @@ ensure_python_venv() {
   return 1
 }
 
+# ---------------------------------------------------------------------------
+# Ensure R dependencies (resourcer, aws.s3) are installed
+# ---------------------------------------------------------------------------
+
+ensure_r_deps() {
+  log_info "Checking R dependencies..."
+  # Determine Rock's library path
+  ROCK_LIB="/var/lib/rock/R/library"
+  if [ ! -d "${ROCK_LIB}" ]; then
+    ROCK_LIB=""  # not on Rock, skip
+    return 0
+  fi
+
+  for pkg in resourcer aws.s3; do
+    Rscript --vanilla -e "
+      if (!requireNamespace('${pkg}', quietly=TRUE, lib.loc='${ROCK_LIB}')) {
+        cat('Installing ${pkg}...\n')
+        install.packages('${pkg}', lib='${ROCK_LIB}', repos='https://cloud.r-project.org', quiet=TRUE)
+      }
+    " 2>/dev/null
+  done
+  log_info "R dependencies OK"
+}
+
+# ---------------------------------------------------------------------------
+# Register dsImaging resolver in Rserve profile (Rock only)
+# ---------------------------------------------------------------------------
+
+ensure_rprofile() {
+  RPROFILE="/srv/conf/Rprofile.R"
+  if [ ! -f "${RPROFILE}" ]; then return 0; fi
+  if grep -q "dsImaging" "${RPROFILE}" 2>/dev/null; then return 0; fi
+
+  log_info "Adding dsImaging resolver to Rserve profile..."
+  cat >> "${RPROFILE}" << 'REOF'
+
+# dsImaging: register resource resolver for imaging+dataset:// URLs
+tryCatch(loadNamespace("dsImaging"), error = function(e) NULL)
+REOF
+  log_info "Rserve profile updated"
+}
+
+# ---------------------------------------------------------------------------
+# Fix Python permissions (Rock runs as non-root 'rock' user)
+# ---------------------------------------------------------------------------
+
+fix_python_permissions() {
+  if [ -d "/root/.local/share/uv/python" ]; then
+    chmod -R 755 /root/.local/share/uv/python/ 2>/dev/null
+    chmod 755 /root /root/.local /root/.local/share /root/.local/share/uv 2>/dev/null
+    log_info "Python permissions fixed for rock user"
+  fi
+}
+
 # --- Run ---
 
+ensure_r_deps
 ensure_uv || {
   log_warn "uv not available. dsImaging will try to provision Python at runtime."
   exit 0
@@ -99,5 +154,7 @@ ensure_python_venv || {
   exit 0
 }
 
-log_info "dsImaging Python setup complete."
+fix_python_permissions
+ensure_rprofile
+log_info "dsImaging setup complete."
 exit 0
