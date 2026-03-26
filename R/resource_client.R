@@ -114,11 +114,40 @@ ImagingDatasetResourceClient <- R6::R6Class(
 )
 
 #' Parse an imaging+dataset:// URL
+#'
+#' Supports two formats:
+#'   Clean: imaging+dataset://host:port/bucket/datasets/collection[@region]
+#'   Legacy: imaging+dataset://dataset_id?endpoint=...&bucket=...&prefix=...
 #' @keywords internal
 .parse_imaging_url <- function(url) {
   body <- sub("^imaging\\+dataset://", "", url)
 
-  # Format: host:port/bucket/collection[@region]
+  # Legacy query-param format: dataset_id?endpoint=...&bucket=...&prefix=...
+  qmark <- regexpr("\\?", body)
+  if (qmark > 0) {
+    dataset_id <- substr(body, 1, qmark - 1)
+    query_str <- substr(body, qmark + 1, nchar(body))
+    # URL-decode the query string then parse params
+    query_str <- utils::URLdecode(query_str)
+    pairs <- strsplit(query_str, "&")[[1]]
+    params <- list()
+    for (p in pairs) {
+      kv <- strsplit(p, "=", fixed = TRUE)[[1]]
+      if (length(kv) == 2) params[[kv[1]]] <- kv[2]
+    }
+    return(list(
+      dataset_id = dataset_id,
+      params = list(
+        endpoint = params$endpoint %||% "",
+        bucket = params$bucket %||% "imaging-data",
+        prefix = params$prefix %||% paste0("datasets/", dataset_id),
+        region = params$region %||% ""
+      ),
+      s3 = TRUE
+    ))
+  }
+
+  # Clean format: host:port/bucket/collection[@region]
   # Check for @region suffix
   region_override <- ""
   at_pos <- regexpr("@[a-z]", body)
@@ -166,7 +195,7 @@ ImagingDatasetResourceClient <- R6::R6Class(
     ))
   }
 
-  # Fallback: bare dataset_id (legacy)
+  # Fallback: bare dataset_id (registry lookup)
   list(dataset_id = body, params = list(), s3 = FALSE)
 }
 
