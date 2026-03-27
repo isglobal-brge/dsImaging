@@ -18,6 +18,8 @@ Encoding: UTF-8
 Depends:
     R (>= 4.1.0)
 Imports:
+    arrow,
+    aws.s3 (>= 0.3.21),
     DBI,
     RSQLite,
     digest,
@@ -28,8 +30,6 @@ Imports:
     R6
 Suggests:
     dsFlower,
-    arrow,
-    aws.s3 (>= 0.3.21),
     testthat (>= 3.0.0),
     withr
 AggregateMethods:

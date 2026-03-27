@@ -100,7 +100,7 @@ ensure_r_deps() {
     return 0
   fi
 
-  for pkg in resourcer aws.s3; do
+  for pkg in DBI RSQLite digest yaml jsonlite resourcer R6 aws.s3 arrow; do
     Rscript --vanilla -e "
       if (!requireNamespace('${pkg}', quietly=TRUE, lib.loc='${ROCK_LIB}')) {
         cat('Installing ${pkg}...\n')
