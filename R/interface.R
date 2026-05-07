@@ -407,25 +407,49 @@ imagingMetadataDS <- function(handle_symbol) {
   manifest <- handle$manifest
 
   meta <- manifest$metadata
-  n_samples <- NULL
+  n_samples <- NA_integer_
   columns <- NULL
 
-  if (!is.null(meta$file) && file.exists(meta$file)) {
-    fmt <- meta$format %||% .guess_format(meta$file)
-    if (identical(fmt, "parquet") && requireNamespace("arrow", quietly = TRUE)) {
-      schema <- arrow::read_parquet(meta$file, as_data_frame = FALSE)
-      n_samples <- nrow(schema)
-      columns <- names(schema)
-    } else if (identical(fmt, "csv")) {
-      hdr <- utils::read.csv(meta$file, nrows = 1)
-      columns <- names(hdr)
-      # Count rows without loading all data
-      n_samples <- length(readLines(meta$file)) - 1L
+  if (!is.null(meta)) {
+    # Local file path takes precedence
+    if (!is.null(meta$file) && file.exists(meta$file)) {
+      fmt <- meta$format %||% .guess_format(meta$file)
+      if (identical(fmt, "parquet") && requireNamespace("arrow", quietly = TRUE)) {
+        schema <- arrow::read_parquet(meta$file, as_data_frame = FALSE)
+        n_samples <- nrow(schema)
+        columns <- names(schema)
+      } else if (identical(fmt, "csv")) {
+        hdr <- utils::read.csv(meta$file, nrows = 1)
+        columns <- names(hdr)
+        n_samples <- length(readLines(meta$file)) - 1L
+      }
+    } else if (!is.null(meta$uri) && grepl("^s3://", meta$uri) &&
+               !is.null(handle$backend)) {
+      # S3 metadata: fetch via backend and inspect
+      tryCatch({
+        fmt <- meta$format %||% .guess_format(meta$uri)
+        tmp <- tempfile(fileext = paste0(".", fmt))
+        on.exit(unlink(tmp), add = TRUE)
+        backend_get_file(handle$backend, meta$uri, tmp)
+        if (identical(fmt, "parquet") && requireNamespace("arrow", quietly = TRUE)) {
+          schema <- arrow::read_parquet(tmp, as_data_frame = FALSE)
+          n_samples <- nrow(schema)
+          columns <- names(schema)
+        } else if (identical(fmt, "csv")) {
+          hdr <- utils::read.csv(tmp, nrows = 1)
+          columns <- names(hdr)
+          n_samples <- length(readLines(tmp)) - 1L
+        }
+      }, error = function(e) NULL)
     }
   }
 
+  # Fall back to handle$n_samples if we still don't know
+  if (is.na(n_samples) && !is.null(handle$n_samples))
+    n_samples <- as.integer(handle$n_samples)
+
   # Disclosure control: apply profile-aware count sanitization
-  safe_n <- safe_metadata_count(n_samples)
+  safe_n <- if (is.na(n_samples)) NA_integer_ else safe_metadata_count(n_samples)
 
   list(
     dataset_id    = manifest$dataset_id,
@@ -438,7 +462,7 @@ imagingMetadataDS <- function(handle_symbol) {
     id_col        = meta$id_col %||% NULL,
     label_col     = meta$label_col %||% NULL,
     n_assets      = length(manifest$assets %||% list()),
-    n_samples_sufficient = !is.na(safe_n)
+    n_samples_sufficient = !is.na(safe_n) && safe_n > 0L
   )
 }
 
