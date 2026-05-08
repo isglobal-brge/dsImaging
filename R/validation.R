@@ -70,10 +70,11 @@ validate_asset_roots <- function(manifest) {
 
   for (name in names(assets)) {
     asset <- assets[[name]]
-    asset_type <- asset$type %||% "unknown"
+    asset_type <- asset$kind %||% asset$type %||% "unknown"
+    uri <- asset$uri %||% asset$root %||% asset$file %||% asset$manifest
 
     if (asset_type %in% dir_types) {
-      root <- asset$root
+      root <- uri
       exists <- !is.null(root) && dir.exists(root)
       results[[name]] <- list(
         type   = asset_type,
@@ -82,7 +83,7 @@ validate_asset_roots <- function(manifest) {
         valid  = exists
       )
     } else if (asset_type %in% file_types) {
-      fpath <- asset$file
+      fpath <- uri
       exists <- !is.null(fpath) && file.exists(fpath)
       results[[name]] <- list(
         type   = asset_type,
@@ -91,7 +92,7 @@ validate_asset_roots <- function(manifest) {
         valid  = exists
       )
     } else if (identical(asset_type, "multimodal_ref")) {
-      mpath <- asset$manifest
+      mpath <- uri
       exists <- !is.null(mpath) && file.exists(mpath)
       results[[name]] <- list(
         type   = asset_type,
@@ -103,7 +104,7 @@ validate_asset_roots <- function(manifest) {
   }
 
   # Metadata file
-  meta_file <- manifest$metadata$file
+  meta_file <- manifest$metadata$uri %||% manifest$metadata$file
   meta_exists <- !is.null(meta_file) && file.exists(meta_file)
   results[["_metadata"]] <- list(
     type   = "metadata",

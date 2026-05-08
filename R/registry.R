@@ -32,6 +32,10 @@
 
   # Remove schema_version from entries
   raw$schema_version <- NULL
+  for (id in names(raw)) {
+    if (is.null(raw[[id]]$manifest_uri) && !is.null(raw[[id]]$manifest))
+      raw[[id]]$manifest_uri <- raw[[id]]$manifest
+  }
   raw
 }
 
@@ -46,9 +50,12 @@ resolve_dataset <- function(dataset_id) {
   entry <- registry[[dataset_id]]
   if (is.null(entry)) {
     available <- names(registry)
-    stop("Dataset '", dataset_id, "' not found. Available: ",
+    stop("Dataset '", dataset_id, "' not found in registry. Available: ",
          paste(available, collapse = ", "), call. = FALSE)
   }
+  if (isFALSE(entry$enabled))
+    stop("Dataset '", dataset_id, "' is disabled in registry.",
+         call. = FALSE)
 
   backend_type <- entry$backend %||% "file"
   backend <- storage_backend(backend_type, config = list(
@@ -83,5 +90,6 @@ resolve_dataset <- function(dataset_id) {
 #' @return Named list of dataset entries.
 #' @keywords internal
 list_datasets <- function() {
-  .load_registry()
+  registry <- .load_registry()
+  registry[vapply(registry, function(entry) !isFALSE(entry$enabled), logical(1))]
 }

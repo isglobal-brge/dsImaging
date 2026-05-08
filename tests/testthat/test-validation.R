@@ -33,15 +33,15 @@ test_that(".validate_safe_path accepts valid absolute paths", {
 
 test_that("validate_imaging_dataset returns structured results", {
   manifest <- list(
-    version = 1,
+    schema_version = 1,
     dataset_id = "test.dataset.v1",
     modality = "image",
     metadata = list(
-      file = "/nonexistent/path/samples.csv",
+      uri = "/nonexistent/path/samples.csv",
       format = "csv"
     ),
     assets = list(
-      images = list(type = "image_root", root = "/nonexistent/images")
+      images = list(kind = "image_root", uri = "/nonexistent/images")
     )
   )
 
@@ -60,14 +60,14 @@ test_that("validate_imaging_dataset passes for structurally valid manifest", {
   writeLines("sample_id,label,image_relpath\n1,0,img1.png", tmp_meta)
 
   manifest <- list(
-    version = 1,
+    schema_version = 1,
     dataset_id = "test.dataset.v1",
     modality = "image",
     task_types = list("classification"),
     compatible_templates = list("pytorch_resnet18"),
-    metadata = list(file = tmp_meta, format = "csv"),
+    metadata = list(uri = tmp_meta, format = "csv"),
     assets = list(
-      images = list(type = "image_root", root = tmp_images,
+      images = list(kind = "image_root", uri = tmp_images,
                      path_col = "image_relpath")
     )
   )

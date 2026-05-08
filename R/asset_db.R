@@ -254,7 +254,8 @@
                              storage_backend = "file",
                              tags = NULL,
                              manifest = NULL,
-                             description = NULL) {
+                             description = NULL,
+                             .in_transaction = FALSE) {
   # Check for duplicate by derivation_hash
   if (!is.null(derivation_hash)) {
     existing <- DBI::dbGetQuery(db,
@@ -274,7 +275,8 @@
   mani_json <- if (!is.null(manifest))
     as.character(jsonlite::toJSON(manifest, auto_unbox = TRUE)) else NA_character_
 
-  DBI::dbExecute(db, "BEGIN IMMEDIATE")
+  if (!isTRUE(.in_transaction))
+    DBI::dbExecute(db, "BEGIN IMMEDIATE")
   tryCatch({
     DBI::dbExecute(db,
       "INSERT INTO assets (asset_id, dataset_id, kind, modality, status,
@@ -298,9 +300,11 @@
         params = list(asset_id, parent_id))
     }
 
-    DBI::dbExecute(db, "COMMIT")
+    if (!isTRUE(.in_transaction))
+      DBI::dbExecute(db, "COMMIT")
   }, error = function(e) {
-    tryCatch(DBI::dbExecute(db, "ROLLBACK"), error = function(e2) NULL)
+    if (!isTRUE(.in_transaction))
+      tryCatch(DBI::dbExecute(db, "ROLLBACK"), error = function(e2) NULL)
     stop(e)
   })
 
@@ -625,7 +629,8 @@ complete_item_atomic <- function(generation_id, sample_id, status,
         provenance = register_asset$provenance,
         created_by_job = register_asset$created_by_job,
         description = register_asset$description %||%
-          paste0("Per-image result: ", sample_id))
+          paste0("Per-image result: ", sample_id),
+        .in_transaction = TRUE)
     }
 
     DBI::dbExecute(db, "COMMIT")

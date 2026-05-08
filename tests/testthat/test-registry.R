@@ -13,7 +13,8 @@ test_that("resolve_dataset errors for missing dataset", {
   on.exit(unlink(tmp))
 
   yaml::write_yaml(list(
-    "existing.dataset" = list(manifest = "/tmp/m.yml", enabled = TRUE)
+    schema_version = 1,
+    "existing.dataset" = list(manifest_uri = "/tmp/m.yml", enabled = TRUE)
   ), tmp)
 
   withr::with_options(list(dsimaging.registry_path = tmp), {
@@ -26,7 +27,8 @@ test_that("resolve_dataset errors for disabled dataset", {
   on.exit(unlink(tmp))
 
   yaml::write_yaml(list(
-    "test.dataset" = list(manifest = "/tmp/m.yml", enabled = FALSE)
+    schema_version = 1,
+    "test.dataset" = list(manifest_uri = "/tmp/m.yml", enabled = FALSE)
   ), tmp)
 
   withr::with_options(list(dsimaging.registry_path = tmp), {
@@ -39,8 +41,9 @@ test_that("list_datasets returns only enabled entries", {
   on.exit(unlink(tmp))
 
   yaml::write_yaml(list(
-    "ds.enabled" = list(manifest = "/tmp/a.yml", enabled = TRUE),
-    "ds.disabled" = list(manifest = "/tmp/b.yml", enabled = FALSE)
+    schema_version = 1,
+    "ds.enabled" = list(manifest_uri = "/tmp/a.yml", enabled = TRUE),
+    "ds.disabled" = list(manifest_uri = "/tmp/b.yml", enabled = FALSE)
   ), tmp)
 
   withr::with_options(list(dsimaging.registry_path = tmp), {

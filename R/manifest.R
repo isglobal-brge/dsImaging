@@ -12,7 +12,7 @@
 #' @param backend A dsimaging_backend object (from resolve_dataset).
 #' @return A validated manifest list.
 #' @keywords internal
-parse_manifest <- function(manifest_uri, backend) {
+parse_manifest <- function(manifest_uri, backend = storage_backend("file")) {
   manifest <- backend_fetch_manifest(backend, manifest_uri)
   validate_manifest(manifest, manifest_uri)
   manifest
@@ -100,5 +100,8 @@ validate_asset <- function(asset, name, source = "manifest") {
   }
   if (!startsWith(uri, "/"))
     stop(label, ": must be absolute path or s3:// URI: ", uri, call. = FALSE)
+  parts <- strsplit(uri, "/", fixed = TRUE)[[1]]
+  if (".." %in% parts)
+    stop(label, ": path traversal is not allowed: ", uri, call. = FALSE)
   invisible(TRUE)
 }
