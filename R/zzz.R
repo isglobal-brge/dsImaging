@@ -8,6 +8,7 @@
 #' @keywords internal
 .onLoad <- function(libname, pkgname) {
   resourcer::registerResourceResolver(ImagingDatasetResourceResolver$new())
+  tryCatch(.asset_db_prepare_path(), error = function(e) NULL)
 }
 
 #' @keywords internal

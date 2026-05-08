@@ -10,6 +10,7 @@
 #' @keywords internal
 .asset_db_connect <- function() {
   db_path <- .asset_db_path()
+  .asset_db_prepare_path(db_path)
   first_time <- !file.exists(db_path)
 
   db <- DBI::dbConnect(RSQLite::SQLite(), db_path)
@@ -18,6 +19,7 @@
   DBI::dbExecute(db, "PRAGMA foreign_keys=ON")
 
   if (first_time) .asset_db_create_schema(db)
+  .asset_db_repair_permissions(db_path)
   db
 }
 
@@ -36,6 +38,44 @@
 
   # Final fallback
   "/var/lib/dsimaging/imaging_assets.sqlite"
+}
+
+#' Prepare asset DB directory and repair common permission drift.
+#' @keywords internal
+.asset_db_prepare_path <- function(db_path = .asset_db_path()) {
+  db_dir <- dirname(db_path)
+  if (!dir.exists(db_dir)) {
+    tryCatch(
+      dir.create(db_dir, recursive = TRUE, showWarnings = FALSE, mode = "0777"),
+      error = function(e) NULL)
+  }
+  if (dir.exists(db_dir)) {
+    tryCatch(Sys.chmod(db_dir, "0777", use_umask = FALSE),
+             error = function(e) NULL)
+  }
+
+  .asset_db_repair_permissions(db_path)
+
+  if (!dir.exists(db_dir) || file.access(db_dir, mode = 2) != 0)
+    stop("dsImaging asset DB directory is not writable: ", db_dir,
+         call. = FALSE)
+  if (file.exists(db_path) && file.access(db_path, mode = 2) != 0)
+    stop("dsImaging asset DB is not writable: ", db_path,
+         ". Reinstall dsImaging or run chmod 666 on the SQLite files.",
+         call. = FALSE)
+
+  invisible(db_path)
+}
+
+#' Repair permissions on the SQLite database sidecar files.
+#' @keywords internal
+.asset_db_repair_permissions <- function(db_path = .asset_db_path()) {
+  db_files <- c(db_path, paste0(db_path, "-wal"), paste0(db_path, "-shm"))
+  db_files <- db_files[file.exists(db_files)]
+  if (length(db_files) > 0)
+    tryCatch(Sys.chmod(db_files, "0666", use_umask = FALSE),
+             error = function(e) NULL)
+  invisible(db_files)
 }
 
 #' Create the asset catalog schema

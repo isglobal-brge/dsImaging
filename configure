@@ -13,6 +13,21 @@ LOG_PREFIX="[dsImaging configure]"
 log_info() { echo "${LOG_PREFIX} $*"; }
 log_warn() { echo "${LOG_PREFIX} WARNING: $*" >&2; }
 
+ensure_state_dir() {
+  log_info "Preparing state directory: ${VENV_ROOT}"
+  mkdir -p "${VENV_ROOT}" 2>/dev/null || {
+    log_warn "Cannot create ${VENV_ROOT}. Will retry at runtime."
+    return 1
+  }
+  chmod 777 "${VENV_ROOT}" 2>/dev/null || true
+  for _f in "${VENV_ROOT}/imaging_assets.sqlite" \
+            "${VENV_ROOT}/imaging_assets.sqlite-wal" \
+            "${VENV_ROOT}/imaging_assets.sqlite-shm"; do
+    if [ -e "${_f}" ]; then chmod 666 "${_f}" 2>/dev/null || true; fi
+  done
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # Bootstrap: ensure uv + Python
 # ---------------------------------------------------------------------------
@@ -143,6 +158,7 @@ fix_python_permissions() {
 
 # --- Run ---
 
+ensure_state_dir
 ensure_r_deps
 ensure_uv || {
   log_warn "uv not available. dsImaging will try to provision Python at runtime."
