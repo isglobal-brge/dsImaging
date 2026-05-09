@@ -108,11 +108,15 @@ Implemented server-side capabilities:
 | Capability | Status |
 | --- | --- |
 | Existing mask asset use | Implemented. |
+| DICOM series conversion | Implemented as a dsJobs runner with dcm2niix/SimpleITK paths. |
+| Image preprocessing | Implemented for resampling, normalization, clamping, and float32 casting. |
 | Lightweight CT lung threshold segmenter | Implemented for demos/QC. |
 | LungMask runner | Registered; requires Python deps/model cache. |
 | TotalSegmentator runner | Registered; supports optional GPU/container execution. |
 | nnU-Net v2 runner | Registered; requires admin-registered model pack. |
 | MONAI bundle runner | Registered; requires admin-installed bundle. |
+| Mask/ROI operations | Implemented for label selection, binary/set operations, morphology, connected components, and resampling. |
+| QC metrics | Implemented for image geometry/intensity and optional mask volumes/intensity. |
 | PyRadiomics extraction | Registered with bundled IBSI/demo/Aerts profiles. |
 | Per-image collection orchestration | Implemented with scan, first-batch submit, server drip-feed, status, publish. |
 | Derived feature table publication | Implemented as `feature_table` assets. |
@@ -127,9 +131,9 @@ families under one package namespace:
 | --- | --- |
 | Dataset ingestion | File/S3 manifests, `dsimaging-store` manifest consumption, content hash indexes, sample manifests, labels, multi-root datasets. |
 | Format support | NIfTI, NRRD, MHA/MHD, DICOM series, DICOM SEG, RTSTRUCT/RTDOSE/RTPLAN references, PNG/JPEG masks for 2D workflows. |
-| Preprocessing | DICOM-to-NIfTI conversion hooks, orientation canonicalization, resampling, cropping, intensity normalization, bias correction, registration, anonymized QC metadata. |
-| Segmentation | Existing masks, CT threshold, LungMask, TotalSegmentator, nnU-Net, MONAI bundles, external/custom runner registration, multi-label masks, ROI selection, mask post-processing. |
-| Mask/ROI operations | Label selection, binary extraction, union/intersection, connected components, morphology, resampling-to-image, contour/RTSTRUCT conversion, coverage checks. |
+| Preprocessing | DICOM-to-NIfTI conversion hooks, resampling, intensity normalization, clamping/windowing, float32 casting; orientation canonicalization, cropping, bias correction, and registration are extension runner targets. |
+| Segmentation | Existing masks, CT threshold, LungMask, TotalSegmentator, nnU-Net, MONAI bundles, multi-label masks, ROI selection, and mask post-processing; external/custom runner registration is handled through dsJobs runner YAML. |
+| Mask/ROI operations | Label selection, binary extraction, union/intersection/difference, connected components, morphology, resampling-to-image; contour/RTSTRUCT conversion remains an extension runner target. |
 | Radiomics | IBSI PyRadiomics profiles, lightweight demo profiles, Aerts signature profile, force-2D, voxel maps, selected features, profile registry, reproducibility metadata. |
 | Derived analytics | Feature tables, embeddings, image-level QC metrics, mask volumes/shape summaries, thumbnails/overlays as non-disclosive QC artifacts where allowed. |
 | Provenance | Content hashes, model/profile signatures, runner/container versions, lineage graph, deduplication, immutable assets and aliases. |
@@ -156,6 +160,10 @@ Canonical client functions:
 - `ds.imaging.install_model()`
 - `ds.imaging.models()`
 - `ds.imaging.segmenter.*()`
+- `ds.imaging.dicom.convert()`
+- `ds.imaging.preprocess()`
+- `ds.imaging.mask.operation()`
+- `ds.imaging.qc.metrics()`
 - `ds.imaging.segment()`
 - `ds.imaging.radiomics.profile.*()`
 - `ds.imaging.radiomics.extract()`
@@ -217,8 +225,7 @@ hardening items are:
 
 - Replace remaining radiomics-oriented internal names where doing so does not
   reduce compatibility.
-- Add DICOM series and RTSTRUCT/SEG ingestion helpers.
-- Add mask operation runners and QA metrics.
+- Add RTSTRUCT/SEG contour conversion helpers.
 - Add explicit runner version capture in published provenance.
 - Add end-to-end tests that generate a tiny synthetic NIfTI, run CT-threshold
   segmentation, run PyRadiomics extraction, and publish a feature-table asset.

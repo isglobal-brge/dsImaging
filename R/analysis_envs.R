@@ -1,8 +1,8 @@
 # Module: Python Environment Provisioning
 
 .RADIOMICS_PYTHON_DEPS <- list(
-  radiomics = c("pyradiomics>=3.0.0", "SimpleITK>=2.0.0", "pandas>=1.3.0",
-                "numpy>=1.21.0", "pyyaml>=5.0"),
+  radiomics = c("pyradiomics>=3.0.1,<3.1", "SimpleITK>=2.0.0", "pandas>=1.3.0",
+                "numpy>=1.23.0,<2", "pyyaml>=5.0", "pyarrow>=10.0.0"),
   seg_lungmask = c("lungmask>=0.2.0", "torch>=2.0.0",
                    "SimpleITK>=2.0.0", "nibabel>=4.0.0"),
   seg_totalseg = c("TotalSegmentator>=2.0.0", "torch>=2.0.0",
@@ -58,7 +58,8 @@ list_imaging_analysis_envs <- function() {
   expected <- c("pyradiomics_extract", "lungmask_infer",
                 "ct_lung_threshold",
                 "totalsegmentator_infer", "nnunetv2_predict",
-                "monai_bundle_infer")
+                "monai_bundle_infer", "dicom_convert",
+                "image_preprocess", "mask_ops", "imaging_qc_metrics")
   data.frame(
     runner = expected,
     path = file.path(runners_dir, paste0(expected, ".yml")),

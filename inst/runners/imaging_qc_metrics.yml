@@ -1,0 +1,9 @@
+name: imaging_qc_metrics
+plane: artifact
+resource_class: cpu
+framework: radiomics
+command: python
+args_template: ["-m", "dsimaging_qc_metrics", "--input", "{input_dir}", "--output", "{output_dir}"]
+timeout_secs: 1800
+allowed_params: [dataset_id, image_asset, image_root, mask_asset, mask_root]
+python_deps: ["SimpleITK>=2.0.0", "numpy>=1.23.0,<2"]

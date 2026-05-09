@@ -16,8 +16,15 @@ external/HPC backend configured in `dsJobs`.
 - Asset catalog for masks, radiomics tables, embeddings, QC outputs, and other
   derived imaging artifacts.
 - Immutable derivation hashes, aliases, lineage, and per-image generation state.
+- DICOM series conversion to NIfTI with `dcm2niix` or SimpleITK fallback.
+- Image preprocessing runners for resampling, normalization, clamping/windowing,
+  and float32 casting.
 - Segmentation runners: existing masks, CT lung threshold, LungMask,
   TotalSegmentator, nnU-Net v2, and MONAI bundles.
+- Mask/ROI operations: label selection, binarization, union, intersection,
+  difference, morphology, connected components, and mask-to-image resampling.
+- QC metrics for images and masks, including size, spacing, intensity summaries,
+  and mask volumes.
 - PyRadiomics extraction with bundled IBSI, demo, force-2D, voxel-map, and Aerts
   signature profiles.
 - Per-image collection orchestration with server-side drip-feed and safe

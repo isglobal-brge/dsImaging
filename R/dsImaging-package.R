@@ -2,8 +2,9 @@
 #'
 #' dsImaging is the server-side clinical imaging package for DataSHIELD. It
 #' manages imaging dataset descriptors, storage backends, manifests, content
-#' hashes, derived asset catalogs, segmentation masks, radiomics feature tables,
-#' and clinical imaging analysis workflows.
+#' hashes, derived asset catalogs, DICOM conversion outputs, preprocessed
+#' images, segmentation masks, mask/ROI operation outputs, QC metrics,
+#' radiomics feature tables, and clinical imaging analysis workflows.
 #'
 #' Heavy computation is declared by dsImaging as allowlisted runners and is
 #' executed by dsJobs, the durable HPC-capable runtime. This keeps clinical image

@@ -1,0 +1,9 @@
+name: dicom_convert
+plane: artifact
+resource_class: cpu
+framework: radiomics
+command: python
+args_template: ["-m", "dsimaging_dicom_convert", "--input", "{input_dir}", "--output", "{output_dir}"]
+timeout_secs: 3600
+allowed_params: [dataset_id, dicom_asset, dicom_root, image_asset, converter]
+python_deps: ["SimpleITK>=2.0.0"]

@@ -234,6 +234,129 @@
     "--output", "{output_dir}",
     "--bundle", "{bundle_name}"
   )))
+
+  # DICOM series conversion. Uses dcm2niix when available and SimpleITK as
+  # a portable fallback.
+  .write_runner_yaml(runners_dir, "dicom_convert", .with_container(list(
+    name = "dicom_convert",
+    plane = "artifact",
+    resource_class = "cpu",
+    resources = list(
+      memory_mb = 2048L,
+      cpu_slots = 1L,
+      max_concurrent = 2L,
+      concurrency_group = "imaging_io"
+    ),
+    command = "python",
+    python = file.path(venv_root, "radiomics", "bin", "python"),
+    args_template = list(
+      file.path(scripts_dir, "dsimaging_dicom_convert.py"),
+      "--input", "{input_dir}",
+      "--output", "{output_dir}"
+    ),
+    timeout_secs = 3600L,
+    env = rosetta_mkl_env,
+    allowed_params = c("dataset_id", "dicom_asset", "dicom_root",
+                        "image_asset", "converter")
+  ), "dicom_convert", list(
+    "-m", "dsimaging_dicom_convert",
+    "--input", "{input_dir}",
+    "--output", "{output_dir}"
+  )))
+
+  # General image preprocessing: resampling, normalization, intensity clamping,
+  # and numeric pixel type conversion. Reuses the SimpleITK radiomics env.
+  .write_runner_yaml(runners_dir, "image_preprocess", .with_container(list(
+    name = "image_preprocess",
+    plane = "artifact",
+    resource_class = "cpu",
+    resources = list(
+      memory_mb = 4096L,
+      cpu_slots = 2L,
+      max_concurrent = 2L,
+      concurrency_group = "imaging_cpu"
+    ),
+    command = "python",
+    python = file.path(venv_root, "radiomics", "bin", "python"),
+    args_template = list(
+      file.path(scripts_dir, "dsimaging_preprocess.py"),
+      "--input", "{input_dir}",
+      "--output", "{output_dir}",
+      "--operations", "{operations}"
+    ),
+    timeout_secs = 3600L,
+    env = rosetta_mkl_env,
+    allowed_params = c("dataset_id", "image_asset", "image_root",
+                        "operations", "spacing", "resampled_spacing",
+                        "lower", "upper")
+  ), "image_preprocess", list(
+    "-m", "dsimaging_preprocess",
+    "--input", "{input_dir}",
+    "--output", "{output_dir}",
+    "--operations", "{operations}"
+  )))
+
+  # Mask/ROI operations: label selection, binarization, morphology,
+  # connected-components, pairwise set ops, and image-space resampling.
+  .write_runner_yaml(runners_dir, "mask_ops", .with_container(list(
+    name = "mask_ops",
+    plane = "artifact",
+    resource_class = "cpu",
+    resources = list(
+      memory_mb = 2048L,
+      cpu_slots = 1L,
+      max_concurrent = 4L,
+      concurrency_group = "mask_ops"
+    ),
+    command = "python",
+    python = file.path(venv_root, "radiomics", "bin", "python"),
+    args_template = list(
+      file.path(scripts_dir, "dsimaging_mask_ops.py"),
+      "--input", "{input_dir}",
+      "--output", "{output_dir}",
+      "--operation", "{operation}"
+    ),
+    timeout_secs = 1800L,
+    env = rosetta_mkl_env,
+    allowed_params = c("dataset_id", "mask_asset", "mask", "mask_b_asset",
+                        "mask_b", "reference_asset", "reference_image",
+                        "operation", "threshold", "threshold_b", "label",
+                        "labels", "mode", "radius", "min_voxels",
+                        "max_components")
+  ), "mask_ops", list(
+    "-m", "dsimaging_mask_ops",
+    "--input", "{input_dir}",
+    "--output", "{output_dir}",
+    "--operation", "{operation}"
+  )))
+
+  # QC metrics. The output table stays server-side until published as an asset.
+  .write_runner_yaml(runners_dir, "imaging_qc_metrics", .with_container(list(
+    name = "imaging_qc_metrics",
+    plane = "artifact",
+    resource_class = "cpu",
+    resources = list(
+      memory_mb = 2048L,
+      cpu_slots = 1L,
+      max_concurrent = 4L,
+      concurrency_group = "imaging_qc"
+    ),
+    command = "python",
+    python = file.path(venv_root, "radiomics", "bin", "python"),
+    args_template = list(
+      file.path(scripts_dir, "dsimaging_qc_metrics.py"),
+      "--input", "{input_dir}",
+      "--output", "{output_dir}"
+    ),
+    timeout_secs = 1800L,
+    env = rosetta_mkl_env,
+    allowed_params = c("dataset_id", "image_asset", "image_root",
+                        "mask_asset", "mask_root")
+  ), "imaging_qc_metrics", list(
+    "-m", "dsimaging_qc_metrics",
+    "--input", "{input_dir}",
+    "--output", "{output_dir}"
+  )))
 }
 
 #' Add optional container metadata to a runner configuration.

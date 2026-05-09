@@ -1,0 +1,9 @@
+name: mask_ops
+plane: artifact
+resource_class: cpu
+framework: radiomics
+command: python
+args_template: ["-m", "dsimaging_mask_ops", "--input", "{input_dir}", "--output", "{output_dir}", "--operation", "{operation}"]
+timeout_secs: 1800
+allowed_params: [dataset_id, mask_asset, mask, mask_b_asset, mask_b, reference_asset, reference_image, operation, threshold, threshold_b, label, labels, mode, radius, min_voxels, max_components]
+python_deps: ["SimpleITK>=2.0.0", "numpy>=1.23.0,<2"]
