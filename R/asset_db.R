@@ -588,12 +588,12 @@ record_item_status <- function(generation_id, sample_id, status,
 #'
 #' Performs ALL of these in a single SQLite transaction:
 #'   1. Update asset_items row (status, artifact, error)
-#'   2. Increment the appropriate generation counter (completed_n or failed_n)
+#'   2. Recompute generation counters from asset_items
 #'   3. Optionally register a per-image asset (for cross-user dedup)
 #'
-#' This eliminates the race condition where a crash between separate
-#' record_item_status + increment_generation_counter calls leaves
-#' counters out of sync.
+#' This eliminates the race condition where a crash or duplicate job completion
+#' leaves counters out of sync. A completed item is never downgraded by a later
+#' duplicate failure; a retry success can replace a previous failure.
 #'
 #' @param generation_id Character.
 #' @param sample_id Character.
@@ -611,7 +611,6 @@ complete_item_atomic <- function(generation_id, sample_id, status,
   if (!status %in% c("completed", "failed", "skipped"))
     stop("status must be 'completed', 'failed', or 'skipped'", call. = FALSE)
 
-  counter_field <- if (status == "completed") "completed_n" else "failed_n"
   now <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
 
   db <- .asset_db_connect()
@@ -619,6 +618,21 @@ complete_item_atomic <- function(generation_id, sample_id, status,
 
   DBI::dbExecute(db, "BEGIN IMMEDIATE")
   tryCatch({
+    current <- DBI::dbGetQuery(db,
+      "SELECT status, artifact_relpath, checksum, error
+       FROM asset_items
+       WHERE generation_id = ? AND sample_id = ?",
+      params = list(generation_id, sample_id))
+
+    if (nrow(current) > 0 && identical(current$status[1], "completed") &&
+        !identical(status, "completed")) {
+      status <- "completed"
+      artifact_relpath <- current$artifact_relpath[1]
+      checksum <- current$checksum[1]
+      error <- current$error[1]
+      register_asset <- NULL
+    }
+
     # 1. Update item status
     DBI::dbExecute(db,
       "INSERT OR REPLACE INTO asset_items (generation_id, sample_id, status,
@@ -629,13 +643,9 @@ complete_item_atomic <- function(generation_id, sample_id, status,
         checksum %||% NA_character_,
         error %||% NA_character_))
 
-    # 2. Atomically increment counter
-    if (status != "skipped") {
-      DBI::dbExecute(db,
-        paste0("UPDATE asset_generations SET ", counter_field, " = ", counter_field,
-               " + 1, updated_at = ? WHERE generation_id = ?"),
-        params = list(now, generation_id))
-    }
+    # 2. Recompute counters from durable item state. This is slightly more
+    # work than an increment but makes retries/crash recovery idempotent.
+    .recompute_generation_counters(db, generation_id, now = now)
 
     # 3. Optionally register per-image asset (cross-user dedup)
     if (!is.null(register_asset)) {
@@ -657,6 +667,39 @@ complete_item_atomic <- function(generation_id, sample_id, status,
     stop(e)
   })
 
+  invisible(TRUE)
+}
+
+#' Reconcile generation counters from item rows
+#'
+#' @param generation_id Character; generation identifier.
+#' @return Invisible TRUE.
+#' @export
+reconcile_generation_counters <- function(generation_id) {
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+  .recompute_generation_counters(db, generation_id)
+  invisible(TRUE)
+}
+
+#' @keywords internal
+.recompute_generation_counters <- function(db, generation_id,
+                                           now = format(Sys.time(),
+                                             "%Y-%m-%dT%H:%M:%OS3Z",
+                                             tz = "UTC")) {
+  DBI::dbExecute(db,
+    "UPDATE asset_generations
+     SET completed_n = (
+           SELECT COUNT(*) FROM asset_items
+           WHERE generation_id = ? AND status = 'completed'
+         ),
+         failed_n = (
+           SELECT COUNT(*) FROM asset_items
+           WHERE generation_id = ? AND status = 'failed'
+         ),
+         updated_at = ?
+     WHERE generation_id = ?",
+    params = list(generation_id, generation_id, now, generation_id))
   invisible(TRUE)
 }
 

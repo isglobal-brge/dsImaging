@@ -452,6 +452,7 @@ imagingRadiomicsCollectionStatusDS <- function(generation_id_enc) {
 
   # Sync dsJobs terminal states -> mark asset_items as completed/failed.
   .sync_generation_jobs(generation_id)
+  reconcile_generation_counters(generation_id)
 
   gen <- get_generation(generation_id)
   if (is.null(gen))
@@ -525,6 +526,7 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
 
   # Final sync to catch any late completions/failures
   .sync_generation_jobs(generation_id)
+  reconcile_generation_counters(generation_id)
 
   gen <- get_generation(generation_id)
   if (is.null(gen))

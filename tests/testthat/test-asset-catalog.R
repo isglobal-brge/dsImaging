@@ -161,3 +161,60 @@ test_that("compute_derivation_hash is deterministic", {
   )
   expect_false(h1 == h3)
 })
+
+test_that("item completion is idempotent and completion wins late failures", {
+  tmp <- tempfile(fileext = ".sqlite")
+  on.exit(unlink(tmp))
+  withr::local_options(list(dsimaging.asset_db = tmp))
+
+  gen <- claim_or_reuse_generation("ds.v1", "feature_table", "hash_items",
+    owner_id = "tester", expected_n = 2L)$generation_id
+  record_item_status(gen, "sample_a", "running")
+  record_item_status(gen, "sample_b", "running")
+
+  complete_item_atomic(gen, "sample_a", "completed",
+    artifact_relpath = "/out/a.parquet")
+  complete_item_atomic(gen, "sample_a", "completed",
+    artifact_relpath = "/out/a.parquet")
+  complete_item_atomic(gen, "sample_a", "failed", error = "late duplicate")
+
+  g1 <- get_generation(gen)
+  expect_equal(g1$completed_n, 1L)
+  expect_equal(g1$failed_n, 0L)
+  items1 <- get_generation_items(gen)
+  expect_equal(items1$status[items1$sample_id == "sample_a"], "completed")
+
+  complete_item_atomic(gen, "sample_b", "failed", error = "first attempt")
+  g2 <- get_generation(gen)
+  expect_equal(g2$completed_n, 1L)
+  expect_equal(g2$failed_n, 1L)
+
+  complete_item_atomic(gen, "sample_b", "completed",
+    artifact_relpath = "/out/b.parquet")
+  g3 <- get_generation(gen)
+  expect_equal(g3$completed_n, 2L)
+  expect_equal(g3$failed_n, 0L)
+})
+
+test_that("generation counter reconciliation repairs stale counts", {
+  tmp <- tempfile(fileext = ".sqlite")
+  on.exit(unlink(tmp))
+  withr::local_options(list(dsimaging.asset_db = tmp))
+
+  gen <- claim_or_reuse_generation("ds.v1", "feature_table", "hash_reconcile",
+    owner_id = "tester", expected_n = 2L)$generation_id
+  complete_item_atomic(gen, "sample_a", "completed",
+    artifact_relpath = "/out/a.parquet")
+
+  db <- dsImaging:::.asset_db_connect()
+  DBI::dbExecute(db,
+    "UPDATE asset_generations SET completed_n = 99, failed_n = 12
+     WHERE generation_id = ?",
+    params = list(gen))
+  dsImaging:::.asset_db_close(db)
+
+  reconcile_generation_counters(gen)
+  repaired <- get_generation(gen)
+  expect_equal(repaired$completed_n, 1L)
+  expect_equal(repaired$failed_n, 0L)
+})
