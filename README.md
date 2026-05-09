@@ -87,11 +87,20 @@ Generation recovery is automatic during status/publish checks. If a process dies
 after claiming samples but before submitting their dsJobs, claimed items older
 than `dsimaging.analysis.claim_timeout_secs` are returned to `pending` and the
 drip-feed loop can submit them again. Destructive generation cancellation is
-admin-only and reuses `dsjobs.admin_key`.
+admin-only and reuses `dsjobs.admin_key` or `DSJOBS_ADMIN_KEY`.
 
 Bundled Python runners and radiomics profiles are copied to content-addressed
 runtime directories under `dsimaging.analysis.home`, so queued jobs are not
 broken by package upgrades or temporary `00LOCK` install paths.
+
+Collection publication also enforces the generation profile's
+`selected_features`, so stale or wider per-image artifacts cannot silently
+expand the published schema at one site. Completed artifacts that no longer
+match the selected feature contract are requeued automatically during
+status/recovery/publish checks, and per-image deduplication only reuses stored
+assets whose artifact path still exists and satisfies that same contract.
+Running items without any active dsJob are also returned to `pending`, so a
+worker crash or package reinstall cannot leave a generation permanently stuck.
 
 ## Server Methods
 

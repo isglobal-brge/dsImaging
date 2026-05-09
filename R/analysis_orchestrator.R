@@ -304,13 +304,15 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
       )
     )
 
-    # Check if this exact image+params was already done (cross-user)
-    existing <- find_asset_by_hash(dataset_id, spec_hash)
+    # Check if this exact image+params was already done (cross-user). Reuse
+    # only if the stored artifact path still exists and matches this profile.
+    existing <- .existing_per_image_asset(dataset_id, spec_hash,
+      selected_features = profile$selected_features)
 
     if (!is.null(existing)) {
       complete_item_atomic(generation_id, sid, "completed",
-        artifact_relpath = existing)
-      submitted[[sid]] <- list(status = "reused", asset_id = existing)
+        artifact_relpath = existing$path)
+      submitted[[sid]] <- list(status = "reused", asset_id = existing$asset_id)
       next
     }
 
@@ -453,7 +455,9 @@ imagingRadiomicsCollectionStatusDS <- function(generation_id_enc) {
 
   # Sync dsJobs terminal states -> mark asset_items as completed/failed.
   .sync_generation_jobs(generation_id)
+  .requeue_orphan_running_items(generation_id)
   requeue_stale_claimed_items(generation_id)
+  .requeue_invalid_completed_items(generation_id)
   reconcile_generation_counters(generation_id)
 
   gen <- get_generation(generation_id)
@@ -517,7 +521,9 @@ imagingRadiomicsCollectionStatusDS <- function(generation_id_enc) {
 imagingRadiomicsRecoverCollectionDS <- function(generation_id_enc) {
   generation_id <- .dsr_decode(generation_id_enc)
   .sync_generation_jobs(generation_id)
+  .requeue_orphan_running_items(generation_id)
   requeue_stale_claimed_items(generation_id)
+  .requeue_invalid_completed_items(generation_id)
   reconcile_generation_counters(generation_id)
 
   gen <- get_generation(generation_id)
@@ -535,7 +541,8 @@ imagingRadiomicsRecoverCollectionDS <- function(generation_id_enc) {
 
 #' Cancel a Radiomics Collection Generation
 #'
-#' DataSHIELD aggregate method. Admin-only; protected by `dsjobs.admin_key`.
+#' DataSHIELD aggregate method. Admin-only; protected by `dsjobs.admin_key` or
+#' `DSJOBS_ADMIN_KEY`.
 #' Cancels dsJobs belonging to the generation and marks unfinished items as
 #' skipped, without exposing sample identifiers to the client.
 #'
@@ -561,6 +568,17 @@ imagingRadiomicsCancelCollectionDS <- function(generation_id_enc,
     stop("Generation not found: ", generation_id, call. = FALSE)
   if (gen$state %in% c("ACTIVE"))
     stop("Cannot cancel an already published generation.", call. = FALSE)
+
+  expected_admin_key <- .dsj_option_safe("admin_key")
+  had_admin_option <- "dsjobs.admin_key" %in% names(options())
+  previous_admin_key <- getOption("dsjobs.admin_key", NULL)
+  if (!had_admin_option && !is.null(expected_admin_key) &&
+      nzchar(expected_admin_key)) {
+    options(dsjobs.admin_key = expected_admin_key)
+    on.exit(options(dsjobs.admin_key = NULL), add = TRUE)
+  } else if (had_admin_option) {
+    on.exit(options(dsjobs.admin_key = previous_admin_key), add = TRUE)
+  }
 
   cancelled <- dsJobs::cancel_jobs_by_tag(
     paste0("%", generation_id, "%"),
@@ -605,7 +623,9 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
 
   # Final sync to catch any late completions/failures
   .sync_generation_jobs(generation_id)
+  .requeue_orphan_running_items(generation_id)
   requeue_stale_claimed_items(generation_id)
+  requeued_invalid <- .requeue_invalid_completed_items(generation_id)
   reconcile_generation_counters(generation_id)
 
   gen <- get_generation(generation_id)
@@ -613,6 +633,11 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
     stop("Generation not found: ", generation_id, call. = FALSE)
   if (gen$state %in% c("CANCELLED"))
     stop("Generation was cancelled and cannot be published.", call. = FALSE)
+  if (requeued_invalid > 0) {
+    stop(requeued_invalid, " completed item artifact(s) were incompatible ",
+      "with the generation profile and have been requeued. Wait for recovery ",
+      "to finish before publishing.", call. = FALSE)
+  }
 
   items <- get_generation_items(generation_id)
   completed <- items[items$status == "completed", ]
@@ -649,7 +674,9 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
     paste0("collection_", generation_id))
   dir.create(output_root, recursive = TRUE, showWarnings = FALSE)
 
-  feature_table <- .write_collection_feature_table(completed, output_root)
+  selected_features <- .generation_selected_features(gen)
+  feature_table <- .write_collection_feature_table(completed, output_root,
+    selected_features = selected_features)
 
   # Write collection manifest
   manifest <- list(
@@ -659,6 +686,7 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
     completed = n_completed,
     failed = n_failed,
     feature_table = feature_table,
+    selected_features = as.list(selected_features),
     # failed_samples stripped -- individual sample IDs are disclosive
     item_artifacts = as.list(
       stats::setNames(completed$artifact_relpath, completed$sample_id))
@@ -707,11 +735,20 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
 
 #' Combine per-image radiomics outputs into one collection feature table
 #' @keywords internal
-.write_collection_feature_table <- function(completed, output_root) {
+.write_collection_feature_table <- function(completed, output_root,
+                                            selected_features = character(0)) {
   if (nrow(completed) == 0) return(NULL)
   if (!requireNamespace("arrow", quietly = TRUE))
     stop("arrow package required to publish radiomics feature tables.",
          call. = FALSE)
+  selected_features <- as.character(unlist(selected_features,
+    use.names = FALSE))
+  selected_features <- selected_features[nzchar(selected_features)]
+  required_cols <- if (length(selected_features) > 0) {
+    c("sample_id", selected_features)
+  } else {
+    character(0)
+  }
 
   rows <- lapply(seq_len(nrow(completed)), function(i) {
     path <- completed$artifact_relpath[i]
@@ -726,10 +763,23 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
     }
     if (!"sample_id" %in% names(df))
       df$sample_id <- completed$sample_id[i]
+    if (length(required_cols) > 0) {
+      missing <- setdiff(required_cols, names(df))
+      if (length(missing) > 0) {
+        stop("Radiomics artifact for sample '", completed$sample_id[i],
+          "' is missing selected feature(s): ",
+          paste(missing, collapse = ", "), call. = FALSE)
+      }
+      df <- df[, required_cols, drop = FALSE]
+    }
     df
   })
 
-  all_cols <- unique(unlist(lapply(rows, names), use.names = FALSE))
+  all_cols <- if (length(required_cols) > 0) {
+    required_cols
+  } else {
+    unique(unlist(lapply(rows, names), use.names = FALSE))
+  }
   rows <- lapply(rows, function(df) {
     missing <- setdiff(all_cols, names(df))
     for (nm in missing) df[[nm]] <- NA
@@ -739,6 +789,137 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
   out <- file.path(output_root, "radiomics_features.parquet")
   arrow::write_parquet(features, out)
   out
+}
+
+#' Selected radiomics features configured for a generation
+#' @keywords internal
+.generation_selected_features <- function(gen) {
+  spec_json <- gen$spec_json %||% NULL
+  if (is.null(spec_json) || !nzchar(spec_json)) return(character(0))
+  spec <- tryCatch(
+    jsonlite::fromJSON(spec_json, simplifyVector = FALSE),
+    error = function(e) list())
+  selected <- spec$profile$selected_features %||% spec$selected_features
+  if (is.null(selected)) return(character(0))
+  selected <- as.character(unlist(selected, use.names = FALSE))
+  selected[nzchar(selected)]
+}
+
+#' Requeue completed items whose artifacts no longer match the generation spec
+#' @keywords internal
+.requeue_invalid_completed_items <- function(generation_id) {
+  gen <- get_generation(generation_id)
+  if (is.null(gen)) return(0L)
+  selected_features <- .generation_selected_features(gen)
+  if (length(selected_features) == 0) return(0L)
+  if (!requireNamespace("arrow", quietly = TRUE))
+    stop("arrow package required to validate radiomics feature artifacts.",
+      call. = FALSE)
+
+  completed <- get_generation_items(generation_id, status = "completed")
+  if (nrow(completed) == 0) return(0L)
+
+  required_cols <- c("sample_id", selected_features)
+  requeued <- 0L
+  for (i in seq_len(nrow(completed))) {
+    path <- completed$artifact_relpath[i]
+    reason <- NULL
+    if (is.na(path) || !nzchar(path) || !file.exists(path)) {
+      reason <- "completed artifact is missing"
+    } else {
+      missing <- .missing_artifact_features(path, required_cols)
+      if (length(missing) > 0) {
+        reason <- paste0("completed artifact missing selected feature(s): ",
+          paste(missing, collapse = ", "))
+      }
+    }
+    if (!is.null(reason)) {
+      record_item_status(generation_id, completed$sample_id[i], "pending",
+        error = reason)
+      requeued <- requeued + 1L
+    }
+  }
+
+  if (requeued > 0) {
+    update_generation(generation_id, state = "RUNNING",
+      error = paste(requeued, "completed artifact(s) requeued for recovery"))
+    reconcile_generation_counters(generation_id)
+  }
+  requeued
+}
+
+#' Requeue running items that no longer have an active dsJob
+#' @keywords internal
+.requeue_orphan_running_items <- function(generation_id) {
+  running <- get_generation_items(generation_id, status = "running")
+  if (nrow(running) == 0) return(0L)
+
+  active_jobs <- dsJobs::query_jobs_by_tag(paste0("%", generation_id, "%"),
+    states = c("PENDING", "RUNNING"))
+  active_sids <- character(0)
+  if (nrow(active_jobs) > 0) {
+    for (i in seq_len(nrow(active_jobs))) {
+      tags <- strsplit(active_jobs$tags[i], ",", fixed = TRUE)[[1]]
+      sid <- .sample_id_from_tags(tags, running$sample_id)
+      if (!is.null(sid)) active_sids <- c(active_sids, sid)
+    }
+  }
+
+  orphan <- setdiff(running$sample_id, unique(active_sids))
+  if (length(orphan) == 0) return(0L)
+
+  for (sid in orphan) {
+    record_item_status(generation_id, sid, "pending",
+      error = "running item had no active dsJob and was requeued")
+  }
+  update_generation(generation_id, state = "RUNNING",
+    error = paste(length(orphan), "orphan running item(s) requeued"))
+  reconcile_generation_counters(generation_id)
+  length(orphan)
+}
+
+#' Reusable per-image asset path if it still satisfies the current profile
+#' @keywords internal
+.existing_per_image_asset <- function(dataset_id, derivation_hash,
+                                      selected_features = character(0)) {
+  asset_id <- find_asset_by_hash(dataset_id, derivation_hash)
+  if (is.null(asset_id)) return(NULL)
+
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+  asset <- .asset_get(db, asset_id)
+  if (is.null(asset)) return(NULL)
+
+  path <- asset$path_or_root %||% ""
+  if (!nzchar(path) || !file.exists(path)) return(NULL)
+
+  required_cols <- c("sample_id", as.character(unlist(selected_features,
+    use.names = FALSE)))
+  required_cols <- required_cols[nzchar(required_cols)]
+  missing <- .missing_artifact_features(path, required_cols)
+  if (length(missing) > 0) return(NULL)
+
+  list(asset_id = asset_id, path = path)
+}
+
+#' Missing required columns in a radiomics artifact
+#' @keywords internal
+.missing_artifact_features <- function(path, required_cols) {
+  required_cols <- as.character(unlist(required_cols, use.names = FALSE))
+  required_cols <- required_cols[nzchar(required_cols)]
+  if (length(required_cols) == 0) return(character(0))
+  if (is.na(path) || !nzchar(path) || !file.exists(path)) return(required_cols)
+
+  cols <- tryCatch({
+    if (grepl("\\.parquet$", path, ignore.case = TRUE)) {
+      names(as.data.frame(arrow::read_parquet(path)))
+    } else if (grepl("\\.csv$", path, ignore.case = TRUE)) {
+      names(utils::read.csv(path, nrows = 1, stringsAsFactors = FALSE))
+    } else {
+      character(0)
+    }
+  }, error = function(e) character(0))
+  setdiff(required_cols, cols)
 }
 
 # ---------------------------------------------------------------------------
@@ -961,16 +1142,25 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
     states = c("FINISHED", "PUBLISHED"))
   if (nrow(done_jobs) == 0) return(invisible(NULL))
 
+  selected_features <- .generation_selected_features(get_generation(generation_id))
+  required_cols <- c("sample_id", selected_features)
+  synced_sids <- character(0)
+
   for (i in seq_len(nrow(done_jobs))) {
     tags <- strsplit(done_jobs$tags[i], ",", fixed = TRUE)[[1]]
     sid <- .sample_id_from_tags(tags, pending_items$sample_id)
     if (is.null(sid)) next
+    if (sid %in% synced_sids) next
 
     output_ref <- .radiomics_job_output_ref(done_jobs$job_id[i])
     if (is.null(output_ref) || !isTRUE(output_ref$exists)) {
       complete_item_atomic(generation_id, sid, "failed",
         error = "dsJobs job finished without a radiomics output")
       next
+    }
+    if (length(required_cols) > 0) {
+      missing <- .missing_artifact_features(output_ref$path, required_cols)
+      if (length(missing) > 0) next
     }
 
     dataset_id <- .dataset_id_from_tags(tags, generation_id, sid)
@@ -996,6 +1186,7 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
       artifact_relpath = output_ref$path,
       register_asset = register_asset
     )
+    synced_sids <- c(synced_sids, sid)
   }
   invisible(NULL)
 }

@@ -318,11 +318,13 @@
       )
     )
 
-    # Cross-user dedup
-    existing <- find_asset_by_hash(dataset_id, spec_hash)
+    # Cross-user dedup. Reuse only if the stored artifact path still exists
+    # and matches the current profile contract.
+    existing <- .existing_per_image_asset(dataset_id, spec_hash,
+      selected_features = profile$selected_features)
     if (!is.null(existing)) {
       complete_item_atomic(generation_id, sid, "completed",
-        artifact_relpath = existing)
+        artifact_relpath = existing$path)
       next
     }
 

@@ -85,6 +85,14 @@ imagingListModelsDS <- function() {
 #' Read dsjobs option safely (dsImaging doesn't import dsJobs)
 #' @keywords internal
 .dsj_option_safe <- function(name) {
-  getOption(paste0("dsjobs.", name),
-    getOption(paste0("default.dsjobs.", name), NULL))
+  value <- getOption(paste0("dsjobs.", name), NULL)
+  if (!is.null(value)) return(value)
+  value <- getOption(paste0("default.dsjobs.", name), NULL)
+  if (!is.null(value)) return(value)
+
+  env_name <- paste0("DSJOBS_", toupper(gsub("[^A-Za-z0-9]+", "_", name)))
+  env_value <- Sys.getenv(env_name, unset = NA_character_)
+  if (!is.na(env_value) && nzchar(env_value)) return(env_value)
+
+  NULL
 }

@@ -361,3 +361,153 @@ test_that("generation cancellation is admin-gated and cancels tagged jobs", {
   items <- get_generation_items(gen)
   expect_true(all(items$status == "skipped"))
 })
+
+test_that("generation cancellation accepts admin key from environment", {
+  asset_db <- tempfile(fileext = ".sqlite")
+  home <- tempfile("dsjobs-home")
+  dir.create(home, recursive = TRUE, showWarnings = FALSE)
+  on.exit(unlink(c(asset_db, home), recursive = TRUE))
+  withr::local_options(list(
+    dsimaging.asset_db = asset_db,
+    dsjobs.home = home,
+    dsjobs.admin_key = NULL,
+    default.dsjobs.admin_key = NULL
+  ))
+  withr::local_envvar(c(DSJOBS_ADMIN_KEY = "env-secret"))
+
+  gen <- claim_or_reuse_generation("lung", "radiomics_collection",
+    "hash_cancel_env", owner_id = "tester", expected_n = 1L)$generation_id
+  update_generation(gen, state = "RUNNING")
+  record_item_status(gen, "sample_a", "running")
+
+  db <- dsJobs:::.db_connect()
+  on.exit(dsJobs:::.db_close(db), add = TRUE)
+  spec <- list(
+    label = "dsImaging_image",
+    tags = c("per_image", "lung", "sample_a", gen),
+    visibility = "private",
+    steps = list(list(type = "emit", plane = "session",
+      output_name = "x", value = 1))
+  )
+  dsJobs:::.store_create_job(db, "job_sample_env", "tester", spec, 1L)
+  dsJobs:::.store_update_job(db, "job_sample_env", state = "RUNNING")
+
+  out <- imagingRadiomicsCancelCollectionDS(
+    dsImaging:::.dsr_encode(gen),
+    dsImaging:::.dsr_encode(list(.admin_key = "env-secret")),
+    dsImaging:::.dsr_encode("env cancel")
+  )
+
+  expect_equal(out$state, "CANCELLED")
+  expect_equal(dsJobs:::.store_get_job(db, "job_sample_env")$state,
+    "CANCELLED")
+})
+
+test_that("collection publish enforces generation selected features", {
+  skip_if_not_installed("arrow")
+  output_root <- tempfile("collection")
+  dir.create(output_root, recursive = TRUE)
+  on.exit(unlink(output_root, recursive = TRUE))
+
+  artifact_a <- tempfile(fileext = ".csv")
+  artifact_b <- tempfile(fileext = ".csv")
+  utils::write.csv(data.frame(sample_id = "sample_a", feature_a = 1,
+    feature_b = 2, extra_feature = 99), artifact_a, row.names = FALSE)
+  utils::write.csv(data.frame(sample_id = "sample_b", feature_a = 3,
+    feature_b = 4), artifact_b, row.names = FALSE)
+
+  completed <- data.frame(
+    sample_id = c("sample_a", "sample_b"),
+    artifact_relpath = c(artifact_a, artifact_b),
+    stringsAsFactors = FALSE
+  )
+
+  out <- dsImaging:::.write_collection_feature_table(completed, output_root,
+    selected_features = c("feature_a", "feature_b"))
+  features <- as.data.frame(arrow::read_parquet(out))
+
+  expect_equal(names(features), c("sample_id", "feature_a", "feature_b"))
+  expect_equal(features$feature_a, c(1, 3))
+  expect_false("extra_feature" %in% names(features))
+  expect_error(
+    dsImaging:::.write_collection_feature_table(completed, output_root,
+      selected_features = c("feature_a", "missing_feature")),
+    "missing selected feature"
+  )
+})
+
+test_that("invalid completed artifacts are requeued for recovery", {
+  skip_if_not_installed("arrow")
+  asset_db <- tempfile(fileext = ".sqlite")
+  on.exit(unlink(asset_db), add = TRUE)
+  withr::local_options(list(dsimaging.asset_db = asset_db))
+
+  good <- tempfile(fileext = ".csv")
+  bad <- tempfile(fileext = ".csv")
+  utils::write.csv(data.frame(sample_id = "sample_a", feature_a = 1,
+    feature_b = 2), good, row.names = FALSE)
+  utils::write.csv(data.frame(sample_id = "sample_b", feature_a = 3),
+    bad, row.names = FALSE)
+
+  spec <- list(profile = list(selected_features = c("feature_a",
+    "feature_b")))
+  gen <- claim_or_reuse_generation("lung", "radiomics_collection",
+    "hash_invalid_artifact", owner_id = "tester", expected_n = 2L,
+    spec = spec)$generation_id
+  record_item_status(gen, "sample_a", "completed", artifact_relpath = good)
+  record_item_status(gen, "sample_b", "completed", artifact_relpath = bad)
+  reconcile_generation_counters(gen)
+
+  expect_equal(dsImaging:::.requeue_invalid_completed_items(gen), 1L)
+  items <- get_generation_items(gen)
+  expect_equal(items$status[items$sample_id == "sample_a"], "completed")
+  expect_equal(items$status[items$sample_id == "sample_b"], "pending")
+  expect_equal(get_generation(gen)$completed_n, 1L)
+  expect_equal(get_generation(gen)$state, "RUNNING")
+})
+
+test_that("dedup ignores per-image assets that do not match selected features", {
+  skip_if_not_installed("arrow")
+  asset_db <- tempfile(fileext = ".sqlite")
+  on.exit(unlink(asset_db), add = TRUE)
+  withr::local_options(list(dsimaging.asset_db = asset_db))
+
+  good <- tempfile(fileext = ".csv")
+  bad <- tempfile(fileext = ".csv")
+  utils::write.csv(data.frame(sample_id = "sample_a", feature_a = 1,
+    feature_b = 2), good, row.names = FALSE)
+  utils::write.csv(data.frame(sample_id = "sample_b", feature_a = 3),
+    bad, row.names = FALSE)
+
+  db <- dsImaging:::.asset_db_connect()
+  on.exit(dsImaging:::.asset_db_close(db), add = TRUE)
+  bad_id <- dsImaging:::.asset_register(db, "lung", "per_image_result", bad,
+    derivation_hash = "hash_bad")
+  good_id <- dsImaging:::.asset_register(db, "lung", "per_image_result", good,
+    derivation_hash = "hash_good")
+
+  expect_null(dsImaging:::.existing_per_image_asset("lung", "hash_bad",
+    selected_features = c("feature_a", "feature_b")))
+  existing <- dsImaging:::.existing_per_image_asset("lung", "hash_good",
+    selected_features = c("feature_a", "feature_b"))
+  expect_equal(existing$asset_id, good_id)
+  expect_equal(existing$path, good)
+  expect_true(nzchar(bad_id))
+})
+
+test_that("orphan running items are requeued", {
+  asset_db <- tempfile(fileext = ".sqlite")
+  home <- tempfile("dsjobs-home")
+  dir.create(home, recursive = TRUE, showWarnings = FALSE)
+  on.exit(unlink(c(asset_db, home), recursive = TRUE), add = TRUE)
+  withr::local_options(list(dsimaging.asset_db = asset_db, dsjobs.home = home))
+
+  gen <- claim_or_reuse_generation("lung", "radiomics_collection",
+    "hash_orphan_running", owner_id = "tester", expected_n = 1L)$generation_id
+  record_item_status(gen, "sample_a", "running")
+
+  expect_equal(dsImaging:::.requeue_orphan_running_items(gen), 1L)
+  item <- get_generation_items(gen)
+  expect_equal(item$status, "pending")
+  expect_match(item$error, "no active dsJob")
+})
