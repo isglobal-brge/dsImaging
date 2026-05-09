@@ -355,6 +355,7 @@
       image = image_path, sample_id = sid,
       generation_id = generation_id,
       settings_file = settings_path %||% "default"))
+    extract_config <- .normalise_extract_config(extract_config)
     if (!is.null(mask_root)) {
       mp <- .resolve_sample_mask(mask_root, sid, backend = backend,
         manifest = manifest, mask_asset = segmenter$mask_asset %||% "masks")

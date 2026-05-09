@@ -32,3 +32,10 @@ test_that("Aerts signature profile is available", {
 test_that("reading nonexistent profile errors", {
   expect_error(read_radiomics_profile("nonexistent_profile"), "not found")
 })
+
+test_that("extract runner config preserves selected feature vectors", {
+  cfg <- dsImaging:::.normalise_extract_config(list(
+    selected_features = list("a", "b", "c")
+  ))
+  expect_equal(cfg$selected_features, c("a", "b", "c"))
+})

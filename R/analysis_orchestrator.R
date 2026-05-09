@@ -366,6 +366,7 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
       generation_id = generation_id,
       settings_file = settings_path %||% "default"
     ))
+    extract_config <- .normalise_extract_config(extract_config)
     if (!is.null(mask_root)) {
       mask_uri <- .resolve_sample_mask(mask_root, sid, backend = backend,
         manifest = manifest, mask_asset = segmenter$mask_asset %||% "masks")
@@ -1042,6 +1043,16 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 .is_transient_job_submit_error <- function(msg) {
   grepl("quota exceeded|database is locked|database is busy|SQLITE_BUSY|locked database",
     msg, ignore.case = TRUE)
+}
+
+#' Normalise runner config values that may arrive as JSON lists
+#' @keywords internal
+.normalise_extract_config <- function(config) {
+  if (!is.null(config$selected_features)) {
+    config$selected_features <- as.character(
+      unlist(config$selected_features, use.names = FALSE))
+  }
+  config
 }
 
 #' Get current owner_id

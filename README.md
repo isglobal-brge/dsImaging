@@ -18,6 +18,9 @@ external/HPC backend configured in `dsJobs`.
 - Store-backed existing mask assets with their own content hash index, so
   manual/consensus segmentations can drive radiomics without recomputation and
   still participate in derivation hashing.
+- Feature assets can be loaded with dataset metadata joined on `sample_id`,
+  enabling radiomics plus clinical/outcome analysis without ad hoc client-side
+  merges.
 - Immutable derivation hashes, aliases, lineage, and per-image generation state.
 - DICOM series conversion to NIfTI with `dcm2niix` or SimpleITK fallback.
 - Image preprocessing runners for resampling, normalization, clamping/windowing,

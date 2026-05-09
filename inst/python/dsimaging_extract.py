@@ -130,6 +130,24 @@ def _find_mask_for_sample(input_dir, sample_id):
     return None
 
 
+def _selected_features_from_env():
+    raw = os.environ.get("DSJOBS_CFG_SELECTED_FEATURES", "")
+    if not raw:
+        return []
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _filter_selected_features(features, selected_features, sample_id):
+    if not selected_features:
+        return features
+    missing = [name for name in selected_features if name not in features]
+    if missing:
+        raise ValueError(
+            f"Selected feature(s) missing for {sample_id}: {', '.join(missing)}"
+        )
+    return {name: features[name] for name in selected_features}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
@@ -197,6 +215,10 @@ def main():
     else:
         extractor = featureextractor.RadiomicsFeatureExtractor()
 
+    selected_features = _selected_features_from_env()
+    if selected_features:
+        print(f"  Selected features: {', '.join(selected_features)}")
+
     results = []
     for img, mask, sid in pairs:
         try:
@@ -210,6 +232,7 @@ def main():
                     features[k] = float(v)
                 except (TypeError, ValueError):
                     features[k] = str(v)
+            features = _filter_selected_features(features, selected_features, sid)
             features["sample_id"] = sid
             results.append(features)
         except Exception as e:

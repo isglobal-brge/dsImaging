@@ -120,9 +120,15 @@ imagingLineageDS <- function(asset_id) {
 #'   and backend lookup.
 #' @param asset_id_or_alias Character; asset id or dataset-level alias.
 #' @param columns Optional character vector of columns to keep.
+#' @param include_metadata Logical; if TRUE, left-join the dataset metadata
+#'   table on `sample_id` so clinical/outcome columns travel with the features.
+#' @param syntactic_names Logical; if TRUE, repair column names with
+#'   \code{make.names(..., unique = TRUE)} for formula-based DataSHIELD models.
 #' @return A data.frame for assignment in the DataSHIELD session.
 #' @export
-imagingLoadAssetDS <- function(dataset_id, asset_id_or_alias, columns = NULL) {
+imagingLoadAssetDS <- function(dataset_id, asset_id_or_alias, columns = NULL,
+                               include_metadata = FALSE,
+                               syntactic_names = FALSE) {
   db <- .asset_db_connect()
   on.exit(.asset_db_close(db))
 
@@ -140,6 +146,9 @@ imagingLoadAssetDS <- function(dataset_id, asset_id_or_alias, columns = NULL) {
   }
 
   df <- .read_feature_asset(asset, dataset_id)
+  if (isTRUE(include_metadata)) {
+    df <- .join_feature_asset_metadata(df, dataset_id)
+  }
   if (!is.null(columns)) {
     columns <- as.character(columns)
     missing <- setdiff(columns, names(df))
@@ -152,6 +161,9 @@ imagingLoadAssetDS <- function(dataset_id, asset_id_or_alias, columns = NULL) {
 
   .assert_min_samples(nrow(df),
     context = paste0("asset '", asset_id_or_alias, "'"))
+  if (isTRUE(syntactic_names)) {
+    names(df) <- make.names(names(df), unique = TRUE)
+  }
   df
 }
 
@@ -296,6 +308,77 @@ promote_asset_alias <- function(dataset_id, alias, asset_id) {
   }
 
   .read_table_file(path)
+}
+
+#' @keywords internal
+.join_feature_asset_metadata <- function(df, dataset_id) {
+  meta <- .read_dataset_metadata(dataset_id)
+  if (is.null(meta)) {
+    stop("Dataset metadata could not be resolved for dataset '", dataset_id,
+         "'. Call imagingInitDS() first or register the dataset.",
+         call. = FALSE)
+  }
+  if (!"sample_id" %in% names(df)) {
+    stop("Feature asset does not contain a sample_id column.", call. = FALSE)
+  }
+  if (!"sample_id" %in% names(meta)) {
+    stop("Dataset metadata does not contain a sample_id column.",
+         call. = FALSE)
+  }
+
+  meta_cols <- c("sample_id", setdiff(names(meta), names(df)))
+  meta <- meta[, meta_cols, drop = FALSE]
+  merged <- merge(df, meta, by = "sample_id", all.x = TRUE, sort = FALSE)
+  merged[match(df$sample_id, merged$sample_id), , drop = FALSE]
+}
+
+#' @keywords internal
+.read_dataset_metadata <- function(dataset_id) {
+  context <- .resolve_dataset_metadata_context(dataset_id)
+  if (is.null(context) || is.null(context$manifest)) return(NULL)
+
+  meta <- context$manifest$metadata
+  if (is.null(meta)) return(NULL)
+
+  local_file <- meta$file
+  if (!is.null(local_file) && file.exists(local_file)) {
+    return(.read_table_file(local_file))
+  }
+
+  uri <- meta$uri
+  if (!is.null(uri) && grepl("^s3://", uri) && !is.null(context$backend)) {
+    fmt <- meta$format %||% .guess_format(uri)
+    tmp <- tempfile(fileext = paste0(".", fmt))
+    on.exit(unlink(tmp), add = TRUE)
+    backend_get_file(context$backend, uri, tmp)
+    return(.read_table_file(tmp))
+  }
+
+  if (!is.null(uri) && file.exists(uri)) {
+    return(.read_table_file(uri))
+  }
+
+  NULL
+}
+
+#' @keywords internal
+.resolve_dataset_metadata_context <- function(dataset_id) {
+  resolved <- tryCatch(.resolve_ds(dataset_id), error = function(e) NULL)
+  if (!is.null(resolved) && !is.null(resolved$manifest)) {
+    return(list(manifest = resolved$manifest, backend = resolved$backend))
+  }
+
+  manifest <- tryCatch(imagingGetManifestDS(dataset_id), error = function(e) NULL)
+  if (is.null(manifest)) {
+    manifest <- tryCatch(imagingGetManifestDS("img"), error = function(e) NULL)
+  }
+  if (is.null(manifest)) return(NULL)
+
+  backend <- tryCatch(imagingGetBackendDS(dataset_id), error = function(e) NULL)
+  if (is.null(backend)) {
+    backend <- tryCatch(imagingGetBackendDS("img"), error = function(e) NULL)
+  }
+  list(manifest = manifest, backend = backend)
 }
 
 #' @keywords internal
