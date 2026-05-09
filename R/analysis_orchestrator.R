@@ -3,7 +3,7 @@
 #
 # Flow:
 #   1. imagingRadiomicsScanCollectionDS  -- fingerprint + diff + create generation
-#   2. imagingRadiomicsSubmitBatchDS     -- create N dsJobs jobs for pending images
+#   2. imagingRadiomicsSubmitBatchDS     -- create N dsHPC jobs for pending images
 #   3. imagingRadiomicsCollectionStatusDS -- query generation progress (with failure sync)
 #   4. imagingRadiomicsPublishCollectionDS -- aggregate per-image outputs
 
@@ -15,7 +15,7 @@
 #'
 #' DataSHIELD aggregate method. Computes or reads image fingerprints, claims or
 #' resumes a dsImaging generation, and returns the sample ids that should be
-#' submitted as dsJobs work.
+#' submitted as dsHPC work.
 #'
 #' @param dataset_id_enc Encoded dataset id or dataset handle.
 #' @param segmenter_enc Encoded segmenter specification.
@@ -197,13 +197,13 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
 }
 
 # ---------------------------------------------------------------------------
-# 2. Submit batch: create per-image dsJobs jobs for pending samples
+# 2. Submit batch: create per-image dsHPC jobs for pending samples
 # ---------------------------------------------------------------------------
 
 #' Submit a Batch of Per-Image Radiomics Jobs
 #'
-#' DataSHIELD aggregate method. Creates per-image dsJobs job specs for pending
-#' samples in a generation, respecting dsImaging/dsJobs backpressure limits.
+#' DataSHIELD aggregate method. Creates per-image dsHPC job specs for pending
+#' samples in a generation, respecting dsImaging/dsHPC backpressure limits.
 #'
 #' @param generation_id_enc Encoded generation id.
 #' @param sample_ids_enc Encoded character vector of sample ids.
@@ -228,7 +228,7 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
   content_hashes <- if (!is.null(content_hashes_enc))
     .dsr_decode(content_hashes_enc) else list()
 
-  # dsJobs is in Imports, always available
+  # dsHPC is in Imports, always available
 
   resolved <- .resolve_ds(dataset_id)
   if (is.null(resolved))
@@ -268,7 +268,7 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
 
   submitted <- list()
   active_n <- tryCatch(
-    as.integer(dsJobs::count_active_jobs(paste0("%", generation_id, "%"))),
+    as.integer(dsHPC::count_active_jobs(paste0("%", generation_id, "%"))),
     error = function(e) 0L)
   slots <- max(0L, .imaging_max_inflight() - active_n)
   if (slots <= 0L) {
@@ -329,7 +329,7 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
     # For S3 images: stage to local filesystem for the Python runner
     image_path <- .stage_image_for_job(image_uri, sid, dataset_id, backend)
 
-    # Build per-image job steps (using dsJobs step format)
+    # Build per-image job steps (using dsHPC step format)
     steps <- list()
 
     # Step 1: emit config (session plane) -- stores metadata for the pipeline
@@ -402,7 +402,7 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
       )
     )
 
-    # Submit via jobSubmitDS (the proper dsJobs API)
+    # Submit via hpcSubmitDS (the proper dsHPC API)
     job_spec <- list(
       label = "dsImaging_image",
       tags = c("per_image", dataset_id, sid, generation_id),
@@ -413,7 +413,7 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
 
     tryCatch({
       spec_enc <- .dsr_encode(job_spec)
-      result <- dsJobs::jobSubmitDS(spec_enc)
+      result <- dsHPC::hpcSubmitDS(spec_enc)
       record_item_status(generation_id, sid, "running")
       submitted[[sid]] <- list(status = "submitted", job_id = result$job_id)
     }, error = function(e) {
@@ -443,7 +443,7 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
 
 #' Get Radiomics Collection Status
 #'
-#' DataSHIELD aggregate method. Reconciles finished/failed dsJobs state back
+#' DataSHIELD aggregate method. Reconciles finished/failed dsHPC state back
 #' into dsImaging generation items and returns disclosure-safe progress counts.
 #'
 #' @param generation_id_enc Encoded generation id.
@@ -453,7 +453,7 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
 imagingRadiomicsCollectionStatusDS <- function(generation_id_enc) {
   generation_id <- .dsr_decode(generation_id_enc)
 
-  # Sync dsJobs terminal states -> mark asset_items as completed/failed.
+  # Sync dsHPC terminal states -> mark asset_items as completed/failed.
   .sync_generation_jobs(generation_id)
   .requeue_orphan_running_items(generation_id)
   requeue_stale_claimed_items(generation_id)
@@ -511,7 +511,7 @@ imagingRadiomicsCollectionStatusDS <- function(generation_id_enc) {
 
 #' Recover a Radiomics Collection Generation
 #'
-#' DataSHIELD aggregate method. Reconciles dsJobs state, requeues stale claimed
+#' DataSHIELD aggregate method. Reconciles dsHPC state, requeues stale claimed
 #' items left by interrupted submitters, and triggers the next drip-feed batch
 #' if capacity is available.
 #'
@@ -541,9 +541,9 @@ imagingRadiomicsRecoverCollectionDS <- function(generation_id_enc) {
 
 #' Cancel a Radiomics Collection Generation
 #'
-#' DataSHIELD aggregate method. Admin-only; protected by `dsjobs.admin_key` or
-#' `DSJOBS_ADMIN_KEY`.
-#' Cancels dsJobs belonging to the generation and marks unfinished items as
+#' DataSHIELD aggregate method. Admin-only; protected by `dshpc.admin_key` or
+#' `DSHPC_ADMIN_KEY`.
+#' Cancels dsHPC jobs belonging to the generation and marks unfinished items as
 #' skipped, without exposing sample identifiers to the client.
 #'
 #' @param generation_id_enc Encoded generation id.
@@ -569,18 +569,18 @@ imagingRadiomicsCancelCollectionDS <- function(generation_id_enc,
   if (gen$state %in% c("ACTIVE"))
     stop("Cannot cancel an already published generation.", call. = FALSE)
 
-  expected_admin_key <- .dsj_option_safe("admin_key")
-  had_admin_option <- "dsjobs.admin_key" %in% names(options())
-  previous_admin_key <- getOption("dsjobs.admin_key", NULL)
+  expected_admin_key <- .dshpc_option_safe("admin_key")
+  had_admin_option <- "dshpc.admin_key" %in% names(options())
+  previous_admin_key <- getOption("dshpc.admin_key", NULL)
   if (!had_admin_option && !is.null(expected_admin_key) &&
       nzchar(expected_admin_key)) {
-    options(dsjobs.admin_key = expected_admin_key)
-    on.exit(options(dsjobs.admin_key = NULL), add = TRUE)
+    options(dshpc.admin_key = expected_admin_key)
+    on.exit(options(dshpc.admin_key = NULL), add = TRUE)
   } else if (had_admin_option) {
-    on.exit(options(dsjobs.admin_key = previous_admin_key), add = TRUE)
+    on.exit(options(dshpc.admin_key = previous_admin_key), add = TRUE)
   }
 
-  cancelled <- dsJobs::cancel_jobs_by_tag(
+  cancelled <- dsHPC::cancel_jobs_by_tag(
     paste0("%", generation_id, "%"),
     admin_key = admin_key_enc,
     reason = reason,
@@ -669,7 +669,7 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
 
   # Build collection-level output directory
   output_root <- file.path(
-    getOption("dsjobs.home", getOption("default.dsjobs.home", "/srv/dsjobs")),
+    getOption("dshpc.home", getOption("default.dshpc.home", "/srv/dshpc")),
     "publish",
     paste0("collection_", generation_id))
   dir.create(output_root, recursive = TRUE, showWarnings = FALSE)
@@ -848,13 +848,13 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
   requeued
 }
 
-#' Requeue running items that no longer have an active dsJob
+#' Requeue running items that no longer have an active dsHPC job
 #' @keywords internal
 .requeue_orphan_running_items <- function(generation_id) {
   running <- get_generation_items(generation_id, status = "running")
   if (nrow(running) == 0) return(0L)
 
-  active_jobs <- dsJobs::query_jobs_by_tag(paste0("%", generation_id, "%"),
+  active_jobs <- dsHPC::query_jobs_by_tag(paste0("%", generation_id, "%"),
     states = c("PENDING", "RUNNING"))
   active_sids <- character(0)
   if (nrow(active_jobs) > 0) {
@@ -870,7 +870,7 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
 
   for (sid in orphan) {
     record_item_status(generation_id, sid, "pending",
-      error = "running item had no active dsJob and was requeued")
+      error = "running item had no active dsHPC job and was requeued")
   }
   update_generation(generation_id, state = "RUNNING",
     error = paste(length(orphan), "orphan running item(s) requeued"))
@@ -931,12 +931,12 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
 #' DataSHIELD AGGREGATE method. Given a generation_id (from a segmentation
 #' run), verifies that:
 #' \enumerate{
-#'   \item Each completed mask artifact still exists on disk (dsJobs artifact)
+#'   \item Each completed mask artifact still exists on disk (dsHPC artifact)
 #'   \item Each mask's derivation_hash matches the source image's content_hash
 #'   \item The generation covers the requested sample set
 #' }
 #'
-#' If masks are missing (expired dsJobs artifacts), returns which samples
+#' If masks are missing (expired dsHPC artifacts), returns which samples
 #' need regeneration. Does NOT auto-regenerate.
 #'
 #' @param generation_id_enc Encoded generation_id.
@@ -947,7 +947,7 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
 imagingSegmentationValidateMasksDS <- function(generation_id_enc, dataset_id) {
   generation_id <- .dsr_decode(generation_id_enc)
 
-  # Sync any pending terminal states from dsJobs
+  # Sync any pending terminal states from dsHPC
   .sync_generation_jobs(generation_id)
 
   gen <- get_generation(generation_id)
@@ -995,12 +995,12 @@ imagingSegmentationValidateMasksDS <- function(generation_id_enc, dataset_id) {
     }
 
     # Check if the artifact file still exists on disk
-    # dsJobs artifacts are at DSJOBS_HOME/artifacts/{job_id}/...
+    # dsHPC artifacts are at DSHPC_HOME/artifacts/{job_id}/...
     # artifact_relpath may be absolute or relative
     if (!file.exists(artifact_path)) {
-      # Try under dsJobs home
-      dsjobs_home <- getOption("dsjobs.home", "/srv/dsjobs")
-      alt_path <- file.path(dsjobs_home, "artifacts", artifact_path)
+      # Try under dsHPC home
+      dshpc_home <- getOption("dshpc.home", "/srv/dshpc")
+      alt_path <- file.path(dshpc_home, "artifacts", artifact_path)
       if (!file.exists(alt_path)) {
         n_missing <- n_missing + 1L
         missing_samples <- c(missing_samples, sid)
@@ -1060,8 +1060,8 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
     if (is.na(artifact_path)) next
 
     if (!file.exists(artifact_path)) {
-      dsjobs_home <- getOption("dsjobs.home", "/srv/dsjobs")
-      artifact_path <- file.path(dsjobs_home, "artifacts", artifact_path)
+      dshpc_home <- getOption("dshpc.home", "/srv/dshpc")
+      artifact_path <- file.path(dshpc_home, "artifacts", artifact_path)
     }
 
     mask_file <- .find_mask_in_artifact(artifact_path, sid)
@@ -1070,7 +1070,7 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
   paths
 }
 
-#' Find a mask file within a dsJobs artifact directory
+#' Find a mask file within a dsHPC artifact directory
 #' @keywords internal
 .find_mask_in_artifact <- function(artifact_path, sample_id) {
   # artifact_path might be a file or a directory
@@ -1115,7 +1115,7 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 # Failure synchronization
 # ---------------------------------------------------------------------------
 
-#' Sync dsJobs terminal states back to asset_items
+#' Sync dsHPC terminal states back to asset_items
 #' @keywords internal
 .sync_generation_jobs <- function(generation_id) {
   .sync_completed_jobs(generation_id)
@@ -1125,7 +1125,7 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
   invisible(NULL)
 }
 
-#' Sync dsJobs completed states back to asset_items
+#' Sync dsHPC completed states back to asset_items
 #'
 #' This is the recovery path for cases where a worker finished the artifact
 #' steps but did not have the dsImaging publisher registered in its process.
@@ -1138,7 +1138,7 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
                          drop = FALSE]
   if (nrow(pending_items) == 0) return(invisible(NULL))
 
-  done_jobs <- dsJobs::query_jobs_by_tag(paste0("%", generation_id, "%"),
+  done_jobs <- dsHPC::query_jobs_by_tag(paste0("%", generation_id, "%"),
     states = c("FINISHED", "PUBLISHED"))
   if (nrow(done_jobs) == 0) return(invisible(NULL))
 
@@ -1155,7 +1155,7 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
     output_ref <- .radiomics_job_output_ref(done_jobs$job_id[i])
     if (is.null(output_ref) || !isTRUE(output_ref$exists)) {
       complete_item_atomic(generation_id, sid, "failed",
-        error = "dsJobs job finished without a radiomics output")
+        error = "dsHPC job finished without a radiomics output")
       next
     }
     if (length(required_cols) > 0) {
@@ -1196,16 +1196,16 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
   candidates <- c("radiomics.parquet", "features.parquet", "radiomics.csv",
                   "features.csv")
   for (nm in candidates) {
-    ref <- tryCatch(dsJobs::get_job_output_ref(job_id, nm,
+    ref <- tryCatch(dsHPC::get_job_output_ref(job_id, nm,
       required_label = "dsImaging_image"), error = function(e) NULL)
     if (!is.null(ref)) return(ref)
   }
 
-  outs <- tryCatch(dsJobs::jobOutputsDS(job_id), error = function(e) NULL)
+  outs <- tryCatch(dsHPC::hpcOutputsDS(job_id), error = function(e) NULL)
   if (is.null(outs) || nrow(outs) == 0) return(NULL)
   tabular <- outs$name[grepl("\\.(parquet|csv)$", outs$name, ignore.case = TRUE)]
   for (nm in tabular) {
-    ref <- tryCatch(dsJobs::get_job_output_ref(job_id, nm,
+    ref <- tryCatch(dsHPC::get_job_output_ref(job_id, nm,
       required_label = "dsImaging_image"), error = function(e) NULL)
     if (!is.null(ref)) return(ref)
   }
@@ -1228,11 +1228,11 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
   remaining[1]
 }
 
-#' Sync dsJobs failure states back to asset_items
+#' Sync dsHPC failure states back to asset_items
 #'
 #' For items still "pending" in the generation, checks whether their
-#' corresponding dsJobs jobs have FAILED. If so, marks the item as failed.
-#' This closes the gap where a dsJobs job fails but the publisher hook
+#' corresponding dsHPC jobs have FAILED. If so, marks the item as failed.
+#' This closes the gap where a dsHPC job fails but the publisher hook
 #' never runs (because the job died before reaching the publish step).
 #'
 #' @keywords internal
@@ -1242,8 +1242,8 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
                          drop = FALSE]
   if (nrow(pending_items) == 0) return(invisible(NULL))
 
-  # Query dsJobs for failed jobs tagged with this generation
-  failed_jobs <- dsJobs::query_failed_jobs(paste0("%", generation_id, "%"))
+  # Query dsHPC for failed jobs tagged with this generation
+  failed_jobs <- dsHPC::query_failed_jobs(paste0("%", generation_id, "%"))
 
   if (nrow(failed_jobs) == 0) return(invisible(NULL))
 
@@ -1252,16 +1252,16 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
     tags <- strsplit(failed_jobs$tags[i], ",", fixed = TRUE)[[1]]
     sid <- .sample_id_from_tags(tags, pending_items$sample_id)
     if (is.null(sid)) next
-    err_msg <- failed_jobs$error_message[i] %||% "dsJobs job failed"
+    err_msg <- failed_jobs$error_message[i] %||% "dsHPC job failed"
     complete_item_atomic(generation_id, sid, "failed",
       error = err_msg)
   }
   invisible(NULL)
 }
 
-#' Sync dsJobs cancelled states back to asset_items
+#' Sync dsHPC cancelled states back to asset_items
 #'
-#' Cancelled dsJobs are terminal. Mark their corresponding generation items as
+#' Cancelled dsHPC jobs are terminal. Mark their corresponding generation items as
 #' skipped so status/publish never leaves a collection stuck in `running`.
 #'
 #' @keywords internal
@@ -1271,7 +1271,7 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
                          drop = FALSE]
   if (nrow(pending_items) == 0) return(invisible(NULL))
 
-  cancelled_jobs <- dsJobs::query_jobs_by_tag(paste0("%", generation_id, "%"),
+  cancelled_jobs <- dsHPC::query_jobs_by_tag(paste0("%", generation_id, "%"),
     states = "CANCELLED")
   if (nrow(cancelled_jobs) == 0) return(invisible(NULL))
 
@@ -1279,15 +1279,15 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
     tags <- strsplit(cancelled_jobs$tags[i], ",", fixed = TRUE)[[1]]
     sid <- .sample_id_from_tags(tags, pending_items$sample_id)
     if (is.null(sid)) next
-    err_msg <- cancelled_jobs$error_message[i] %||% "dsJobs job cancelled"
+    err_msg <- cancelled_jobs$error_message[i] %||% "dsHPC job cancelled"
     complete_item_atomic(generation_id, sid, "skipped", error = err_msg)
   }
   invisible(NULL)
 }
 
-#' Sync dsJobs active states back to asset_items
+#' Sync dsHPC active states back to asset_items
 #'
-#' This closes the crash window where `jobSubmitDS()` succeeds but the caller
+#' This closes the crash window where `hpcSubmitDS()` succeeds but the caller
 #' dies before the generation item is moved from `claimed` to `running`.
 #'
 #' @keywords internal
@@ -1297,7 +1297,7 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
                                              "failed"), , drop = FALSE]
   if (nrow(pending_items) == 0) return(invisible(NULL))
 
-  active_jobs <- dsJobs::query_jobs_by_tag(paste0("%", generation_id, "%"),
+  active_jobs <- dsHPC::query_jobs_by_tag(paste0("%", generation_id, "%"),
     states = c("PENDING", "RUNNING"))
   if (nrow(active_jobs) == 0) return(invisible(NULL))
 
@@ -1315,16 +1315,16 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 
 #' Effective per-generation inflight cap.
 #'
-#' dsImaging has its own cap, but it must never exceed dsJobs' global cap
-#' in the current R process. Otherwise submissions beyond the dsJobs quota are
+#' dsImaging has its own cap, but it must never exceed dsHPC's global cap
+#' in the current R process. Otherwise submissions beyond the dsHPC quota are
 #' misclassified as per-image failures instead of staying pending.
 #'
 #' @keywords internal
 .imaging_max_inflight <- function() {
   radiomics_cap <- as.integer(.imaging_analysis_option("max_inflight", 30L))
-  dsjobs_cap <- as.integer(getOption("dsjobs.max_jobs_global",
-    getOption("default.dsjobs.max_jobs_global", radiomics_cap)))
-  max(1L, min(radiomics_cap, dsjobs_cap))
+  dshpc_cap <- as.integer(getOption("dshpc.max_jobs_global",
+    getOption("default.dshpc.max_jobs_global", radiomics_cap)))
+  max(1L, min(radiomics_cap, dshpc_cap))
 }
 
 #' @keywords internal
@@ -1340,7 +1340,7 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 #' @keywords internal
 .dsr_decode <- function(x) {
   if (is.character(x) && length(x) == 1) {
-    # Handle URL-safe base64 (from dsJobsClient .ds_encode: +->-, /->_, no =)
+    # Handle URL-safe base64 (from dsHPCClient .ds_encode: +->-, /->_, no =)
     b64 <- x
     if (startsWith(b64, "B64:")) b64 <- sub("^B64:", "", b64)
     b64 <- gsub("-", "+", gsub("_", "/", b64))
@@ -1358,7 +1358,7 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
   x
 }
 
-#' Encode a value for dsJobs internal submission
+#' Encode a value for dsHPC internal submission
 #' @keywords internal
 .dsr_encode <- function(x) {
   json <- as.character(jsonlite::toJSON(x, auto_unbox = TRUE, null = "null"))
@@ -1389,7 +1389,7 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 #' Get current owner_id
 #' @keywords internal
 .dsr_owner_id <- function() {
-  tryCatch(dsJobs::get_owner_id(), error = function(e) {
+  tryCatch(dsHPC::get_owner_id(), error = function(e) {
     Sys.getenv("USER", Sys.info()[["user"]] %||% "unknown")
   })
 }
@@ -1436,7 +1436,7 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 
 #' Persist enough dataset context for worker-side orchestration
 #'
-#' Fire-and-forget drip feeding runs in the dsJobs worker, outside the
+#' Fire-and-forget drip feeding runs in the dsHPC worker, outside the
 #' DataSHIELD session that originally resolved the Opal resource. A generation
 #' therefore carries a compact manifest/backend context so later batches can be
 #' staged without a connected analyst session.
@@ -1704,11 +1704,11 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
   if (is.null(backend) || backend$type == "file") return(uri)
   if (!grepl("^s3://", uri)) return(uri)
 
-  # Stage to DSJOBS_HOME/staging/dataset_id/
+  # Stage to DSHPC_HOME/staging/dataset_id/
   home <- tryCatch(
-    dsJobs:::.dsjobs_home(must_exist = FALSE),
-    error = function(e) getOption("dsjobs.home",
-      getOption("default.dsjobs.home", "/srv/dsjobs"))
+    dsHPC:::.dshpc_home(must_exist = FALSE),
+    error = function(e) getOption("dshpc.home",
+      getOption("default.dshpc.home", "/srv/dshpc"))
   )
   staging_dir <- file.path(home, "staging", dataset_id, role)
   dir.create(staging_dir, recursive = TRUE, showWarnings = FALSE)

@@ -1,27 +1,27 @@
 # Module: Runner Registration
-# dsImaging registers its runners into DSJOBS_HOME/runners/ at load time.
-# dsJobs reads the YAML and executes -- it never knows about dsImaging.
+# dsImaging registers its runners into DSHPC_HOME/runners/ at load time.
+# dsHPC reads the YAML and executes -- it never knows about dsImaging.
 
-#' Register dsImaging runners in DSJOBS_HOME
+#' Register dsImaging runners in DSHPC_HOME
 #'
 #' Called from .onLoad. Writes runner YAMLs with absolute paths to the
 #' dsImaging venvs and stable copies of the Python scripts.
 #'
 #' @keywords internal
 .register_imaging_analysis_runners <- function() {
-  # Default must match dsJobs' own default (.dsjobs_home in dsJobs/R/zzz.R)
+  # Default must match dsHPC's own default (.dshpc_home in dsHPC/R/zzz.R)
   # so that runner YAMLs land where the validator looks for them.
-  dsjobs_home <- getOption("dsjobs.home",
-    getOption("default.dsjobs.home", "/srv/dsjobs"))
-  runners_dir <- file.path(dsjobs_home, "runners")
+  dshpc_home <- getOption("dshpc.home",
+    getOption("default.dshpc.home", "/srv/dshpc"))
+  runners_dir <- file.path(dshpc_home, "runners")
   if (!dir.exists(runners_dir)) {
     dir.create(runners_dir, recursive = TRUE, showWarnings = FALSE)
   }
   if (!dir.exists(runners_dir))
-    stop("Cannot create dsJobs runners directory: ", runners_dir,
+    stop("Cannot create dsHPC runners directory: ", runners_dir,
          call. = FALSE)
   if (file.access(runners_dir, mode = 2) != 0)
-    stop("dsJobs runners directory is not writable: ", runners_dir,
+    stop("dsHPC runners directory is not writable: ", runners_dir,
          call. = FALSE)
   tryCatch(Sys.chmod(runners_dir, "0777"), error = function(e) NULL)
 
@@ -473,7 +473,7 @@
   .imaging_container_config(runner, args_template, command)
 }
 
-#' Write a runner YAML to DSJOBS_HOME/runners/
+#' Write a runner YAML to DSHPC_HOME/runners/
 #' @keywords internal
 .write_runner_yaml <- function(runners_dir, name, config) {
   path <- file.path(runners_dir, paste0(name, ".yml"))

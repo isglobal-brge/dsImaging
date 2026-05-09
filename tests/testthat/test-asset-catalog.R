@@ -244,12 +244,12 @@ test_that("stale claimed items are requeued for recovery", {
   expect_true(is.na(item$claimed_at))
 })
 
-test_that("active dsJobs prevent stale claimed items from being duplicated", {
+test_that("active dsHPC jobs prevent stale claimed items from being duplicated", {
   asset_db <- tempfile(fileext = ".sqlite")
-  home <- tempfile("dsjobs-home")
+  home <- tempfile("dshpc-home")
   dir.create(home, recursive = TRUE, showWarnings = FALSE)
   on.exit(unlink(c(asset_db, home), recursive = TRUE))
-  withr::local_options(list(dsimaging.asset_db = asset_db, dsjobs.home = home))
+  withr::local_options(list(dsimaging.asset_db = asset_db, dshpc.home = home))
 
   gen <- claim_or_reuse_generation("lung", "radiomics_collection",
     "hash_active_claim", owner_id = "tester", expected_n = 1L)$generation_id
@@ -263,15 +263,15 @@ test_that("active dsJobs prevent stale claimed items from being duplicated", {
     params = list(gen, "sample_a"))
   dsImaging:::.asset_db_close(adb)
 
-  db <- dsJobs:::.db_connect()
-  on.exit(dsJobs:::.db_close(db), add = TRUE)
+  db <- dsHPC:::.db_connect()
+  on.exit(dsHPC:::.db_close(db), add = TRUE)
   spec <- list(
     label = "dsImaging_image",
     tags = c("per_image", "lung", "sample_a", gen),
     steps = list(list(type = "emit", plane = "session",
       output_name = "x", value = 1))
   )
-  dsJobs:::.store_create_job(db, "job_active_sample", "tester", spec, 1L)
+  dsHPC:::.store_create_job(db, "job_active_sample", "tester", spec, 1L)
 
   dsImaging:::.sync_generation_jobs(gen)
   n <- dsImaging:::requeue_stale_claimed_items(gen, timeout_secs = 1)
@@ -283,24 +283,24 @@ test_that("active dsJobs prevent stale claimed items from being duplicated", {
 
 test_that("active retry jobs override previous failed item state", {
   asset_db <- tempfile(fileext = ".sqlite")
-  home <- tempfile("dsjobs-home")
+  home <- tempfile("dshpc-home")
   dir.create(home, recursive = TRUE, showWarnings = FALSE)
   on.exit(unlink(c(asset_db, home), recursive = TRUE))
-  withr::local_options(list(dsimaging.asset_db = asset_db, dsjobs.home = home))
+  withr::local_options(list(dsimaging.asset_db = asset_db, dshpc.home = home))
 
   gen <- claim_or_reuse_generation("lung", "radiomics_collection",
     "hash_active_retry", owner_id = "tester", expected_n = 1L)$generation_id
   complete_item_atomic(gen, "sample_a", "failed", error = "old failure")
 
-  db <- dsJobs:::.db_connect()
-  on.exit(dsJobs:::.db_close(db), add = TRUE)
+  db <- dsHPC:::.db_connect()
+  on.exit(dsHPC:::.db_close(db), add = TRUE)
   spec <- list(
     label = "dsImaging_image",
     tags = c("per_image", "lung", "sample_a", gen),
     steps = list(list(type = "emit", plane = "session",
       output_name = "x", value = 1))
   )
-  dsJobs:::.store_create_job(db, "job_retry_sample", "tester", spec, 1L)
+  dsHPC:::.store_create_job(db, "job_retry_sample", "tester", spec, 1L)
 
   dsImaging:::.sync_generation_jobs(gen)
 
@@ -311,13 +311,13 @@ test_that("active retry jobs override previous failed item state", {
 
 test_that("generation cancellation is admin-gated and cancels tagged jobs", {
   asset_db <- tempfile(fileext = ".sqlite")
-  home <- tempfile("dsjobs-home")
+  home <- tempfile("dshpc-home")
   dir.create(home, recursive = TRUE, showWarnings = FALSE)
   on.exit(unlink(c(asset_db, home), recursive = TRUE))
   withr::local_options(list(
     dsimaging.asset_db = asset_db,
-    dsjobs.home = home,
-    dsjobs.admin_key = "secret"
+    dshpc.home = home,
+    dshpc.admin_key = "secret"
   ))
 
   gen <- claim_or_reuse_generation("lung", "radiomics_collection",
@@ -326,8 +326,8 @@ test_that("generation cancellation is admin-gated and cancels tagged jobs", {
   record_item_status(gen, "sample_a", "running")
   record_item_status(gen, "sample_b", "pending")
 
-  db <- dsJobs:::.db_connect()
-  on.exit(dsJobs:::.db_close(db), add = TRUE)
+  db <- dsHPC:::.db_connect()
+  on.exit(dsHPC:::.db_close(db), add = TRUE)
   spec <- list(
     label = "dsImaging_image",
     tags = c("per_image", "lung", "sample_a", gen),
@@ -335,8 +335,8 @@ test_that("generation cancellation is admin-gated and cancels tagged jobs", {
     steps = list(list(type = "emit", plane = "session",
       output_name = "x", value = 1))
   )
-  dsJobs:::.store_create_job(db, "job_sample_a", "tester", spec, 1L)
-  dsJobs:::.store_update_job(db, "job_sample_a", state = "RUNNING")
+  dsHPC:::.store_create_job(db, "job_sample_a", "tester", spec, 1L)
+  dsHPC:::.store_update_job(db, "job_sample_a", state = "RUNNING")
 
   expect_error(
     imagingRadiomicsCancelCollectionDS(
@@ -346,7 +346,7 @@ test_that("generation cancellation is admin-gated and cancels tagged jobs", {
     ),
     "invalid admin_key"
   )
-  expect_equal(dsJobs:::.store_get_job(db, "job_sample_a")$state, "RUNNING")
+  expect_equal(dsHPC:::.store_get_job(db, "job_sample_a")$state, "RUNNING")
 
   out <- imagingRadiomicsCancelCollectionDS(
     dsImaging:::.dsr_encode(gen),
@@ -356,7 +356,7 @@ test_that("generation cancellation is admin-gated and cancels tagged jobs", {
 
   expect_equal(out$state, "CANCELLED")
   expect_equal(out$cancelled_jobs, 1L)
-  expect_equal(dsJobs:::.store_get_job(db, "job_sample_a")$state, "CANCELLED")
+  expect_equal(dsHPC:::.store_get_job(db, "job_sample_a")$state, "CANCELLED")
   expect_equal(get_generation(gen)$state, "CANCELLED")
   items <- get_generation_items(gen)
   expect_true(all(items$status == "skipped"))
@@ -364,24 +364,24 @@ test_that("generation cancellation is admin-gated and cancels tagged jobs", {
 
 test_that("generation cancellation accepts admin key from environment", {
   asset_db <- tempfile(fileext = ".sqlite")
-  home <- tempfile("dsjobs-home")
+  home <- tempfile("dshpc-home")
   dir.create(home, recursive = TRUE, showWarnings = FALSE)
   on.exit(unlink(c(asset_db, home), recursive = TRUE))
   withr::local_options(list(
     dsimaging.asset_db = asset_db,
-    dsjobs.home = home,
-    dsjobs.admin_key = NULL,
-    default.dsjobs.admin_key = NULL
+    dshpc.home = home,
+    dshpc.admin_key = NULL,
+    default.dshpc.admin_key = NULL
   ))
-  withr::local_envvar(c(DSJOBS_ADMIN_KEY = "env-secret"))
+  withr::local_envvar(c(DSHPC_ADMIN_KEY = "env-secret"))
 
   gen <- claim_or_reuse_generation("lung", "radiomics_collection",
     "hash_cancel_env", owner_id = "tester", expected_n = 1L)$generation_id
   update_generation(gen, state = "RUNNING")
   record_item_status(gen, "sample_a", "running")
 
-  db <- dsJobs:::.db_connect()
-  on.exit(dsJobs:::.db_close(db), add = TRUE)
+  db <- dsHPC:::.db_connect()
+  on.exit(dsHPC:::.db_close(db), add = TRUE)
   spec <- list(
     label = "dsImaging_image",
     tags = c("per_image", "lung", "sample_a", gen),
@@ -389,8 +389,8 @@ test_that("generation cancellation accepts admin key from environment", {
     steps = list(list(type = "emit", plane = "session",
       output_name = "x", value = 1))
   )
-  dsJobs:::.store_create_job(db, "job_sample_env", "tester", spec, 1L)
-  dsJobs:::.store_update_job(db, "job_sample_env", state = "RUNNING")
+  dsHPC:::.store_create_job(db, "job_sample_env", "tester", spec, 1L)
+  dsHPC:::.store_update_job(db, "job_sample_env", state = "RUNNING")
 
   out <- imagingRadiomicsCancelCollectionDS(
     dsImaging:::.dsr_encode(gen),
@@ -399,7 +399,7 @@ test_that("generation cancellation accepts admin key from environment", {
   )
 
   expect_equal(out$state, "CANCELLED")
-  expect_equal(dsJobs:::.store_get_job(db, "job_sample_env")$state,
+  expect_equal(dsHPC:::.store_get_job(db, "job_sample_env")$state,
     "CANCELLED")
 })
 
@@ -497,10 +497,10 @@ test_that("dedup ignores per-image assets that do not match selected features", 
 
 test_that("orphan running items are requeued", {
   asset_db <- tempfile(fileext = ".sqlite")
-  home <- tempfile("dsjobs-home")
+  home <- tempfile("dshpc-home")
   dir.create(home, recursive = TRUE, showWarnings = FALSE)
   on.exit(unlink(c(asset_db, home), recursive = TRUE), add = TRUE)
-  withr::local_options(list(dsimaging.asset_db = asset_db, dsjobs.home = home))
+  withr::local_options(list(dsimaging.asset_db = asset_db, dshpc.home = home))
 
   gen <- claim_or_reuse_generation("lung", "radiomics_collection",
     "hash_orphan_running", owner_id = "tester", expected_n = 1L)$generation_id
@@ -509,5 +509,5 @@ test_that("orphan running items are requeued", {
   expect_equal(dsImaging:::.requeue_orphan_running_items(gen), 1L)
   item <- get_generation_items(gen)
   expect_equal(item$status, "pending")
-  expect_match(item$error, "no active dsJob")
+  expect_match(item$error, "no active dsHPC job")
 })

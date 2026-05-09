@@ -7,7 +7,7 @@
 #' radiomics feature tables, and clinical imaging analysis workflows.
 #'
 #' Heavy computation is declared by dsImaging as allowlisted runners and is
-#' executed by dsJobs, the durable HPC-capable runtime. This keeps clinical image
+#' executed by dsHPC, the durable HPC-capable runtime. This keeps clinical image
 #' handling, mask management, radiomics, and derived imaging analytics in one
 #' package while leaving queueing, containers, Slurm/external backends, and GPU
 #' policy to the compute layer.
@@ -49,7 +49,7 @@
 #'
 #' @section Containerized clinical imaging runners:
 #' Runners may use local Python environments or container images. Container
-#' options are written into dsJobs runner YAML and interpreted by dsJobs:
+#' options are written into dsHPC runner YAML and interpreted by dsHPC:
 #' - `dsimaging.analysis.container_images`: named list mapping runner names to
 #'   image references.
 #' - `dsimaging.analysis.container_image_<runner>`: per-runner image.
@@ -59,10 +59,10 @@
 #' - `dsimaging.analysis.container_pull`: `"missing"`, `"always"`, or
 #'   `"never"`.
 #'
-#' @section dsJobs / dsHPC runtime:
-#' dsImaging does not run heavy work directly. Configure dsJobs with
-#' `dsjobs.executor_backend`, `dsjobs.backend_path_mappings`,
-#' `dsjobs.backend_gpu_count`, and related options to choose embedded,
+#' @section dsHPC runtime:
+#' dsImaging does not run heavy work directly. Configure dsHPC with
+#' `dshpc.executor_backend`, `dshpc.backend_path_mappings`,
+#' `dshpc.backend_gpu_count`, and related options to choose embedded,
 #' Slurm, external, or containerized execution.
 #'
 #' @name dsimaging-options

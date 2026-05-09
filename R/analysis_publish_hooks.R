@@ -1,7 +1,7 @@
-# Module: dsJobs Publisher Hooks
-# Called by dsJobs when a publish_asset step completes.
+# Module: dsHPC Publisher Hooks
+# Called by dsHPC when a publish_asset step completes.
 
-#' Radiomics asset publisher (dsJobs plugin) -- collection-level
+#' Radiomics asset publisher (dsHPC plugin) -- collection-level
 #' @keywords internal
 .radiomics_publisher <- function(job_id, step, output_dir, db) {
   dataset_id <- step$dataset_id
@@ -44,9 +44,9 @@
        dataset_id = dataset_id, kind = asset_type)
 }
 
-#' Generic imaging asset publisher (dsJobs plugin).
+#' Generic imaging asset publisher (dsHPC plugin).
 #'
-#' Registers the output directory of a dsJobs publish step as a first-class
+#' Registers the output directory of a dsHPC publish step as a first-class
 #' dsImaging asset. This is used by segmentation-only jobs to publish mask
 #' roots, and can also publish derived image roots, feature tables, embeddings,
 #' or quality-control artifacts.
@@ -69,7 +69,7 @@
   }
 
   provenance <- list(
-    type = "dsjobs_publish",
+    type = "dshpc_publish",
     job_id = job_id,
     asset_name = asset_name,
     runner = step$runner,
@@ -92,7 +92,7 @@
        dataset_id = dataset_id, kind = asset_type)
 }
 
-#' Per-image result publisher (dsJobs plugin)
+#' Per-image result publisher (dsHPC plugin)
 #'
 #' Called when a per-image job completes its publish step.
 #' Four responsibilities:
@@ -220,7 +220,7 @@
 #' reads this to know what to submit next.
 #' @keywords internal
 .drip_feed_next_batch <- function(generation_id, dataset_id) {
-  # dsJobs is in Imports, always available
+  # dsHPC is in Imports, always available
 
   gen <- get_generation(generation_id)
   if (is.null(gen) || !gen$state %in% c("RUNNING", "PENDING")) return(invisible(NULL))
@@ -228,7 +228,7 @@
   requeue_stale_claimed_items(generation_id)
 
   # Check how many per-image jobs for this generation are currently active
-  active_n <- dsJobs::count_active_jobs(paste0("%", generation_id, "%"))
+  active_n <- dsHPC::count_active_jobs(paste0("%", generation_id, "%"))
 
   max_inflight <- .imaging_max_inflight()
   if (active_n >= max_inflight) return(invisible(NULL))
@@ -390,7 +390,7 @@
 
     tryCatch({
       spec_enc <- .dsr_encode(job_spec)
-      dsJobs::jobSubmitDS(spec_enc)
+      dsHPC::hpcSubmitDS(spec_enc)
       record_item_status(generation_id, sid, "running")
     }, error = function(e) {
       msg <- conditionMessage(e)

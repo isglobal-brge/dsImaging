@@ -11,7 +11,7 @@ MASK_EXTS = (".nii.gz", ".nii", ".nrrd", ".mha", ".mhd", ".png", ".jpg", ".jpeg"
 
 
 def cfg(name, default=None):
-    value = os.environ.get(f"DSJOBS_CFG_{name.upper()}")
+    value = os.environ.get(f"DSHPC_CFG_{name.upper()}")
     if value is None or value == "":
         return default
     return value
@@ -129,7 +129,7 @@ def resolve_asset_path(asset_name, role="images", explicit=None):
             if uri and os.path.exists(uri):
                 return uri
 
-    input_dir = os.environ.get("DSJOBS_INPUT_DIR") or cfg("input_dir")
+    input_dir = os.environ.get("DSHPC_INPUT_DIR") or cfg("input_dir")
     if input_dir and os.path.exists(input_dir):
         return input_dir
 

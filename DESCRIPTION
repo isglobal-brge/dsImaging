@@ -12,7 +12,7 @@ Description: Server-side DataSHIELD package for clinical imaging. Provides
     preprocessing, mask/ROI operations, QC metrics, segmentation and radiomics
     runners, model/profile registries, and DataSHIELD methods for secure
     imaging dataset management and analysis. Heavy computation is delegated to
-    dsJobs as the durable HPC-capable runtime.
+    dsHPC as the durable HPC-capable runtime.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Depends:
@@ -23,7 +23,7 @@ Imports:
     DBI,
     RSQLite,
     digest,
-    dsJobs,
+    dsHPC,
     yaml,
     jsonlite,
     processx,

@@ -88,12 +88,12 @@ def main():
     parser.add_argument("--sample-id", default=None)
     args = parser.parse_args()
 
-    image = args.image or os.environ.get("DSJOBS_CFG_IMAGE")
-    sample_id = args.sample_id or os.environ.get("DSJOBS_CFG_SAMPLE_ID")
-    threshold = float(os.environ.get("DSJOBS_CFG_THRESHOLD", args.threshold))
+    image = args.image or os.environ.get("DSHPC_CFG_IMAGE")
+    sample_id = args.sample_id or os.environ.get("DSHPC_CFG_SAMPLE_ID")
+    threshold = float(os.environ.get("DSHPC_CFG_THRESHOLD", args.threshold))
     max_components = int(os.environ.get(
-        "DSJOBS_CFG_MAX_COMPONENTS", args.max_components))
-    min_voxels = int(os.environ.get("DSJOBS_CFG_MIN_VOXELS", args.min_voxels))
+        "DSHPC_CFG_MAX_COMPONENTS", args.max_components))
+    min_voxels = int(os.environ.get("DSHPC_CFG_MIN_VOXELS", args.min_voxels))
 
     if image:
         sid = sample_id or _strip_extensions(os.path.basename(image))

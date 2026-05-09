@@ -751,7 +751,7 @@ claim_pending_items <- function(generation_id, n, claimer_id = NULL) {
 
 #' Requeue stale claimed items
 #'
-#' Items are marked `claimed` while a server process is preparing their dsJobs
+#' Items are marked `claimed` while a server process is preparing their dsHPC
 #' submissions. If that process dies before it records `running` or a terminal
 #' status, the generation must not stall forever.
 #'

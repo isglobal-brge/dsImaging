@@ -11,7 +11,7 @@ from dsimaging_utils import package_versions
 def find_images(input_dir):
     """Find images from dsImaging registry or input dir."""
     registry_path = "/var/lib/dsimaging/registry.yaml"
-    dataset_id = os.environ.get("DSJOBS_CFG_DATASET_ID", "")
+    dataset_id = os.environ.get("DSHPC_CFG_DATASET_ID", "")
 
     if os.path.exists(registry_path):
         try:
@@ -55,10 +55,10 @@ def main():
     )
     os.environ["TOTALSEG_WEIGHTS_PATH"] = os.path.join(models_dir, "totalsegmentator", args.task)
 
-    # Merge CLI args with env vars (dsJobs sets DSJOBS_CFG_* from config)
-    image = args.image or os.environ.get("DSJOBS_CFG_IMAGE")
-    sample_id = getattr(args, "sample_id", None) or os.environ.get("DSJOBS_CFG_SAMPLE_ID")
-    fast = os.environ.get("DSJOBS_CFG_FAST", "").lower() in ("true", "1", "yes")
+    # Merge CLI args with env vars (dsHPC sets DSHPC_CFG_* from config)
+    image = args.image or os.environ.get("DSHPC_CFG_IMAGE")
+    sample_id = getattr(args, "sample_id", None) or os.environ.get("DSHPC_CFG_SAMPLE_ID")
+    fast = os.environ.get("DSHPC_CFG_FAST", "").lower() in ("true", "1", "yes")
 
     # Single-image mode
     if image:
@@ -115,7 +115,7 @@ def main():
 
     print(f"  Done: {summary['n_done']}/{summary['n_total']} ({summary['n_failed']} failed)")
 
-    # Exit non-zero if all images failed (so dsJobs marks step as failed)
+    # Exit non-zero if all images failed (so dsHPC marks step as failed)
     if summary["n_done"] == 0 and summary["n_total"] > 0:
         sys.exit(1)
 

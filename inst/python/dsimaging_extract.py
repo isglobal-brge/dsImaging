@@ -131,7 +131,7 @@ def _find_mask_for_sample(input_dir, sample_id):
 
 
 def _selected_features_from_env():
-    raw = os.environ.get("DSJOBS_CFG_SELECTED_FEATURES", "")
+    raw = os.environ.get("DSHPC_CFG_SELECTED_FEATURES", "")
     if not raw:
         return []
     return [item.strip() for item in raw.split(",") if item.strip()]
@@ -161,10 +161,10 @@ def main():
                         help="Sample identifier (single-image mode)")
     args = parser.parse_args()
 
-    # Merge CLI args with env vars (dsJobs sets DSJOBS_CFG_* from config)
-    image = args.image or os.environ.get("DSJOBS_CFG_IMAGE")
-    mask = args.mask or os.environ.get("DSJOBS_CFG_MASK")
-    sample_id = getattr(args, "sample_id", None) or os.environ.get("DSJOBS_CFG_SAMPLE_ID")
+    # Merge CLI args with env vars (dsHPC sets DSHPC_CFG_* from config)
+    image = args.image or os.environ.get("DSHPC_CFG_IMAGE")
+    mask = args.mask or os.environ.get("DSHPC_CFG_MASK")
+    sample_id = getattr(args, "sample_id", None) or os.environ.get("DSHPC_CFG_SAMPLE_ID")
 
     print("dsImaging extraction")
 
@@ -186,7 +186,7 @@ def main():
         print(f"  Single-image mode: {sid}")
     else:
         # Collection mode (original behavior)
-        dataset_id = os.environ.get("DSJOBS_CFG_DATASET_ID", "")
+        dataset_id = os.environ.get("DSHPC_CFG_DATASET_ID", "")
         image_root, mask_root = find_dataset_roots(dataset_id or None)
 
         if image_root and mask_root:

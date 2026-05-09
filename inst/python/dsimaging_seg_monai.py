@@ -10,7 +10,7 @@ from dsimaging_utils import package_versions
 
 def find_images(input_dir):
     registry_path = "/var/lib/dsimaging/registry.yaml"
-    dataset_id = os.environ.get("DSJOBS_CFG_DATASET_ID", "")
+    dataset_id = os.environ.get("DSHPC_CFG_DATASET_ID", "")
     if os.path.exists(registry_path):
         try:
             import yaml
@@ -56,9 +56,9 @@ def main():
         print("Install with: dsImaging::install_model('monai', '<bundle_name>')", file=sys.stderr)
         sys.exit(1)
 
-    # Merge CLI args with env vars (dsJobs sets DSJOBS_CFG_* from config)
-    image = args.image or os.environ.get("DSJOBS_CFG_IMAGE")
-    sample_id = getattr(args, "sample_id", None) or os.environ.get("DSJOBS_CFG_SAMPLE_ID")
+    # Merge CLI args with env vars (dsHPC sets DSHPC_CFG_* from config)
+    image = args.image or os.environ.get("DSHPC_CFG_IMAGE")
+    sample_id = getattr(args, "sample_id", None) or os.environ.get("DSHPC_CFG_SAMPLE_ID")
 
     if image:
         sid = sample_id or os.path.splitext(os.path.basename(image))[0]

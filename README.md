@@ -3,12 +3,12 @@
 `dsImaging` is the server-side DataSHIELD package for clinical imaging. It
 manages imaging dataset manifests, storage backends, content hashes, derived
 asset catalogs, segmentation masks, radiomics feature tables, model/profile
-registries, and dsJobs-backed image analysis workflows.
+registries, and dsHPC-backed image analysis workflows.
 
-Heavy work is delegated to `dsJobs` (`dsHPC` in product language). Installing
+Heavy work is delegated to `dsHPC`. Installing
 and loading `dsImaging` registers imaging runners and publishers with the shared
 job runtime so image workflows can run locally, in containers, or through an
-external/HPC backend configured in `dsJobs`.
+external/HPC backend configured in `dsHPC`.
 
 ## What It Provides
 
@@ -37,7 +37,7 @@ external/HPC backend configured in `dsJobs`.
   provenance.
 - Per-image collection orchestration with server-side drip-feed and safe
   reconnect/status/publish flow.
-- dsJobs publisher hooks that register job outputs as `dsImaging` assets.
+- dsHPC publisher hooks that register job outputs as `dsImaging` assets.
 
 ## Runtime Setup
 
@@ -51,7 +51,7 @@ imagingCapabilitiesDS()
 On load it registers:
 
 - the `ImagingDatasetResourceResolver`;
-- runner YAMLs under `DSJOBS_HOME/runners`;
+- runner YAMLs under `DSHPC_HOME/runners`;
 - publishers for generic imaging assets and radiomics outputs;
 - load-time issues in `imagingCapabilitiesDS()$onload_errors`.
 
@@ -79,15 +79,15 @@ options(
 )
 ```
 
-`dsJobs` controls the shared scheduler, adaptive resource limits, GPU detection,
+`dsHPC` controls the shared scheduler, adaptive resource limits, GPU detection,
 container execution, and external/HPC backend. `dsImaging` only declares the
 domain runners and publishes domain outputs.
 
 Generation recovery is automatic during status/publish checks. If a process dies
-after claiming samples but before submitting their dsJobs, claimed items older
+after claiming samples but before submitting their dsHPC jobs, claimed items older
 than `dsimaging.analysis.claim_timeout_secs` are returned to `pending` and the
 drip-feed loop can submit them again. Destructive generation cancellation is
-admin-only and reuses `dsjobs.admin_key` or `DSJOBS_ADMIN_KEY`.
+admin-only and reuses `dshpc.admin_key` or `DSHPC_ADMIN_KEY`.
 
 Bundled Python runners and radiomics profiles are copied to content-addressed
 runtime directories under `dsimaging.analysis.home`, so queued jobs are not
@@ -99,7 +99,7 @@ expand the published schema at one site. Completed artifacts that no longer
 match the selected feature contract are requeued automatically during
 status/recovery/publish checks, and per-image deduplication only reuses stored
 assets whose artifact path still exists and satisfies that same contract.
-Running items without any active dsJob are also returned to `pending`, so a
+Running items without any active dsHPC job are also returned to `pending`, so a
 worker crash or package reinstall cannot leave a generation permanently stuck.
 
 ## Server Methods
@@ -121,5 +121,5 @@ Legacy `radiomics*DS` aliases remain available for development compatibility.
 ## Architecture
 
 See [`CLINICAL_IMAGING_ARCHITECTURE.md`](CLINICAL_IMAGING_ARCHITECTURE.md) for
-the full package structure, boundaries with `dsJobs`/`dsHPC`, feature plan, and
+the full package structure, boundaries with `dsHPC`, feature plan, and
 validation strategy.

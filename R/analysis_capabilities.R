@@ -15,7 +15,7 @@ imagingCapabilitiesDS <- function() {
     models = tryCatch(list_installed_models(), error = function(e) data.frame()),
     envs = tryCatch(list_imaging_analysis_envs(), error = function(e) data.frame()),
     runners = tryCatch(.imaging_runner_health(), error = function(e) data.frame()),
-    scheduler = tryCatch(dsJobs::jobSchedulerStatusDS(), error = function(e) list(error = conditionMessage(e))),
+    scheduler = tryCatch(dsHPC::hpcSchedulerStatusDS(), error = function(e) list(error = conditionMessage(e))),
     onload_errors = .dsimaging_env$onload_errors %||% character(0),
     admin_enabled = .radiomics_admin_enabled()
   )
@@ -23,7 +23,7 @@ imagingCapabilitiesDS <- function() {
 
 #' Install a Segmentation Model (admin only)
 #'
-#' DataSHIELD AGGREGATE method. Protected by dsjobs.admin_key.
+#' DataSHIELD AGGREGATE method. Protected by dshpc.admin_key.
 #' Downloads model weights to the server.
 #'
 #' @param admin_key_encoded Character; B64-encoded admin key.
@@ -55,22 +55,22 @@ imagingListModelsDS <- function() {
   list_installed_models()
 }
 
-# --- Admin verification (reuses dsjobs.admin_key) ---
+# --- Admin verification (reuses dshpc.admin_key) ---
 
 #' @keywords internal
 .radiomics_admin_enabled <- function() {
-  key <- .dsj_option_safe("admin_key")
+  key <- .dshpc_option_safe("admin_key")
   !is.null(key) && nzchar(key)
 }
 
 #' @keywords internal
 .verify_radiomics_admin <- function(admin_key_encoded) {
-  expected <- .dsj_option_safe("admin_key")
+  expected <- .dshpc_option_safe("admin_key")
 
   if (is.null(expected) || !nzchar(expected))
-    stop("Admin access is not enabled. Set dsjobs.admin_key option.", call. = FALSE)
+    stop("Admin access is not enabled. Set dshpc.admin_key option.", call. = FALSE)
 
-  # Decode the same URL-safe B64 JSON transport used by dsJobsClient.
+  # Decode the same URL-safe B64 JSON transport used by dsHPCClient.
   decoded <- tryCatch({
     parsed <- .dsr_decode(admin_key_encoded)
     if (is.list(parsed)) parsed$.admin_key else parsed
@@ -82,15 +82,15 @@ imagingListModelsDS <- function() {
     stop("Access denied: invalid admin_key.", call. = FALSE)
 }
 
-#' Read dsjobs option safely (dsImaging doesn't import dsJobs)
+#' Read dshpc option safely (dsImaging doesn't import dsHPC)
 #' @keywords internal
-.dsj_option_safe <- function(name) {
-  value <- getOption(paste0("dsjobs.", name), NULL)
+.dshpc_option_safe <- function(name) {
+  value <- getOption(paste0("dshpc.", name), NULL)
   if (!is.null(value)) return(value)
-  value <- getOption(paste0("default.dsjobs.", name), NULL)
+  value <- getOption(paste0("default.dshpc.", name), NULL)
   if (!is.null(value)) return(value)
 
-  env_name <- paste0("DSJOBS_", toupper(gsub("[^A-Za-z0-9]+", "_", name)))
+  env_name <- paste0("DSHPC_", toupper(gsub("[^A-Za-z0-9]+", "_", name)))
   env_value <- Sys.getenv(env_name, unset = NA_character_)
   if (!is.na(env_value) && nzchar(env_value)) return(env_value)
 

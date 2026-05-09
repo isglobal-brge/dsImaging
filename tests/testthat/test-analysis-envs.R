@@ -16,10 +16,10 @@ test_that("runner health includes clinical imaging analysis runners", {
 })
 
 test_that("radiomics runners declare scheduler resources", {
-  home <- tempfile("dsjobs_home")
+  home <- tempfile("dshpc_home")
   imaging_home <- tempfile("dsimaging_home")
   dir.create(file.path(home, "runners"), recursive = TRUE)
-  withr::local_options(list(dsjobs.home = home,
+  withr::local_options(list(dshpc.home = home,
     dsimaging.analysis.home = imaging_home))
   on.exit(unlink(c(home, imaging_home), recursive = TRUE), add = TRUE)
 
@@ -44,11 +44,11 @@ test_that("radiomics runners declare scheduler resources", {
 })
 
 test_that("radiomics runners can declare containerized execution metadata", {
-  home <- tempfile("dsjobs_home")
+  home <- tempfile("dshpc_home")
   imaging_home <- tempfile("dsimaging_home")
   dir.create(file.path(home, "runners"), recursive = TRUE)
   withr::local_options(list(
-    dsjobs.home = home,
+    dshpc.home = home,
     dsimaging.analysis.home = imaging_home,
     dsimaging.container_images = list(
       pyradiomics_extract = "ghcr.io/isglobal-brge/dsimaging-runner:test"

@@ -187,9 +187,9 @@ imagingDeduplicateDS <- function(dataset_id, derivation_hash) {
   )
 }
 
-#' Register a Derived Asset (called by dsJobs publisher plugin)
+#' Register a Derived Asset (called by dsHPC publisher plugin)
 #'
-#' NOT a DataSHIELD method -- called server-side by the dsJobs publisher
+#' NOT a DataSHIELD method -- called server-side by the dsHPC publisher
 #' plugin for imaging assets.
 #'
 #' @param dataset_id Character.

@@ -6,7 +6,7 @@ asset lineage, segmentation masks, radiomics profiles, model registries, and the
 domain runners needed to transform images into analysis-ready assets.
 
 Heavy computation is not implemented as direct R calls. `dsImaging` declares
-allowlisted runners and publishers; `dsJobs` (future product name `dsHPC`) owns
+allowlisted runners and publishers; `dsHPC` owns
 scheduling, quotas, containers, GPU/resource policy, external/HPC backends, and
 durable execution.
 
@@ -14,7 +14,7 @@ durable execution.
 
 | Package | Responsibility |
 | --- | --- |
-| `dsJobs` / `dsHPC` | Durable job and pipeline runtime, shared scheduler state, adaptive resource limits, backend execution, container/GPU policy, result references. |
+| `dsHPC` | Durable job and pipeline runtime, shared scheduler state, adaptive resource limits, backend execution, container/GPU policy, result references. |
 | `dsImaging` | Server-side imaging domain package: manifests, backends, catalog, masks, segmentation, radiomics, derived imaging assets, runner registration, publishers. |
 | `dsImagingClient` | User-facing client DSL: dataset/catalog queries, segmenter/profile constructors, workflow submission, collection status/publish helpers. |
 | `dsimaging-store` | Optional data-store/controller layer that prepares and publishes image collections as manifest-backed datasets consumable by `dsImaging`. |
@@ -33,10 +33,10 @@ The package is organized around stable responsibilities:
 | Storage/backends | `backend*.R`, `registry.R`, `manifest.R`, `resource_client.R`, `interface.R` | Resolve file/S3 datasets, parse manifests, expose DataSHIELD-safe dataset metadata and backend handles. |
 | Asset catalog | `asset_db.R`, `assets_interface.R` | Store immutable derived assets, aliases, lineage, generations, per-sample status, derivation hashes, and content hashes. |
 | Analysis options | `analysis_options.R` | Read `dsimaging.*` and `dsimaging.analysis.*` options with legacy fallback. |
-| Runner registration | `analysis_runners.R`, `inst/python/*`, `inst/runners/*` | Register segmentation/radiomics runners in `DSJOBS_HOME/runners` on package load. |
+| Runner registration | `analysis_runners.R`, `inst/python/*`, `inst/runners/*` | Register segmentation/radiomics runners in `DSHPC_HOME/runners` on package load. |
 | Profiles/models | `analysis_profiles.R`, `analysis_model_registry.R`, `analysis_install_models.R`, `inst/profiles/*` | Manage bundled radiomics profiles and admin-installed segmentation model metadata. |
 | Orchestration | `analysis_orchestrator.R` | DataSHIELD aggregate methods for per-image collection scans, submission, status sync, publication, and mask validation. |
-| Publishers | `analysis_publish_hooks.R` | dsJobs publisher hooks that register feature tables, mask roots, and per-image results as first-class imaging assets. |
+| Publishers | `analysis_publish_hooks.R` | dsHPC publisher hooks that register feature tables, mask roots, and per-image results as first-class imaging assets. |
 | Capabilities/admin | `analysis_capabilities.R` | Health, runner, model, profile, scheduler, and admin-visible capability reporting. |
 | Compatibility | `analysis_aliases.R` | Legacy `radiomics*DS` server method wrappers while clients migrate to `imaging*DS`. |
 
@@ -66,8 +66,8 @@ On package load, `dsImaging` should be self-registering:
 
 1. Register the imaging resource resolver.
 2. Prepare the asset DB path when possible.
-3. Write dsJobs runner YAML files for bundled image-analysis runners.
-4. Register dsJobs publishers for generic imaging assets and radiomics outputs.
+3. Write dsHPC runner YAML files for bundled image-analysis runners.
+4. Register dsHPC publishers for generic imaging assets and radiomics outputs.
 5. Record load-time issues in `imagingCapabilitiesDS()` instead of failing
    silently.
 
@@ -93,11 +93,11 @@ loading `dsImaging` is enough to expose domain runners to the shared job runtime
 | `resources.optional_gpus` | GPU use when available, without requiring GPU in every Rock. |
 | `resources.max_concurrent` | Runner-level local concurrency cap. |
 | `resources.concurrency_group` | Shared pressure group, e.g. heavy torch segmenters. |
-| `container` | Optional image/runtime/pull policy interpreted by dsJobs. |
+| `container` | Optional image/runtime/pull policy interpreted by dsHPC. |
 
-The shared scheduler belongs to `dsJobs`/`dsHPC`. Multiple Rocks or R sessions on
+The shared scheduler belongs to `dsHPC`. Multiple Rocks or R sessions on
 the same scheduler home should contribute to one shared job state, not isolated
-queues. External HPC units are reached through dsJobs backends and path mappings,
+queues. External HPC units are reached through dsHPC backends and path mappings,
 while `dsImaging` keeps ownership of the domain inputs/outputs and asset
 publication.
 
@@ -108,7 +108,7 @@ Implemented server-side capabilities:
 | Capability | Status |
 | --- | --- |
 | Existing mask asset use | Implemented. |
-| DICOM series conversion | Implemented as a dsJobs runner with dcm2niix/SimpleITK paths. |
+| DICOM series conversion | Implemented as a dsHPC runner with dcm2niix/SimpleITK paths. |
 | Image preprocessing | Implemented for resampling, normalization, clamping, and float32 casting. |
 | Lightweight CT lung threshold segmenter | Implemented for demos/QC. |
 | LungMask runner | Registered; requires Python deps/model cache. |
@@ -133,7 +133,7 @@ families under one package namespace:
 | Dataset ingestion | File/S3 manifests, `dsimaging-store` manifest consumption, content hash indexes, sample manifests, labels, multi-root datasets. |
 | Format support | NIfTI, NRRD, MHA/MHD, DICOM series, DICOM SEG, RTSTRUCT/RTDOSE/RTPLAN references, PNG/JPEG masks for 2D workflows. |
 | Preprocessing | DICOM-to-NIfTI conversion hooks, resampling, intensity normalization, clamping/windowing, float32 casting; orientation canonicalization, cropping, bias correction, and registration are extension runner targets. |
-| Segmentation | Existing masks, CT threshold, LungMask, TotalSegmentator, nnU-Net, MONAI bundles, multi-label masks, ROI selection, and mask post-processing; external/custom runner registration is handled through dsJobs runner YAML. |
+| Segmentation | Existing masks, CT threshold, LungMask, TotalSegmentator, nnU-Net, MONAI bundles, multi-label masks, ROI selection, and mask post-processing; external/custom runner registration is handled through dsHPC runner YAML. |
 | Mask/ROI operations | Label selection, binary extraction, union/intersection/difference, connected components, morphology, resampling-to-image; contour/RTSTRUCT conversion remains an extension runner target. |
 | Radiomics | IBSI PyRadiomics profiles, lightweight demo profiles, Aerts signature profile, force-2D, voxel maps, selected features, profile registry, reproducibility metadata. |
 | Derived analytics | Feature tables, embeddings, image-level QC metrics, mask volumes/shape summaries, thumbnails/overlays as non-disclosive QC artifacts where allowed. |
@@ -193,7 +193,7 @@ All regular configuration must be expressible as R/DataSHIELD options:
   `dsimaging.analysis.container_image`,
   `dsimaging.analysis.container_runtime`,
   `dsimaging.analysis.container_pull`.
-- Compute runtime: `dsjobs.*` options for shared scheduler state, executor
+- Compute runtime: `dshpc.*` options for shared scheduler state, executor
   backend, containers, GPU discovery, quotas, and path mappings.
 
 Defaults should be adaptive and conservative. Admins should tune options, not
@@ -206,7 +206,7 @@ Minimum validation before a release:
 1. Unit tests for manifest parsing, asset catalog, model/profile registries,
    runner registration, and option fallback.
 2. Load-time smoke test verifying runner YAMLs are written to a temporary
-   `dsjobs.home`.
+   `dshpc.home`.
 3. Python compile checks for all bundled runner scripts and compatibility
    wrappers.
 4. Package checks for `dsImaging` and `dsImagingClient`.
@@ -215,7 +215,7 @@ Minimum validation before a release:
 6. Multi-site simulation by running the same workflow sequentially over three
    Opal/Rock sites, validating independent derived assets and combined client
    reporting.
-7. External/HPC simulation with dsJobs container or external backend path
+7. External/HPC simulation with dsHPC container or external backend path
    mappings, proving that the source Rock can submit work to a scheduler unit
    that has different CPU/GPU capabilities.
 
@@ -228,4 +228,4 @@ that can broaden coverage without changing the public design are:
   reduce compatibility.
 - Add RTSTRUCT/SEG contour conversion helpers.
 - Add an external backend demo that verifies path mapping and GPU capability
-  discovery through dsJobs.
+  discovery through dsHPC.

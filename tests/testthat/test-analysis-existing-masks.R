@@ -89,11 +89,11 @@ test_that("S3 mask resolution falls back to common mask filename stems", {
   expect_equal(uri, "s3://imaging-data/datasets/lung/source/masks/case001_GTV-1.nii.gz")
 })
 
-test_that("S3 mask staging downloads into the dsJobs staging area", {
+test_that("S3 mask staging downloads into the dsHPC staging area", {
   backend <- structure(list(type = "s3", config = list()),
     class = "dsimaging_backend")
-  home <- tempfile("dsjobs-home")
-  withr::local_options(list(dsjobs.home = home, default.dsjobs.home = home))
+  home <- tempfile("dshpc-home")
+  withr::local_options(list(dshpc.home = home, default.dshpc.home = home))
 
   testthat::local_mocked_bindings(
     backend_get_file = function(backend, uri, dest, overwrite = FALSE) {

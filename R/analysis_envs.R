@@ -53,7 +53,7 @@ list_imaging_analysis_envs <- function() {
 
 #' @keywords internal
 .imaging_runner_health <- function() {
-  home <- getOption("dsjobs.home", getOption("default.dsjobs.home", "/srv/dsjobs"))
+  home <- getOption("dshpc.home", getOption("default.dshpc.home", "/srv/dshpc"))
   runners_dir <- file.path(home, "runners")
   expected <- c("pyradiomics_extract", "lungmask_infer",
                 "ct_lung_threshold",
