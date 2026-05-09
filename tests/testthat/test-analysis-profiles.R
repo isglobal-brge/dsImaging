@@ -24,6 +24,8 @@ test_that("Aerts signature profile is available", {
   expect_equal(p$setting$binWidth, 25)
   expect_false(p$setting$normalize)
   expect_true(is.null(p$setting$resampledPixelSpacing))
+  expect_true(p$setting$preCrop)
+  expect_equal(p$setting$padDistance, 5)
   expect_equal(p$featureClass$firstorder, "Energy")
   expect_equal(p$featureClass$shape, "Compactness1")
   expect_equal(p$featureClass$glrlm, "RunLengthNonUniformity")

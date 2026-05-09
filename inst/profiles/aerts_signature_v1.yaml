@@ -6,6 +6,8 @@ setting:
   force2D: false
   label: 1
   geometryTolerance: 1e-6
+  preCrop: true
+  padDistance: 5
   additionalInfo: true
 
 featureClass:
