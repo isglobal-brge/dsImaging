@@ -1102,20 +1102,23 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 #' @keywords internal
 .sync_active_jobs <- function(generation_id) {
   items <- get_generation_items(generation_id)
-  pending_items <- items[items$status %in% c("pending", "claimed", "running"), ,
-                         drop = FALSE]
+  pending_items <- items[items$status %in% c("pending", "claimed", "running",
+                                             "failed"), , drop = FALSE]
   if (nrow(pending_items) == 0) return(invisible(NULL))
 
   active_jobs <- dsJobs::query_jobs_by_tag(paste0("%", generation_id, "%"),
     states = c("PENDING", "RUNNING"))
   if (nrow(active_jobs) == 0) return(invisible(NULL))
 
+  changed <- FALSE
   for (i in seq_len(nrow(active_jobs))) {
     tags <- strsplit(active_jobs$tags[i], ",", fixed = TRUE)[[1]]
     sid <- .sample_id_from_tags(tags, pending_items$sample_id)
     if (is.null(sid)) next
     record_item_status(generation_id, sid, "running")
+    changed <- TRUE
   }
+  if (isTRUE(changed)) reconcile_generation_counters(generation_id)
   invisible(NULL)
 }
 

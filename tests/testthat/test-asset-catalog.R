@@ -281,6 +281,34 @@ test_that("active dsJobs prevent stale claimed items from being duplicated", {
   expect_equal(item$status, "running")
 })
 
+test_that("active retry jobs override previous failed item state", {
+  asset_db <- tempfile(fileext = ".sqlite")
+  home <- tempfile("dsjobs-home")
+  dir.create(home, recursive = TRUE, showWarnings = FALSE)
+  on.exit(unlink(c(asset_db, home), recursive = TRUE))
+  withr::local_options(list(dsimaging.asset_db = asset_db, dsjobs.home = home))
+
+  gen <- claim_or_reuse_generation("lung", "radiomics_collection",
+    "hash_active_retry", owner_id = "tester", expected_n = 1L)$generation_id
+  complete_item_atomic(gen, "sample_a", "failed", error = "old failure")
+
+  db <- dsJobs:::.db_connect()
+  on.exit(dsJobs:::.db_close(db), add = TRUE)
+  spec <- list(
+    label = "dsImaging_image",
+    tags = c("per_image", "lung", "sample_a", gen),
+    steps = list(list(type = "emit", plane = "session",
+      output_name = "x", value = 1))
+  )
+  dsJobs:::.store_create_job(db, "job_retry_sample", "tester", spec, 1L)
+
+  dsImaging:::.sync_generation_jobs(gen)
+
+  item <- get_generation_items(gen)
+  expect_equal(item$status, "running")
+  expect_equal(get_generation(gen)$failed_n, 0L)
+})
+
 test_that("generation cancellation is admin-gated and cancels tagged jobs", {
   asset_db <- tempfile(fileext = ".sqlite")
   home <- tempfile("dsjobs-home")
