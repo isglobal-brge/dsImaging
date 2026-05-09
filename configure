@@ -1,36 +1,34 @@
 #!/bin/sh
-# dsImaging post-install configuration script
-# Runs automatically during R CMD INSTALL on Unix systems.
+# dsImaging post-install configuration script.
 #
-# Creates a minimal Python venv for dsImaging utilities (fingerprinting).
-# Only stdlib is needed -- no pip deps. Just Python itself.
-#
-# Self-contained: downloads uv if not present, uv installs Python.
+# Runs automatically during R CMD INSTALL on Unix systems. It prepares the
+# package state directory, a small utility Python venv, and best-effort analysis
+# venvs for radiomics and segmentation runners. Model weights are not
+# downloaded here; admins install/register those separately.
 
-VENV_ROOT="${DSIMAGING_VENV_ROOT:-/var/lib/dsimaging}"
+STATE_ROOT="${DSIMAGING_STATE_ROOT:-${DSIMAGING_DATA_DIR:-/var/lib/dsimaging}}"
+UTILITY_VENV="${DSIMAGING_UTILITY_VENV:-${STATE_ROOT}/venv}"
+ANALYSIS_VENV_ROOT="${DSIMAGING_ANALYSIS_VENV_ROOT:-/var/lib/dsimaging/venvs}"
 LOG_PREFIX="[dsImaging configure]"
 
 log_info() { echo "${LOG_PREFIX} $*"; }
 log_warn() { echo "${LOG_PREFIX} WARNING: $*" >&2; }
+check_import() { "$1" -c "import $2" 2>/dev/null; }
 
 ensure_state_dir() {
-  log_info "Preparing state directory: ${VENV_ROOT}"
-  mkdir -p "${VENV_ROOT}" 2>/dev/null || {
-    log_warn "Cannot create ${VENV_ROOT}. Will retry at runtime."
+  log_info "Preparing state directory: ${STATE_ROOT}"
+  mkdir -p "${STATE_ROOT}" 2>/dev/null || {
+    log_warn "Cannot create ${STATE_ROOT}. Will retry at runtime."
     return 1
   }
-  chmod 777 "${VENV_ROOT}" 2>/dev/null || true
-  for _f in "${VENV_ROOT}/imaging_assets.sqlite" \
-            "${VENV_ROOT}/imaging_assets.sqlite-wal" \
-            "${VENV_ROOT}/imaging_assets.sqlite-shm"; do
+  chmod 777 "${STATE_ROOT}" 2>/dev/null || true
+  for _f in "${STATE_ROOT}/imaging_assets.sqlite" \
+            "${STATE_ROOT}/imaging_assets.sqlite-wal" \
+            "${STATE_ROOT}/imaging_assets.sqlite-shm"; do
     if [ -e "${_f}" ]; then chmod 666 "${_f}" 2>/dev/null || true; fi
   done
   return 0
 }
-
-# ---------------------------------------------------------------------------
-# Bootstrap: ensure uv + Python
-# ---------------------------------------------------------------------------
 
 ensure_uv() {
   UV="$(command -v uv 2>/dev/null || true)"
@@ -41,7 +39,6 @@ ensure_uv() {
   done
 
   log_info "Downloading uv..."
-
   if command -v curl >/dev/null 2>&1; then
     _DL="curl -LsSf"
   elif command -v wget >/dev/null 2>&1; then
@@ -70,52 +67,184 @@ ensure_uv() {
   return 1
 }
 
-ensure_python_venv() {
-  local venv_path="${VENV_ROOT}/venv"
-
-  if [ -d "${venv_path}" ] && [ -x "${venv_path}/bin/python" ]; then
-    log_info "Python venv: OK (cached)"
-    return 0
-  fi
-
+ensure_python() {
   if [ -z "${UV}" ] || [ ! -x "${UV}" ]; then
-    log_warn "No uv. Cannot create Python venv."
+    log_warn "No uv. Cannot provision Python."
     return 1
   fi
 
-  log_info "Creating Python venv..."
-  mkdir -p "${VENV_ROOT}" 2>/dev/null || {
-    log_warn "Cannot create ${VENV_ROOT}. Skipping."
-    return 1
-  }
-
-  rm -rf "${venv_path}"
-  "${UV}" venv --python 3.11 --quiet "${venv_path}" 2>&1
-
-  if [ -x "${venv_path}/bin/python" ]; then
-    log_info "Python venv ready: ${venv_path}/bin/python"
-    log_info "  $("${venv_path}/bin/python" --version 2>&1)"
+  PYTHON="$("${UV}" python find 3.11 2>/dev/null || true)"
+  if [ -n "${PYTHON}" ] && [ -x "${PYTHON}" ]; then
+    log_info "Python: ${PYTHON} ($("${PYTHON}" --version 2>&1 | head -1))"
     return 0
   fi
 
-  log_warn "Failed to create Python venv."
+  log_info "Installing Python 3.11 via uv..."
+  "${UV}" python install 3.11 --quiet 2>&1 || true
+  PYTHON="$("${UV}" python find 3.11 2>/dev/null || true)"
+  if [ -n "${PYTHON}" ] && [ -x "${PYTHON}" ]; then
+    log_info "Python installed: ${PYTHON} ($("${PYTHON}" --version 2>&1 | head -1))"
+    return 0
+  fi
+
+  log_warn "Failed to install Python via uv."
   return 1
 }
 
-# ---------------------------------------------------------------------------
-# Ensure R dependencies (resourcer, aws.s3) are installed
-# ---------------------------------------------------------------------------
-
-ensure_r_deps() {
-  log_info "Checking R dependencies..."
-  # Determine Rock's library path
-  ROCK_LIB="/var/lib/rock/R/library"
-  if [ ! -d "${ROCK_LIB}" ]; then
-    ROCK_LIB=""  # not on Rock, skip
+ensure_utility_venv() {
+  if [ -d "${UTILITY_VENV}" ] && [ -x "${UTILITY_VENV}/bin/python" ]; then
+    log_info "Utility Python venv: OK (cached)"
     return 0
   fi
 
-  for pkg in DBI RSQLite digest yaml jsonlite resourcer R6 aws.s3 arrow; do
+  mkdir -p "$(dirname "${UTILITY_VENV}")" 2>/dev/null || {
+    log_warn "Cannot create utility venv parent."
+    return 1
+  }
+
+  log_info "Creating utility Python venv: ${UTILITY_VENV}"
+  rm -rf "${UTILITY_VENV}"
+  "${UV}" venv --python "${PYTHON}" --quiet "${UTILITY_VENV}" 2>&1 || true
+  if [ -x "${UTILITY_VENV}/bin/python" ]; then
+    log_info "Utility Python ready: ${UTILITY_VENV}/bin/python"
+    return 0
+  fi
+
+  log_warn "Failed to create utility Python venv."
+  return 1
+}
+
+create_analysis_venv() {
+  name="$1"
+  venv_path="${ANALYSIS_VENV_ROOT}/${name}"
+  if [ -d "${venv_path}" ] && [ -x "${venv_path}/bin/python" ]; then
+    return 0
+  fi
+  log_info "  ${name}: creating venv..."
+  rm -rf "${venv_path}"
+  "${UV}" venv --python "${PYTHON}" --seed "${venv_path}" >/dev/null 2>&1 || return 1
+}
+
+install_analysis_deps() {
+  name="$1"; shift
+  venv_python="${ANALYSIS_VENV_ROOT}/${name}/bin/python"
+  log_info "  ${name}: installing $*"
+  "${UV}" pip install --python "${venv_python}" --quiet "$@" 2>&1 | tail -5
+}
+
+mark_analysis_ready() {
+  name="$1"
+  marker="${ANALYSIS_VENV_ROOT}/${name}/.dsimaging_ready"
+  echo "ready" > "${marker}"
+}
+
+provision_framework() {
+  name="$1"; module="$2"; shift 2
+  venv_path="${ANALYSIS_VENV_ROOT}/${name}"
+
+  if [ -f "${venv_path}/.dsimaging_ready" ] &&
+     check_import "${venv_path}/bin/python" "${module}" 2>/dev/null; then
+    log_info "  ${name}: OK (cached)"
+    return 0
+  fi
+
+  create_analysis_venv "${name}" || {
+    log_warn "  ${name}: venv failed."
+    return 0
+  }
+
+  install_analysis_deps "${name}" "$@" || {
+    log_warn "  ${name}: dependency install failed."
+    rm -rf "${venv_path}"
+    return 0
+  }
+
+  if check_import "${venv_path}/bin/python" "${module}"; then
+    mark_analysis_ready "${name}"
+    log_info "  ${name}: ready."
+  else
+    log_warn "  ${name}: import ${module} failed."
+    rm -rf "${venv_path}"
+  fi
+}
+
+provision_radiomics() {
+  name="radiomics"
+  venv_path="${ANALYSIS_VENV_ROOT}/${name}"
+  if [ -f "${venv_path}/.dsimaging_ready" ] &&
+     check_import "${venv_path}/bin/python" "radiomics" 2>/dev/null; then
+    log_info "  radiomics: OK (cached)"
+    return 0
+  fi
+
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq 2>/dev/null &&
+      apt-get install -y -qq build-essential python3-dev git 2>/dev/null || true
+  fi
+
+  create_analysis_venv "${name}" || {
+    log_warn "  radiomics: venv failed."
+    return 0
+  }
+
+  install_analysis_deps "${name}" numpy setuptools setuptools-scm wheel \
+    scikit-build-core cmake || true
+
+  log_info "  radiomics: installing PyRadiomics stack..."
+  "${UV}" pip install --python "${venv_path}/bin/python" --no-build-isolation \
+    "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git" \
+    SimpleITK pandas pyyaml pyarrow 2>&1 | tail -5
+
+  if check_import "${venv_path}/bin/python" "radiomics"; then
+    mark_analysis_ready "${name}"
+    log_info "  radiomics: ready."
+  else
+    log_warn "  radiomics: install failed."
+    rm -rf "${venv_path}"
+  fi
+}
+
+provision_analysis_envs() {
+  if [ "${DSIMAGING_SKIP_ANALYSIS_PROVISION:-0}" = "1" ]; then
+    log_info "DSIMAGING_SKIP_ANALYSIS_PROVISION=1 set; skipping analysis envs."
+    return 0
+  fi
+  if [ -n "${_R_CHECK_PACKAGE_NAME_}" ]; then
+    log_info "R CMD check detected; skipping analysis env provisioning."
+    return 0
+  fi
+
+  mkdir -p "${ANALYSIS_VENV_ROOT}" 2>/dev/null || {
+    log_warn "Cannot create ${ANALYSIS_VENV_ROOT}. Analysis runners can still use containers."
+    return 0
+  }
+  chmod 777 "${ANALYSIS_VENV_ROOT}" 2>/dev/null || true
+
+  log_info "Provisioning analysis Python environments in ${ANALYSIS_VENV_ROOT}"
+  log_info "Frameworks are best-effort; model weights are installed separately."
+
+  provision_radiomics
+
+  if [ "${DSIMAGING_SKIP_HEAVY_PROVISION:-0}" = "1" ]; then
+    log_info "DSIMAGING_SKIP_HEAVY_PROVISION=1 set; skipping torch-heavy envs."
+    return 0
+  fi
+
+  provision_framework "seg_totalseg" "totalsegmentator" \
+    "TotalSegmentator>=2.0.0" "torch>=2.0.0" "SimpleITK>=2.0.0" "nibabel>=4.0.0"
+  provision_framework "seg_lungmask" "lungmask" \
+    "lungmask>=0.2.0" "torch>=2.0.0" "SimpleITK>=2.0.0" "nibabel>=4.0.0"
+  provision_framework "seg_nnunetv2" "nnunetv2" \
+    "nnunetv2>=2.0.0" "torch>=2.0.0" "SimpleITK>=2.0.0" "nibabel>=4.0.0"
+  provision_framework "seg_monai" "monai" \
+    "monai>=1.3.0" "torch>=2.0.0" "SimpleITK>=2.0.0" "nibabel>=4.0.0" "pyyaml>=5.0"
+}
+
+ensure_r_deps() {
+  log_info "Checking R dependencies..."
+  ROCK_LIB="/var/lib/rock/R/library"
+  if [ ! -d "${ROCK_LIB}" ]; then return 0; fi
+  for pkg in DBI RSQLite digest yaml jsonlite resourcer R6 aws.s3 arrow processx; do
     Rscript --vanilla -e "
       if (!requireNamespace('${pkg}', quietly=TRUE, lib.loc='${ROCK_LIB}')) {
         cat('Installing ${pkg}...\n')
@@ -126,10 +255,6 @@ ensure_r_deps() {
   log_info "R dependencies OK"
 }
 
-# ---------------------------------------------------------------------------
-# Register dsImaging resolver in Rserve profile (Rock only)
-# ---------------------------------------------------------------------------
-
 ensure_rprofile() {
   RPROFILE="/srv/conf/Rprofile.R"
   if [ ! -f "${RPROFILE}" ]; then return 0; fi
@@ -138,15 +263,11 @@ ensure_rprofile() {
   log_info "Adding dsImaging resolver to Rserve profile..."
   cat >> "${RPROFILE}" << 'REOF'
 
-# dsImaging: register resource resolver for imaging+dataset:// URLs
+# dsImaging: register resource resolver and runner publishers.
 tryCatch(loadNamespace("dsImaging"), error = function(e) NULL)
 REOF
   log_info "Rserve profile updated"
 }
-
-# ---------------------------------------------------------------------------
-# Fix Python permissions (Rock runs as non-root 'rock' user)
-# ---------------------------------------------------------------------------
 
 fix_python_permissions() {
   if [ -d "/root/.local/share/uv/python" ]; then
@@ -156,20 +277,20 @@ fix_python_permissions() {
   fi
 }
 
-# --- Run ---
-
 ensure_state_dir
 ensure_r_deps
 ensure_uv || {
   log_warn "uv not available. dsImaging will try to provision Python at runtime."
+  ensure_rprofile
   exit 0
 }
-
-ensure_python_venv || {
-  log_warn "Python venv not created. dsImaging will try at runtime."
+ensure_python || {
+  log_warn "Python not available. Analysis runners can still use containers."
+  ensure_rprofile
   exit 0
 }
-
+ensure_utility_venv || true
+provision_analysis_envs || true
 fix_python_permissions
 ensure_rprofile
 log_info "dsImaging setup complete."

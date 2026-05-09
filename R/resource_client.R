@@ -76,14 +76,20 @@ ImagingDatasetResourceClient <- R6::R6Class(
     }
   ),
   public = list(
+    #' @description Create and resolve an imaging dataset resource client.
+    #' @param resource Resource object.
     initialize = function(resource) {
       super$initialize(resource)
       private$.resolve()
     },
+    #' @description Return the parsed imaging manifest.
     getManifest = function() private$.manifest,
+    #' @description Return the dataset identifier.
     getDatasetId = function() private$.dataset_id,
+    #' @description Return the resolved storage backend.
     getBackend = function() private$.backend,
 
+    #' @description Load the manifest metadata table as a data frame.
     asDataFrame = function() {
       meta <- private$.manifest$metadata
       if (is.null(meta) || is.null(meta$uri))
@@ -107,6 +113,7 @@ ImagingDatasetResourceClient <- R6::R6Class(
       utils::read.csv(local_path, stringsAsFactors = FALSE)
     },
 
+    #' @description Convert the manifest to an imaging dataset descriptor.
     asImagingDescriptor = function() {
       imaging_dataset_descriptor(private$.manifest)
     }
@@ -116,7 +123,8 @@ ImagingDatasetResourceClient <- R6::R6Class(
 #' Parse an imaging+dataset:// URL
 #'
 #' Supports two formats:
-#'   Clean: imaging+dataset://host:port/bucket/datasets/collection[@region]
+#'   Clean: imaging+dataset://host:port/bucket/datasets/collection with an
+#'   optional `@region` suffix.
 #'   Legacy: imaging+dataset://dataset_id?endpoint=...&bucket=...&prefix=...
 #' @keywords internal
 .parse_imaging_url <- function(url) {

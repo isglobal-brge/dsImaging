@@ -91,7 +91,7 @@ imagingInitDS <- function(resource_symbol) {
 
 #' Get the storage backend from an imaging handle
 #'
-#' Used by dsRadiomics to access S3/MinIO for dataset images.
+#' Used by imaging analysis runners to access S3/MinIO dataset images.
 #' The backend is stored when imagingInitDS creates the handle.
 #'
 #' @param handle_symbol Character; the symbol name of the imaging handle.
@@ -307,7 +307,13 @@ imagingMasksDS <- function(handle_symbol) {
   # If dsFlower is loaded, also consider its trust profile minimum
   if (requireNamespace("dsFlower", quietly = TRUE)) {
     tryCatch({
-      trust <- tryCatch(dsFlower::flowerTrustProfile(), error = function(e) NULL)
+      trust_fn <- tryCatch(get("flowerTrustProfile",
+        envir = asNamespace("dsFlower")), error = function(e) NULL)
+      trust <- if (is.function(trust_fn)) {
+        tryCatch(trust_fn(), error = function(e) NULL)
+      } else {
+        NULL
+      }
       if (is.null(trust)) trust <- list(min_train_rows = 0)
       nfilter <- max(nfilter, trust$min_train_rows)
     }, error = function(e) NULL)

@@ -110,7 +110,7 @@ imagingLineageDS <- function(asset_id) {
 #' Check if a Derivation Already Exists (Deduplication)
 #'
 #' DataSHIELD AGGREGATE method. Given a derivation_hash, checks if an
-#' identical asset already exists. Upstream packages (dsRadiomics) use
+#' identical asset already exists. Domain publishers use
 #' this to avoid recomputation.
 #'
 #' @param dataset_id Character; the dataset identifier.
@@ -140,6 +140,8 @@ imagingDeduplicateDS <- function(dataset_id, derivation_hash) {
 #' @param provenance Named list.
 #' @param created_by Character.
 #' @param created_by_job Character or NULL.
+#' @param description Character or NULL; human-readable asset description.
+#' @param storage_backend Character; storage backend label.
 #' @param alias Character or NULL; optional alias to set.
 #' @return Character; the asset_id.
 #' @export

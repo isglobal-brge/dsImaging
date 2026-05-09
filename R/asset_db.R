@@ -416,7 +416,7 @@ find_asset_by_hash <- function(dataset_id, derivation_hash) {
 
 #' Compute a derivation hash from parameters
 #'
-#' Used by dsRadiomics, dsImaging clients to generate a content address
+#' Used by dsImaging clients and domain extensions to generate a content address
 #' for deduplication.
 #'
 #' @param ... Named values to include in the hash.
@@ -440,6 +440,14 @@ compute_derivation_hash <- function(...) {
 #' - RUNNING/PENDING generation exists -> reuse_generation
 #' - Nothing -> create new generation (run_new)
 #'
+#' @param dataset_id Character; dataset identifier.
+#' @param kind Character; derived asset/generation kind.
+#' @param derivation_hash Character; content-addressed derivation hash.
+#' @param visibility Character; visibility label for the generation.
+#' @param owner_id Character or NULL; owner creating the generation.
+#' @param job_id Character or NULL; optional parent job id.
+#' @param expected_n Integer or NULL; expected number of items.
+#' @param spec Named list or NULL; processing specification to persist.
 #' @return Named list with action, asset_id or generation_id.
 #' @export
 claim_or_reuse_generation <- function(dataset_id, kind, derivation_hash,
@@ -510,6 +518,9 @@ claim_or_reuse_generation <- function(dataset_id, kind, derivation_hash,
 }
 
 #' Update generation state
+#'
+#' @param generation_id Character; generation identifier.
+#' @param ... Named fields to update in `asset_generations`.
 #' @export
 update_generation <- function(generation_id, ...) {
   db <- .asset_db_connect()
@@ -550,6 +561,13 @@ increment_generation_counter <- function(generation_id, field, n = 1L) {
 }
 
 #' Record per-sample item status
+#'
+#' @param generation_id Character; generation identifier.
+#' @param sample_id Character; sample identifier.
+#' @param status Character; item status.
+#' @param artifact_relpath Character or NULL; output artifact reference.
+#' @param checksum Character or NULL; artifact checksum.
+#' @param error Character or NULL; failure message.
 #' @export
 record_item_status <- function(generation_id, sample_id, status,
                                 artifact_relpath = NULL, checksum = NULL,
@@ -689,6 +707,9 @@ claim_pending_items <- function(generation_id, n, claimer_id = NULL) {
 }
 
 #' Get generation summary
+#'
+#' @param generation_id Character; generation identifier.
+#' @return Named list or NULL.
 #' @export
 get_generation <- function(generation_id) {
   db <- .asset_db_connect()
@@ -701,6 +722,10 @@ get_generation <- function(generation_id) {
 }
 
 #' Get items for a generation (for resume)
+#'
+#' @param generation_id Character; generation identifier.
+#' @param status Character or NULL; optional status filter.
+#' @return Data frame of generation items.
 #' @export
 get_generation_items <- function(generation_id, status = NULL) {
   db <- .asset_db_connect()
@@ -714,13 +739,10 @@ get_generation_items <- function(generation_id, status = NULL) {
       params = list(generation_id, status))
 }
 
-#' Publish a completed generation as an active asset
-#'
-#' Only if completed_n == expected_n (no partial publishes).
-#'
-#' @return Character; the published asset_id, or NULL if validation fails.
-#' @export
 #' Mark a generation as FAILED (called when the job fails)
+#'
+#' @param generation_id Character; generation identifier.
+#' @param error Character or NULL; failure message.
 #' @export
 fail_generation <- function(generation_id, error = NULL) {
   db <- .asset_db_connect()
@@ -733,6 +755,9 @@ fail_generation <- function(generation_id, error = NULL) {
 }
 
 #' Clean up stale generations (called periodically)
+#'
+#' @param max_age_hours Numeric; age threshold for pending/running generations.
+#' @return Number of rows updated.
 #' @export
 cleanup_stale_generations <- function(max_age_hours = 2) {
   db <- .asset_db_connect()
@@ -748,6 +773,18 @@ cleanup_stale_generations <- function(max_age_hours = 2) {
 }
 
 #' Publish a completed generation as an active asset
+#'
+#' Only if completed_n == expected_n (no partial publishes).
+#'
+#' @param generation_id Character; generation identifier.
+#' @param path_or_root Character; output path or root to register.
+#' @param description Character or NULL; asset description.
+#' @param parent_asset_ids Character vector of parent asset ids.
+#' @param provenance Named list or NULL; provenance metadata.
+#' @param alias Character or NULL; optional alias to promote.
+#' @param publish_backend Backend object or NULL; optional publish target.
+#' @return Character; the published asset_id, or NULL if validation fails.
+#' @export
 publish_generation <- function(generation_id, path_or_root, description = NULL,
                                 parent_asset_ids = character(0),
                                 provenance = NULL, alias = NULL,
@@ -819,6 +856,7 @@ publish_generation <- function(generation_id, path_or_root, description = NULL,
 #'
 #' @param dataset_id Character; the dataset.
 #' @param image_root Character; path to the image directory.
+#' @param compute_content_hash Logical; compute full-file content hashes.
 #' @return Named list: new (character), changed (character),
 #'   unchanged (character), fingerprints (named list of fp strings).
 #' @export
@@ -931,15 +969,6 @@ compute_image_derivation_hash <- function(content_hash = NULL, fingerprint = NUL
   )
 }
 
-#' Store content hashes from a hash index into the local SQLite
-#'
-#' Public API for domain packages (dsRadiomics) that need to persist
-#' content hashes after reading them from an S3 hash index.
-#'
-#' @param dataset_id Character.
-#' @param sample_ids Character vector.
-#' @param content_hashes Character vector (same length as sample_ids).
-#' @export
 #' Get stored content hashes for specific samples
 #'
 #' @param dataset_id Character.
@@ -1015,6 +1044,9 @@ upsert_sample_manifest <- function(dataset_id, sample_id, source_kind,
 }
 
 #' Get a sample manifest
+#'
+#' @param dataset_id Character; dataset identifier.
+#' @param sample_id Character; sample identifier.
 #' @return Named list or NULL.
 #' @export
 get_sample_manifest <- function(dataset_id, sample_id) {
@@ -1035,6 +1067,8 @@ get_sample_manifest <- function(dataset_id, sample_id) {
 #' Resolves from manifest if available, otherwise returns NULL.
 #' Backward-compatible: works with single_file samples.
 #'
+#' @param dataset_id Character; dataset identifier.
+#' @param sample_id Character; sample identifier.
 #' @return Character or NULL.
 #' @export
 get_sample_primary_path <- function(dataset_id, sample_id) {
@@ -1044,6 +1078,8 @@ get_sample_primary_path <- function(dataset_id, sample_id) {
 }
 
 #' List sample manifests for a dataset
+#'
+#' @param dataset_id Character; dataset identifier.
 #' @return Data.frame.
 #' @export
 list_sample_manifests <- function(dataset_id) {
