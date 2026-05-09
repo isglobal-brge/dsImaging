@@ -43,9 +43,9 @@
     plane = "artifact",
     resource_class = "cpu_heavy",
     resources = list(
-      memory_mb = 8192L,
+      memory_mb = 6144L,
       cpu_slots = 2L,
-      max_concurrent = 1L,
+      max_concurrent = 2L,
       concurrency_group = "pyradiomics_cpu"
     ),
     command = "python",

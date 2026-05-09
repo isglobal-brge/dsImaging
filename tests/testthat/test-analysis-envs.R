@@ -22,11 +22,14 @@ test_that("radiomics runners declare scheduler resources", {
   on.exit(unlink(home, recursive = TRUE), add = TRUE)
 
   dsImaging:::.register_radiomics_runners()
+  pyradiomics <- yaml::read_yaml(file.path(home, "runners", "pyradiomics_extract.yml"))
   lungmask <- yaml::read_yaml(file.path(home, "runners", "lungmask_infer.yml"))
   threshold <- yaml::read_yaml(file.path(home, "runners", "ct_lung_threshold.yml"))
   mask_ops <- yaml::read_yaml(file.path(home, "runners", "mask_ops.yml"))
   qc <- yaml::read_yaml(file.path(home, "runners", "imaging_qc_metrics.yml"))
 
+  expect_equal(pyradiomics$resources$memory_mb, 6144L)
+  expect_equal(pyradiomics$resources$max_concurrent, 2L)
   expect_equal(lungmask$resources$max_concurrent, 1L)
   expect_equal(lungmask$resources$concurrency_group, "torch_cpu_heavy")
   expect_equal(threshold$resources$memory_mb, 1024L)
