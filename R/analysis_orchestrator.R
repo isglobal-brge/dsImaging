@@ -1531,7 +1531,7 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 .resolve_profile_path <- function(profile_name) {
   if (is.null(profile_name)) return(NULL)
   # Check inst/profiles/ in dsImaging
-  profiles_dir <- system.file("profiles", package = "dsImaging")
+  profiles_dir <- .stable_imaging_package_dir("profiles")
   if (nzchar(profiles_dir)) {
     candidates <- list.files(profiles_dir, full.names = TRUE)
     for (f in candidates) {

@@ -5,7 +5,7 @@
 #' Register dsImaging runners in DSJOBS_HOME
 #'
 #' Called from .onLoad. Writes runner YAMLs with absolute paths to the
-#' dsImaging venvs and Python scripts.
+#' dsImaging venvs and stable copies of the Python scripts.
 #'
 #' @keywords internal
 .register_imaging_analysis_runners <- function() {
@@ -26,7 +26,7 @@
   tryCatch(Sys.chmod(runners_dir, "0777"), error = function(e) NULL)
 
   venv_root <- .imaging_analysis_option("venv_root", "/var/lib/dsimaging/venvs")
-  scripts_dir <- system.file("python", package = "dsImaging")
+  scripts_dir <- .stable_imaging_package_dir("python")
   if (!nzchar(scripts_dir) || !dir.exists(scripts_dir))
     stop("Cannot locate dsImaging Python runner scripts.", call. = FALSE)
 
@@ -357,6 +357,68 @@
     "--input", "{input_dir}",
     "--output", "{output_dir}"
   )))
+}
+
+#' Materialise bundled runtime files outside the package install directory
+#'
+#' Runner job specs can outlive an R package reinstall. They must therefore not
+#' point directly into `/usr/local/lib/R/site-library/dsImaging` or an install
+#' `00LOCK` directory. Files are copied into a content-addressed stable runtime
+#' directory and never overwritten in place.
+#'
+#' @keywords internal
+.stable_imaging_package_dir <- function(kind) {
+  source_dir <- system.file(kind, package = "dsImaging")
+  if (!nzchar(source_dir) || !dir.exists(source_dir))
+    return(source_dir)
+
+  files <- list.files(source_dir, recursive = TRUE, all.files = FALSE,
+    full.names = TRUE, no.. = TRUE)
+  files <- files[file.info(files)$isdir %in% FALSE]
+  if (length(files) == 0) return(source_dir)
+
+  rel <- sub(paste0("^", normalizePath(source_dir, winslash = "/", mustWork = TRUE),
+                    "/?"),
+    "", normalizePath(files, winslash = "/", mustWork = TRUE))
+  hashes <- vapply(files, digest::digest, character(1), file = TRUE,
+    algo = "sha256")
+  signature <- digest::digest(paste(rel, hashes, sep = "=", collapse = "\n"),
+    algo = "sha256", serialize = FALSE)
+
+  root <- file.path(.imaging_analysis_home(), "runtime", kind, signature)
+  marker <- file.path(root, ".complete")
+  if (file.exists(marker)) return(root)
+
+  tmp <- paste0(root, ".tmp.", Sys.getpid())
+  unlink(tmp, recursive = TRUE, force = TRUE)
+  dir.create(tmp, recursive = TRUE, showWarnings = FALSE)
+  if (!dir.exists(tmp)) return(source_dir)
+
+  ok <- TRUE
+  for (i in seq_along(files)) {
+    dest <- file.path(tmp, rel[i])
+    dir.create(dirname(dest), recursive = TRUE, showWarnings = FALSE)
+    ok <- isTRUE(file.copy(files[i], dest, overwrite = TRUE,
+      copy.mode = TRUE, copy.date = TRUE)) && ok
+  }
+  if (!ok) {
+    unlink(tmp, recursive = TRUE, force = TRUE)
+    return(source_dir)
+  }
+
+  dir.create(dirname(root), recursive = TRUE, showWarnings = FALSE)
+  if (!file.exists(root)) {
+    if (!file.rename(tmp, root)) {
+      unlink(tmp, recursive = TRUE, force = TRUE)
+      return(source_dir)
+    }
+  } else {
+    unlink(tmp, recursive = TRUE, force = TRUE)
+  }
+  writeLines(format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC"),
+    marker)
+  tryCatch(Sys.chmod(root, "0777", use_umask = FALSE), error = function(e) NULL)
+  root
 }
 
 #' Add optional container metadata to a runner configuration.

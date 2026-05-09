@@ -17,9 +17,11 @@ test_that("runner health includes clinical imaging analysis runners", {
 
 test_that("radiomics runners declare scheduler resources", {
   home <- tempfile("dsjobs_home")
+  imaging_home <- tempfile("dsimaging_home")
   dir.create(file.path(home, "runners"), recursive = TRUE)
-  withr::local_options(list(dsjobs.home = home))
-  on.exit(unlink(home, recursive = TRUE), add = TRUE)
+  withr::local_options(list(dsjobs.home = home,
+    dsimaging.analysis.home = imaging_home))
+  on.exit(unlink(c(home, imaging_home), recursive = TRUE), add = TRUE)
 
   dsImaging:::.register_radiomics_runners()
   pyradiomics <- yaml::read_yaml(file.path(home, "runners", "pyradiomics_extract.yml"))
@@ -30,6 +32,10 @@ test_that("radiomics runners declare scheduler resources", {
 
   expect_equal(pyradiomics$resources$memory_mb, 6144L)
   expect_equal(pyradiomics$resources$max_concurrent, 2L)
+  expect_match(pyradiomics$args_template[[1]],
+    file.path(imaging_home, "runtime", "python"), fixed = TRUE)
+  expect_false(grepl("00LOCK|site-library", pyradiomics$args_template[[1]]))
+  expect_true(file.exists(pyradiomics$args_template[[1]]))
   expect_equal(lungmask$resources$max_concurrent, 1L)
   expect_equal(lungmask$resources$concurrency_group, "torch_cpu_heavy")
   expect_equal(threshold$resources$memory_mb, 1024L)
@@ -39,16 +45,18 @@ test_that("radiomics runners declare scheduler resources", {
 
 test_that("radiomics runners can declare containerized execution metadata", {
   home <- tempfile("dsjobs_home")
+  imaging_home <- tempfile("dsimaging_home")
   dir.create(file.path(home, "runners"), recursive = TRUE)
   withr::local_options(list(
     dsjobs.home = home,
+    dsimaging.analysis.home = imaging_home,
     dsimaging.container_images = list(
       pyradiomics_extract = "ghcr.io/isglobal-brge/dsimaging-runner:test"
     ),
     dsimaging.container_runtime = "docker",
     dsimaging.container_pull = "never"
   ))
-  on.exit(unlink(home, recursive = TRUE), add = TRUE)
+  on.exit(unlink(c(home, imaging_home), recursive = TRUE), add = TRUE)
 
   dsImaging:::.register_radiomics_runners()
   runner <- yaml::read_yaml(file.path(home, "runners", "pyradiomics_extract.yml"))
@@ -60,4 +68,17 @@ test_that("radiomics runners can declare containerized execution metadata", {
   expect_equal(runner$container$command, "python")
   expect_equal(runner$container$args_template[[1]], "-m")
   expect_equal(runner$container$args_template[[2]], "dsimaging_extract")
+})
+
+test_that("bundled profile paths are materialised outside the package tree", {
+  imaging_home <- tempfile("dsimaging_home")
+  withr::local_options(list(dsimaging.analysis.home = imaging_home))
+  on.exit(unlink(imaging_home, recursive = TRUE), add = TRUE)
+
+  path <- dsImaging:::.resolve_profile_path("aerts_signature_v1")
+
+  expect_true(file.exists(path))
+  expect_match(path, file.path(imaging_home, "runtime", "profiles"),
+    fixed = TRUE)
+  expect_false(grepl("00LOCK|site-library", path))
 })

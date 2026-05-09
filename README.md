@@ -89,6 +89,10 @@ than `dsimaging.analysis.claim_timeout_secs` are returned to `pending` and the
 drip-feed loop can submit them again. Destructive generation cancellation is
 admin-only and reuses `dsjobs.admin_key`.
 
+Bundled Python runners and radiomics profiles are copied to content-addressed
+runtime directories under `dsimaging.analysis.home`, so queued jobs are not
+broken by package upgrades or temporary `00LOCK` install paths.
+
 ## Server Methods
 
 Primary analysis methods:
