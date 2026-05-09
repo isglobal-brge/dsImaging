@@ -5,6 +5,8 @@ Reads images from the dsImaging registry and produces mask NIfTI files.
 """
 import argparse, json, os, sys, glob
 
+from dsimaging_utils import package_versions
+
 
 def find_images(input_dir):
     """Find images from dsImaging registry or input dir."""
@@ -88,7 +90,8 @@ def main():
             results.append({"sample_id": sample_id, "status": "failed", "error": str(e)})
 
     summary = {"n_total": len(images), "n_done": sum(1 for r in results if r["status"] == "done"),
-               "n_failed": sum(1 for r in results if r["status"] == "failed"), "task": args.task}
+               "n_failed": sum(1 for r in results if r["status"] == "failed"), "task": args.task,
+               "versions": package_versions(["totalsegmentator", "SimpleITK", "numpy", "torch"])}
     with open(os.path.join(args.output, "segmentation_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
 

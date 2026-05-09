@@ -6,6 +6,8 @@ Models: R231, LTRCLobes, LTRCLobes_R231, R231CovidWeb
 """
 import argparse, json, os, sys
 
+from dsimaging_utils import package_versions
+
 
 def find_images(input_dir):
     registry_path = "/var/lib/dsimaging/registry.yaml"
@@ -78,7 +80,8 @@ def main():
             results.append({"sample_id": sample_id, "status": "failed", "error": str(e)})
 
     summary = {"n_total": len(images), "n_done": sum(1 for r in results if r["status"] == "done"),
-               "n_failed": sum(1 for r in results if r["status"] == "failed"), "model": args.model}
+               "n_failed": sum(1 for r in results if r["status"] == "failed"), "model": args.model,
+               "versions": package_versions(["lungmask", "SimpleITK", "numpy", "torch"])}
     with open(os.path.join(args.output, "segmentation_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
 

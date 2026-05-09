@@ -5,6 +5,8 @@ Uses site-registered nnU-Net model packs for segmentation.
 """
 import argparse, json, os, sys
 
+from dsimaging_utils import package_versions
+
 
 def find_images(input_dir):
     registry_path = "/var/lib/dsimaging/registry.yaml"
@@ -84,7 +86,8 @@ def main():
     finally:
         shutil.rmtree(tmpdir)
 
-    summary = {"n_total": len(images), "model": args.model}
+    summary = {"n_total": len(images), "model": args.model,
+               "versions": package_versions(["nnunetv2", "numpy", "torch"])}
     with open(os.path.join(args.output, "segmentation_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
 

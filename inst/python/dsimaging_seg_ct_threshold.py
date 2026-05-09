@@ -12,6 +12,8 @@ import json
 import os
 import sys
 
+from dsimaging_utils import package_versions
+
 
 def _strip_extensions(filename):
     for ext in (".nii.gz", ".nii", ".nrrd", ".mha", ".mhd", ".dcm"):
@@ -143,6 +145,7 @@ def main():
         "n_failed": sum(1 for r in results if r["status"] == "failed"),
         "provider": "ct_lung_threshold",
         "threshold": threshold,
+        "versions": package_versions(["SimpleITK"]),
     }
     with open(os.path.join(args.output, "segmentation_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)

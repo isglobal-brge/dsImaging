@@ -27,6 +27,8 @@ external/HPC backend configured in `dsJobs`.
   and mask volumes.
 - PyRadiomics extraction with bundled IBSI, demo, force-2D, voxel-map, and Aerts
   signature profiles.
+- Runner summaries with Python/library versions captured in derived asset
+  provenance.
 - Per-image collection orchestration with server-side drip-feed and safe
   reconnect/status/publish flow.
 - dsJobs publisher hooks that register job outputs as `dsImaging` assets.

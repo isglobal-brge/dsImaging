@@ -5,7 +5,17 @@ import argparse
 import os
 import sys
 
-from dsimaging_utils import cfg, cfg_float, cfg_list, image_files, resolve_asset_path, safe_id, strip_extensions, write_json
+from dsimaging_utils import (
+    cfg,
+    cfg_float,
+    cfg_list,
+    image_files,
+    package_versions,
+    resolve_asset_path,
+    safe_id,
+    strip_extensions,
+    write_json,
+)
 
 
 def parse_spacing(value):
@@ -114,6 +124,7 @@ def main():
         "n_done": sum(1 for r in results if r["status"] == "done"),
         "n_failed": sum(1 for r in results if r["status"] == "failed"),
         "operations": operations,
+        "versions": package_versions(["SimpleITK", "numpy"]),
     }
     write_json(os.path.join(args.output, "preprocess_manifest.json"), manifest)
     write_json(os.path.join(args.output, "preprocess_summary.json"), summary)

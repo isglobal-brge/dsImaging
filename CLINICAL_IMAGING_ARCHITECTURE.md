@@ -121,6 +121,7 @@ Implemented server-side capabilities:
 | Per-image collection orchestration | Implemented with scan, first-batch submit, server drip-feed, status, publish. |
 | Derived feature table publication | Implemented as `feature_table` assets. |
 | Mask validation for downstream packages | Implemented for generation-backed masks. |
+| Runner provenance | Implemented via compact runner summaries and package versions stored in derived asset provenance. |
 
 ## Required Clinical Imaging Feature Set
 
@@ -218,16 +219,13 @@ Minimum validation before a release:
    mappings, proving that the source Rock can submit work to a scheduler unit
    that has different CPU/GPU capabilities.
 
-## Near-Term Backlog
+## Future Extension Backlog
 
-The current integration provides the structural foundation. The next production
-hardening items are:
+The current integration covers the clinical imaging core. Future extensions
+that can broaden coverage without changing the public design are:
 
 - Replace remaining radiomics-oriented internal names where doing so does not
   reduce compatibility.
 - Add RTSTRUCT/SEG contour conversion helpers.
-- Add explicit runner version capture in published provenance.
-- Add end-to-end tests that generate a tiny synthetic NIfTI, run CT-threshold
-  segmentation, run PyRadiomics extraction, and publish a feature-table asset.
 - Add an external backend demo that verifies path mapping and GPU capability
   discovery through dsJobs.

@@ -6,7 +6,14 @@ import csv
 import os
 import sys
 
-from dsimaging_utils import cfg, image_files, resolve_asset_path, strip_extensions, write_json
+from dsimaging_utils import (
+    cfg,
+    image_files,
+    package_versions,
+    resolve_asset_path,
+    strip_extensions,
+    write_json,
+)
 
 
 def index(paths):
@@ -99,6 +106,7 @@ def main():
         "n_samples": len(rows),
         "has_masks": bool(masks),
         "table": csv_path,
+        "versions": package_versions(["SimpleITK", "numpy"]),
     })
 
 

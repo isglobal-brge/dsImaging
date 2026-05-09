@@ -10,6 +10,8 @@ import json
 import os
 import sys
 
+from dsimaging_utils import package_versions
+
 
 def _strip_extensions(filename):
     """Strip known compound extensions (.nii.gz) and simple extensions."""
@@ -222,7 +224,10 @@ def main():
     df.to_parquet(os.path.join(args.output, "radiomics.parquet"), index=False)
 
     summary = {"n_samples": len(results), "n_features": len(df.columns)-1,
-               "format": "parquet", "columns": list(df.columns)}
+               "format": "parquet", "columns": list(df.columns),
+               "versions": package_versions([
+                   "radiomics", "SimpleITK", "numpy", "pandas", "pyarrow"
+               ])}
     with open(os.path.join(args.output, "extraction_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
 

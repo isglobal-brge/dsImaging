@@ -22,16 +22,19 @@
     )
   }
 
+  provenance <- list(
+    runner = step$runner %||% "pyradiomics",
+    job_id = job_id,
+    config = step$config
+  )
+  provenance$output <- .imaging_output_metadata(output_dir)
+
   asset_id <- register_derived_asset(
     dataset_id = dataset_id,
     kind = asset_type,
     path_or_root = output_dir,
     derivation_hash = deriv_hash,
-    provenance = list(
-      runner = step$runner %||% "pyradiomics",
-      job_id = job_id,
-      config = step$config
-    ),
+    provenance = provenance,
     created_by_job = job_id,
     description = step$description %||% paste(asset_type, "from job", job_id),
     alias = step$alias
@@ -65,17 +68,21 @@
     )
   }
 
+  provenance <- list(
+    type = "dsjobs_publish",
+    job_id = job_id,
+    asset_name = asset_name,
+    runner = step$runner,
+    config = cfg
+  )
+  provenance$output <- .imaging_output_metadata(output_dir)
+
   asset_id <- register_derived_asset(
     dataset_id = dataset_id,
     kind = asset_type,
     path_or_root = output_dir,
     derivation_hash = deriv_hash,
-    provenance = list(
-      type = "dsjobs_publish",
-      job_id = job_id,
-      asset_name = asset_name,
-      config = cfg
-    ),
+    provenance = provenance,
     created_by_job = job_id,
     description = step$description %||% paste(asset_type, "from job", job_id),
     alias = step$alias
@@ -135,7 +142,10 @@
       path_or_root = artifact_relpath,
       derivation_hash = spec_hash,
       provenance = list(type = "per_image", job_id = job_id,
-                         generation_id = generation_id, sample_id = sample_id),
+                         generation_id = generation_id, sample_id = sample_id,
+                         runner = step$runner,
+                         config = config,
+                         output = .imaging_output_metadata(output_dir)),
       created_by_job = job_id
     )
   }
@@ -156,6 +166,43 @@
 
   list(status = "published", generation_id = generation_id,
        sample_id = sample_id, job_id = job_id)
+}
+
+#' Extract compact runner output metadata for asset provenance.
+#'
+#' Runner summaries stay server-side with the artifact. The publisher keeps a
+#' compact copy of counts, formats, and package versions in the asset
+#' provenance so downstream audits can identify the exact execution stack.
+#'
+#' @keywords internal
+.imaging_output_metadata <- function(output_dir) {
+  if (is.null(output_dir) || !dir.exists(output_dir)) return(list())
+  files <- list.files(output_dir, pattern = "summary\\.json$",
+                      recursive = TRUE, full.names = TRUE)
+  if (length(files) == 0) return(list())
+  files <- files[seq_len(min(length(files), 20L))]
+
+  summaries <- list()
+  versions <- list()
+  for (path in files) {
+    obj <- tryCatch(
+      jsonlite::fromJSON(path, simplifyVector = FALSE),
+      error = function(e) NULL)
+    if (!is.list(obj)) next
+    key <- sub("\\.json$", "", basename(path))
+    root <- normalizePath(output_dir, winslash = "/", mustWork = FALSE)
+    rel <- normalizePath(path, winslash = "/", mustWork = FALSE)
+    prefix <- paste0(root, "/")
+    if (startsWith(rel, prefix)) rel <- substring(rel, nchar(prefix) + 1L)
+    compact <- obj[setdiff(names(obj), c("columns", "samples"))]
+    compact$file <- rel
+    summaries[[key]] <- compact
+    if (is.list(obj$versions)) versions[[key]] <- obj$versions
+  }
+
+  out <- list(summaries = summaries)
+  if (length(versions) > 0) out$runner_versions <- versions
+  out
 }
 
 #' Auto-submit next batch of pending images from the generation spec

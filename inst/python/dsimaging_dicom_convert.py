@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import sys
 
-from dsimaging_utils import cfg, resolve_asset_path, safe_id, write_json
+from dsimaging_utils import cfg, package_versions, resolve_asset_path, safe_id, write_json
 
 
 def dicom_dirs(root):
@@ -91,6 +91,7 @@ def main():
         "n_total": len(dirs),
         "n_done": len(dirs) - failures,
         "n_failed": failures,
+        "versions": package_versions(["SimpleITK"]),
     })
     if failures:
         sys.exit(1)

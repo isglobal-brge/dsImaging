@@ -12,6 +12,7 @@ from dsimaging_utils import (
     cfg_int,
     cfg_list,
     image_files,
+    package_versions,
     resolve_asset_path,
     safe_id,
     strip_extensions,
@@ -172,6 +173,7 @@ def main():
         "n_done": sum(1 for r in results if r["status"] == "done"),
         "n_failed": sum(1 for r in results if r["status"] == "failed"),
         "operation": operation,
+        "versions": package_versions(["SimpleITK", "numpy"]),
     }
     write_json(os.path.join(args.output, "seg_manifest.json"), manifest)
     write_json(os.path.join(args.output, "mask_ops_summary.json"), summary)

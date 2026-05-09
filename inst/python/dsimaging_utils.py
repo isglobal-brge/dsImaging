@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import sys
 
 
 IMAGE_EXTS = (".nii.gz", ".nii", ".nrrd", ".mha", ".mhd", ".dcm", ".png", ".jpg", ".jpeg")
@@ -139,3 +140,34 @@ def write_json(path, obj):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as handle:
         json.dump(obj, handle, indent=2)
+
+
+def package_versions(packages):
+    try:
+        from importlib import metadata
+    except Exception:
+        metadata = None
+
+    out = {"python": sys.version.split()[0]}
+    for name in packages:
+        version = None
+        candidates = [name]
+        if name == "radiomics":
+            candidates.extend(["pyradiomics", "PyRadiomics"])
+        for candidate in candidates:
+            if metadata is None:
+                continue
+            try:
+                version = metadata.version(candidate)
+                break
+            except Exception:
+                pass
+        if version is None:
+            try:
+                module = __import__(name)
+                version = getattr(module, "__version__", None)
+            except Exception:
+                version = None
+        if version:
+            out[name] = str(version)
+    return out
