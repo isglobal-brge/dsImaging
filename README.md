@@ -15,6 +15,9 @@ external/HPC backend configured in `dsJobs`.
 - Manifest-backed imaging datasets on file or S3/MinIO-like storage.
 - Asset catalog for masks, radiomics tables, embeddings, QC outputs, and other
   derived imaging artifacts.
+- Store-backed existing mask assets with their own content hash index, so
+  manual/consensus segmentations can drive radiomics without recomputation and
+  still participate in derivation hashing.
 - Immutable derivation hashes, aliases, lineage, and per-image generation state.
 - DICOM series conversion to NIfTI with `dcm2niix` or SimpleITK fallback.
 - Image preprocessing runners for resampling, normalization, clamping/windowing,
@@ -87,6 +90,7 @@ Primary analysis methods:
 - `imagingRadiomicsSubmitBatchDS()`
 - `imagingRadiomicsCollectionStatusDS()`
 - `imagingRadiomicsPublishCollectionDS()`
+- `imagingLoadAssetDS()`
 - `imagingSegmentationValidateMasksDS()`
 
 Legacy `radiomics*DS` aliases remain available for development compatibility.

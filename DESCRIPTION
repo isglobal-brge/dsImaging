@@ -61,7 +61,8 @@ AggregateMethods:
     radiomicsPublishCollectionDS,
     radiomicsValidateMasksDS
 AssignMethods:
-    imagingInitDS
+    imagingInitDS,
+    imagingLoadAssetDS
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
 Config/testthat/edition: 3

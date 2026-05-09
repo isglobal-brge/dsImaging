@@ -506,7 +506,8 @@ imagingAssetsDS <- function(handle_symbol) {
 
   data.frame(
     name = names(assets),
-    type = vapply(assets, function(a) a$type %||% "unknown", character(1)),
+    type = vapply(assets, function(a) a$kind %||% a$type %||% "unknown",
+                  character(1)),
     stringsAsFactors = FALSE
   )
 }

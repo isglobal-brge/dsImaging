@@ -107,6 +107,54 @@ imagingLineageDS <- function(asset_id) {
   .asset_get_lineage(db, asset_id)
 }
 
+#' Load a Feature Asset as a DataSHIELD Table
+#'
+#' DataSHIELD ASSIGN method. Loads a published feature-table-like imaging
+#' asset into the server session as a data.frame, after applying the same
+#' minimum-row disclosure guard used for imaging resources.
+#'
+#' Supported asset kinds are \code{radiomics_collection},
+#' \code{feature_table}, \code{qc_table}, and \code{embedding_table}.
+#'
+#' @param dataset_id Character; dataset identifier used for alias resolution
+#'   and backend lookup.
+#' @param asset_id_or_alias Character; asset id or dataset-level alias.
+#' @param columns Optional character vector of columns to keep.
+#' @return A data.frame for assignment in the DataSHIELD session.
+#' @export
+imagingLoadAssetDS <- function(dataset_id, asset_id_or_alias, columns = NULL) {
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+
+  asset <- .resolve_asset_by_id_or_alias(db, dataset_id, asset_id_or_alias)
+  if (is.null(asset)) {
+    stop("Asset '", asset_id_or_alias, "' not found for dataset '",
+         dataset_id, "'.", call. = FALSE)
+  }
+
+  supported <- c("radiomics_collection", "feature_table", "qc_table",
+                 "embedding_table")
+  if (!asset$kind %in% supported) {
+    stop("Asset '", asset_id_or_alias, "' is kind '", asset$kind,
+         "', not a loadable feature table.", call. = FALSE)
+  }
+
+  df <- .read_feature_asset(asset, dataset_id)
+  if (!is.null(columns)) {
+    columns <- as.character(columns)
+    missing <- setdiff(columns, names(df))
+    if (length(missing) > 0) {
+      stop("Requested columns not found: ", paste(missing, collapse = ", "),
+           call. = FALSE)
+    }
+    df <- df[, columns, drop = FALSE]
+  }
+
+  .assert_min_samples(nrow(df),
+    context = paste0("asset '", asset_id_or_alias, "'"))
+  df
+}
+
 #' Check if a Derivation Already Exists (Deduplication)
 #'
 #' DataSHIELD AGGREGATE method. Given a derivation_hash, checks if an
@@ -187,15 +235,12 @@ resolve_feature_table_asset <- function(dataset_id, alias_or_id) {
   db <- .asset_db_connect()
   on.exit(.asset_db_close(db))
 
-  resolved_id <- .asset_resolve_alias(db, dataset_id, alias_or_id)
-  asset_id <- resolved_id %||% alias_or_id
-
-  asset <- .asset_get(db, asset_id)
+  asset <- .resolve_asset_by_id_or_alias(db, dataset_id, alias_or_id)
   if (is.null(asset))
     stop("Asset not found: ", alias_or_id, call. = FALSE)
-  if (asset$kind != "feature_table")
+  if (!asset$kind %in% c("feature_table", "radiomics_collection"))
     stop("Asset '", alias_or_id, "' is kind '", asset$kind,
-         "', not feature_table.", call. = FALSE)
+         "', not a feature table.", call. = FALSE)
 
   list(
     asset_id = asset$asset_id,
@@ -218,4 +263,92 @@ promote_asset_alias <- function(dataset_id, alias, asset_id) {
   db <- .asset_db_connect()
   on.exit(.asset_db_close(db))
   .asset_set_alias(db, dataset_id, alias, asset_id)
+}
+
+#' @keywords internal
+.resolve_asset_by_id_or_alias <- function(db, dataset_id, asset_id_or_alias) {
+  asset <- .asset_get(db, asset_id_or_alias)
+  if (!is.null(asset)) return(asset)
+
+  resolved_id <- .asset_resolve_alias(db, dataset_id, asset_id_or_alias)
+  if (is.null(resolved_id)) return(NULL)
+  .asset_get(db, resolved_id)
+}
+
+#' @keywords internal
+.read_feature_asset <- function(asset, dataset_id) {
+  root <- asset$path_or_root
+  if (is.null(root) || is.na(root) || !nzchar(root))
+    stop("Asset has no path_or_root.", call. = FALSE)
+
+  path <- .resolve_feature_asset_file(root, dataset_id)
+  if (grepl("^s3://", path)) {
+    resolved <- .resolve_ds(dataset_id)
+    if (is.null(resolved) || is.null(resolved$backend)) {
+      stop("Cannot resolve storage backend for S3 asset: ", path,
+           call. = FALSE)
+    }
+    ext <- if (grepl("\\.parquet$", path, ignore.case = TRUE)) ".parquet" else ".csv"
+    tmp <- tempfile(fileext = ext)
+    on.exit(unlink(tmp), add = TRUE)
+    backend_get_file(resolved$backend, path, tmp)
+    path <- tmp
+  }
+
+  .read_table_file(path)
+}
+
+#' @keywords internal
+.resolve_feature_asset_file <- function(root, dataset_id) {
+  if (grepl("\\.(parquet|csv)$", root, ignore.case = TRUE)) return(root)
+
+  candidates <- c("radiomics_features.parquet", "features.parquet",
+                  "feature_table.parquet", "radiomics_features.csv",
+                  "features.csv", "feature_table.csv")
+
+  if (grepl("^s3://", root)) {
+    resolved <- .resolve_ds(dataset_id)
+    if (is.null(resolved) || is.null(resolved$backend)) {
+      stop("Cannot resolve storage backend for S3 asset: ", root,
+           call. = FALSE)
+    }
+    prefix <- sub("/$", "", root)
+    for (candidate in candidates) {
+      uri <- paste0(prefix, "/", candidate)
+      head <- backend_head(resolved$backend, uri)
+      if (!is.null(head) && isTRUE(head$exists)) return(uri)
+    }
+    listed <- backend_list(resolved$backend, paste0(prefix, "/"))
+    hits <- listed[grepl("\\.(parquet|csv)$", listed, ignore.case = TRUE)]
+    if (length(hits) > 0) return(hits[1])
+    stop("No parquet/csv feature table found under asset root: ", root,
+         call. = FALSE)
+  }
+
+  if (!dir.exists(root))
+    stop("Asset path does not exist: ", root, call. = FALSE)
+  for (candidate in candidates) {
+    path <- file.path(root, candidate)
+    if (file.exists(path)) return(path)
+  }
+  hits <- list.files(root, pattern = "\\.(parquet|csv)$", full.names = TRUE,
+                     recursive = TRUE, ignore.case = TRUE)
+  if (length(hits) > 0) return(hits[1])
+  stop("No parquet/csv feature table found under asset root: ", root,
+       call. = FALSE)
+}
+
+#' @keywords internal
+.read_table_file <- function(path) {
+  if (grepl("\\.parquet$", path, ignore.case = TRUE)) {
+    if (!requireNamespace("arrow", quietly = TRUE))
+      stop("arrow package required to read parquet feature assets.",
+           call. = FALSE)
+    return(as.data.frame(arrow::read_parquet(path)))
+  }
+  if (grepl("\\.csv$", path, ignore.case = TRUE)) {
+    return(utils::read.csv(path, stringsAsFactors = FALSE,
+                           check.names = FALSE))
+  }
+  stop("Unsupported feature table format: ", path, call. = FALSE)
 }

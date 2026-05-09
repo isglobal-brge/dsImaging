@@ -47,6 +47,7 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
   dataset_id <- dataset_id %||% manifest$dataset_id
 
   image_root <- manifest$assets$images$uri
+  mask_hashes <- .existing_mask_hashes(resolved, manifest, segmenter)
 
   # Fingerprint: for S3, use hash index. For file, use Python script.
   if (resolved$backend$type == "s3") {
@@ -78,12 +79,19 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
   # Collection-level hash uses content_hashes (strong) when available
   hash_source <- if (length(fp_result$content_hashes) > 0)
     fp_result$content_hashes else fp_result$fingerprints
+  if (length(mask_hashes) > 0) {
+    paired_hashes <- vapply(names(hash_source), function(sid) {
+      paste(hash_source[[sid]] %||% "", mask_hashes[[sid]] %||% "", sep = ":")
+    }, character(1))
+    hash_source <- as.list(stats::setNames(paired_hashes, names(hash_source)))
+  }
   collection_hash <- compute_derivation_hash(
     dataset_id = dataset_id,
     processor = processor,
     segmenter = segmenter,
     profile = profile,
     profile_signature = profile_signature,
+    mask_asset = segmenter$mask_asset %||% NULL,
     image_hashes = sort(unlist(hash_source))
   )
 
@@ -101,6 +109,7 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
     profile_signature = profile_signature,
     profile_name = profile$name,
     segmenter = segmenter,
+    mask_hash_index = mask_hashes,
     dataset_context = .dataset_context_from_resolved(resolved, manifest)
   )
 
@@ -236,6 +245,7 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
   dataset_id <- dataset_id %||% manifest$dataset_id
   image_root <- if (!is.null(manifest)) manifest$assets$images$uri else NULL
   mask_root <- .resolve_mask_root(dataset_id, segmenter, resolved = resolved)
+  mask_hashes <- .existing_mask_hashes(resolved, manifest, segmenter)
   backend <- resolved$backend
   processor <- paste0(segmenter$provider, "_", segmenter$task %||% "default")
   profile_signature <- .radiomics_profile_signature(profile)
@@ -278,7 +288,9 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
     # Need at least one identifier (content_hash or fingerprint)
     if (is.null(fp) && is.null(ch)) next
 
-    # Per-image derivation hash: prefer content_hash (strong) over fingerprint (fast)
+    # Per-image derivation hash: prefer content_hash (strong) over fingerprint
+    # and include the mask hash when using an existing mask asset.
+    mask_ch <- mask_hashes[[sid]]
     spec_hash <- compute_image_derivation_hash(
       content_hash = ch,
       fingerprint = fp,
@@ -286,7 +298,8 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
       params = list(
         segmenter = segmenter,
         profile = profile,
-        profile_signature = profile_signature
+        profile_signature = profile_signature,
+        mask_content_hash = mask_ch
       )
     )
 
@@ -354,9 +367,16 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
       settings_file = settings_path %||% "default"
     ))
     if (!is.null(mask_root)) {
-      mask_path <- .resolve_sample_mask(mask_root, sid)
-      if (!is.null(mask_path))
-        extract_config$mask <- mask_path
+      mask_uri <- .resolve_sample_mask(mask_root, sid, backend = backend,
+        manifest = manifest, mask_asset = segmenter$mask_asset %||% "masks")
+      if (is.null(mask_uri)) {
+        complete_item_atomic(generation_id, sid, "failed",
+          error = "Mask file not found")
+        submitted[[sid]] <- list(status = "failed", error = "Mask not found")
+        next
+      }
+      extract_config$mask <- .stage_backend_file_for_job(mask_uri, sid,
+        dataset_id, backend, role = "masks")
     }
     steps[[length(steps) + 1]] <- list(
       type = "extract",
@@ -394,7 +414,7 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
       submitted[[sid]] <- list(status = "submitted", job_id = result$job_id)
     }, error = function(e) {
       msg <- conditionMessage(e)
-      if (grepl("quota exceeded", msg, ignore.case = TRUE)) {
+      if (.is_transient_job_submit_error(msg)) {
         record_item_status(generation_id, sid, "pending",
           error = paste("Submit deferred:", msg))
         submitted[[sid]] <<- list(status = "deferred", error = msg)
@@ -435,7 +455,6 @@ imagingRadiomicsCollectionStatusDS <- function(generation_id_enc) {
   gen <- get_generation(generation_id)
   if (is.null(gen))
     stop("Generation not found: ", generation_id, call. = FALSE)
-  dataset_id <- dataset_id %||% gen$dataset_id
 
   items <- get_generation_items(generation_id)
   completed_ids <- items$sample_id[items$status == "completed"]
@@ -1018,6 +1037,13 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
   paste0("B64:", b64)
 }
 
+#' Detect transient job submission errors that should be retried
+#' @keywords internal
+.is_transient_job_submit_error <- function(msg) {
+  grepl("quota exceeded|database is locked|database is busy|SQLITE_BUSY|locked database",
+    msg, ignore.case = TRUE)
+}
+
 #' Get current owner_id
 #' @keywords internal
 .dsr_owner_id <- function() {
@@ -1195,6 +1221,36 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
   }, error = function(e) NULL)
 }
 
+#' Read existing-mask content hashes from a manifest asset
+#' @keywords internal
+.existing_mask_hashes <- function(resolved, manifest, segmenter) {
+  if (!identical(segmenter$provider, "existing_mask_asset")) return(list())
+  if (is.null(resolved) || is.null(manifest)) return(list())
+
+  mask_alias <- segmenter$mask_asset %||% "masks"
+  asset <- manifest$assets[[mask_alias]]
+  index_uri <- asset$content_hash_index %||%
+    asset$hash_index %||% asset$index_uri
+  if (is.null(index_uri) || !nzchar(index_uri)) return(list())
+
+  idx <- tryCatch(read_hash_index(resolved$backend, index_uri),
+    error = function(e) data.frame())
+  if (!is.data.frame(idx) || nrow(idx) == 0 ||
+      !"sample_id" %in% names(idx) || !"content_hash" %in% names(idx))
+    return(list())
+  stats::setNames(as.list(idx$content_hash), idx$sample_id)
+}
+
+#' Resolve one sample mask from a local or S3 mask asset
+#' @keywords internal
+.mask_hash_index <- function(backend, manifest, mask_asset) {
+  asset <- manifest$assets[[mask_asset]]
+  index_uri <- asset$content_hash_index %||%
+    asset$hash_index %||% asset$index_uri
+  if (is.null(index_uri) || !nzchar(index_uri)) return(NULL)
+  tryCatch(read_hash_index(backend, index_uri), error = function(e) NULL)
+}
+
 #' Resolve a single sample's image URI or local path
 #'
 #' For S3: constructs URI from image_root + sample_id + known extensions.
@@ -1236,10 +1292,48 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
   NULL
 }
 
-#' Resolve a single sample's mask file path
+#' Resolve a single sample's mask URI or local path
 #' @keywords internal
-.resolve_sample_mask <- function(mask_root, sample_id) {
-  if (is.null(mask_root) || !dir.exists(mask_root)) return(NULL)
+.resolve_sample_mask <- function(mask_root, sample_id, backend = NULL,
+                                 manifest = NULL, mask_asset = "masks") {
+  if (is.null(mask_root) || !nzchar(mask_root)) return(NULL)
+
+  if (!is.null(backend) && identical(backend$type, "s3") &&
+      grepl("^s3://", mask_root)) {
+    if (!is.null(manifest)) {
+      idx <- .mask_hash_index(backend, manifest, mask_asset)
+      if (is.data.frame(idx) && nrow(idx) > 0 && "uri" %in% names(idx)) {
+        hit <- idx[idx$sample_id == sample_id, , drop = FALSE]
+        if (nrow(hit) > 0 && nzchar(hit$uri[1])) return(hit$uri[1])
+      }
+    }
+
+    exts <- c(".nii.gz", ".nii", ".nrrd", ".mha", ".mhd", ".dcm")
+    stems <- c(sample_id, paste0(sample_id, "_mask"),
+      paste0(sample_id, "_seg"), paste0(sample_id, "_label"),
+      paste0(sample_id, "_GTV-1"), paste0(sample_id, "_gtv1"))
+    for (stem in stems) {
+      for (ext in exts) {
+        candidate <- paste0(sub("/$", "", mask_root), "/", stem, ext)
+        head <- backend_head(backend, candidate)
+        if (!is.null(head) && isTRUE(head$exists)) return(candidate)
+      }
+    }
+
+    keys <- backend_list(backend, mask_root)
+    if (length(keys) == 0) return(NULL)
+    base <- basename(keys)
+    exact <- sub("\\.(nii\\.gz|nii|nrrd|mha|mhd|dcm)$", "", base,
+      ignore.case = TRUE)
+    preferred <- keys[exact == sample_id | exact == paste0(sample_id, "_mask")]
+    if (length(preferred) > 0) return(preferred[1])
+    contains <- keys[grepl(sample_id, base, fixed = TRUE) &
+      grepl("mask|seg|label|gtv", base, ignore.case = TRUE)]
+    if (length(contains) > 0) return(contains[1])
+    return(NULL)
+  }
+
+  if (!dir.exists(mask_root)) return(NULL)
   files <- list.files(mask_root, full.names = TRUE, recursive = TRUE)
   for (f in files) {
     base <- basename(f)
@@ -1257,17 +1351,29 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 #' For file-backed datasets, returns the path as-is.
 #' @keywords internal
 .stage_image_for_job <- function(image_uri, sample_id, dataset_id, backend) {
-  if (is.null(backend) || backend$type == "file") return(image_uri)
-  if (!grepl("^s3://", image_uri)) return(image_uri)
+  .stage_backend_file_for_job(image_uri, sample_id, dataset_id, backend,
+    role = "images")
+}
+
+#' Stage an S3-backed file to local filesystem for Python runner execution
+#' @keywords internal
+.stage_backend_file_for_job <- function(uri, sample_id, dataset_id, backend,
+                                        role = "files") {
+  if (is.null(backend) || backend$type == "file") return(uri)
+  if (!grepl("^s3://", uri)) return(uri)
 
   # Stage to DSJOBS_HOME/staging/dataset_id/
-  home <- tryCatch(dsJobs:::.dsjobs_home(), error = function(e) "/srv/dsjobs")
-  staging_dir <- file.path(home, "staging", dataset_id)
+  home <- tryCatch(
+    dsJobs:::.dsjobs_home(must_exist = FALSE),
+    error = function(e) getOption("dsjobs.home",
+      getOption("default.dsjobs.home", "/srv/dsjobs"))
+  )
+  staging_dir <- file.path(home, "staging", dataset_id, role)
   dir.create(staging_dir, recursive = TRUE, showWarnings = FALSE)
 
-  local_path <- file.path(staging_dir, basename(image_uri))
+  local_path <- file.path(staging_dir, paste(sample_id, basename(uri), sep = "__"))
   if (!file.exists(local_path))
-    backend_get_file(backend, image_uri, local_path)
+    backend_get_file(backend, uri, local_path)
 
   local_path
 }

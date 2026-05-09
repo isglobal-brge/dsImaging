@@ -267,6 +267,7 @@
   backend <- resolved$backend
   image_root <- manifest$assets$images$uri
   mask_root <- .resolve_mask_root(dataset_id, segmenter, resolved = resolved)
+  mask_hashes <- .existing_mask_hashes(resolved, manifest, segmenter)
   seg_runner <- switch(segmenter$provider,
     existing_mask_asset = NULL,
     totalsegmentator = "totalsegmentator_infer",
@@ -303,13 +304,15 @@
       next
     }
 
+    mask_ch <- mask_hashes[[sid]]
     spec_hash <- compute_image_derivation_hash(
       content_hash = ch,
       processor = processor,
       params = list(
         segmenter = segmenter,
         profile = profile,
-        profile_signature = profile_signature
+        profile_signature = profile_signature,
+        mask_content_hash = mask_ch
       )
     )
 
@@ -353,8 +356,15 @@
       generation_id = generation_id,
       settings_file = settings_path %||% "default"))
     if (!is.null(mask_root)) {
-      mp <- .resolve_sample_mask(mask_root, sid)
-      if (!is.null(mp)) extract_config$mask <- mp
+      mp <- .resolve_sample_mask(mask_root, sid, backend = backend,
+        manifest = manifest, mask_asset = segmenter$mask_asset %||% "masks")
+      if (is.null(mp)) {
+        complete_item_atomic(generation_id, sid, "failed",
+          error = "Mask file not found")
+        next
+      }
+      extract_config$mask <- .stage_backend_file_for_job(mp, sid, dataset_id,
+        backend, role = "masks")
     }
     steps[[length(steps) + 1]] <- list(
       type = "extract", runner = "pyradiomics_extract",
@@ -378,8 +388,14 @@
       dsJobs::jobSubmitDS(spec_enc)
       record_item_status(generation_id, sid, "running")
     }, error = function(e) {
-      complete_item_atomic(generation_id, sid, "failed",
-        error = paste("Drip-feed submit failed:", conditionMessage(e)))
+      msg <- conditionMessage(e)
+      if (.is_transient_job_submit_error(msg)) {
+        record_item_status(generation_id, sid, "pending",
+          error = paste("Drip-feed submit deferred:", msg))
+      } else {
+        complete_item_atomic(generation_id, sid, "failed",
+          error = paste("Drip-feed submit failed:", msg))
+      }
     })
   }
 
