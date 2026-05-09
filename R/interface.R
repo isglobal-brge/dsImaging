@@ -482,7 +482,7 @@ imagingMetadataDS <- function(handle_symbol) {
 #' @export
 imagingValidateDS <- function(handle_symbol) {
   handle <- .getImagingHandle(handle_symbol)
-  validate_imaging_dataset(handle$manifest)
+  validate_imaging_dataset(handle$manifest, backend = handle$backend)
 }
 
 #' List Dataset Assets

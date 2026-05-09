@@ -76,3 +76,39 @@ test_that("validate_imaging_dataset passes for structurally valid manifest", {
   expect_true(result$valid)
   expect_equal(length(result$errors), 0)
 })
+
+test_that("validate_imaging_dataset validates S3 assets through backend", {
+  backend <- structure(list(type = "s3", config = list()), class = "dsimaging_backend")
+  manifest <- list(
+    schema_version = 1,
+    dataset_id = "test.dataset.v1",
+    modality = "ct",
+    metadata = list(
+      uri = "s3://imaging-data/datasets/test/metadata/samples.parquet",
+      format = "parquet"
+    ),
+    assets = list(
+      images = list(
+        kind = "image_root",
+        uri = "s3://imaging-data/datasets/test/source/images/"
+      )
+    )
+  )
+
+  testthat::local_mocked_bindings(
+    backend_list = function(backend, prefix) {
+      expect_equal(prefix, manifest$assets$images$uri)
+      "s3://imaging-data/datasets/test/source/images/case_001.nii.gz"
+    },
+    backend_head = function(backend, uri) {
+      expect_equal(uri, manifest$metadata$uri)
+      list(exists = TRUE, size = 10L, last_modified = NA_character_)
+    },
+    .package = "dsImaging"
+  )
+
+  result <- validate_imaging_dataset(manifest, backend = backend)
+  expect_true(result$valid)
+  expect_true(result$asset_status$images$exists)
+  expect_true(result$asset_status$`_metadata`$exists)
+})

@@ -161,7 +161,11 @@
   # 4. Server-side drip feed: auto-submit next batch of pending images
   tryCatch(
     .drip_feed_next_batch(generation_id, dataset_id),
-    error = function(e) NULL  # never let drip-feed failure block the publisher
+    error = function(e) {
+      update_generation(generation_id,
+        error = paste("Drip-feed failed:", conditionMessage(e)))
+      NULL
+    }
   )
 
   list(status = "published", generation_id = generation_id,
@@ -246,18 +250,23 @@
     .radiomics_profile_signature(profile)
 
   resolved <- .resolve_ds(dataset_id)
-  if (is.null(resolved)) return(invisible(NULL))
+  if (is.null(resolved))
+    resolved <- .resolve_ds_from_generation(generation_id, dataset_id)
+  if (is.null(resolved))
+    stop("Cannot resolve dataset for drip-feed: ", dataset_id, call. = FALSE)
+
   manifest <- resolved$manifest
   if (is.null(manifest) && !is.null(resolved$manifest_uri)) {
     manifest <- tryCatch(
       parse_manifest(resolved$manifest_uri, resolved$backend),
       error = function(e) NULL)
   }
-  if (is.null(manifest)) return(invisible(NULL))
+  if (is.null(manifest))
+    stop("Cannot load manifest for drip-feed: ", dataset_id, call. = FALSE)
 
   backend <- resolved$backend
   image_root <- manifest$assets$images$uri
-  mask_root <- .resolve_mask_root(dataset_id, segmenter)
+  mask_root <- .resolve_mask_root(dataset_id, segmenter, resolved = resolved)
   seg_runner <- switch(segmenter$provider,
     existing_mask_asset = NULL,
     totalsegmentator = "totalsegmentator_infer",

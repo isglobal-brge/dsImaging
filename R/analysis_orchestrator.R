@@ -44,6 +44,7 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
     manifest <- parse_manifest(resolved$manifest_uri, resolved$backend)
   if (is.null(manifest))
     stop("Cannot load manifest for dataset: ", dataset_id, call. = FALSE)
+  dataset_id <- dataset_id %||% manifest$dataset_id
 
   image_root <- manifest$assets$images$uri
 
@@ -94,6 +95,15 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
   if (length(all_sample_ids) == 0) all_sample_ids <- names(fp_result$fingerprints)
   total_n <- fp_result$total
 
+  generation_spec <- list(
+    processor = processor,
+    profile = profile,
+    profile_signature = profile_signature,
+    profile_name = profile$name,
+    segmenter = segmenter,
+    dataset_context = .dataset_context_from_resolved(resolved, manifest)
+  )
+
   gen_result <- claim_or_reuse_generation(
     dataset_id = dataset_id,
     kind = "radiomics_collection",
@@ -101,19 +111,14 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
     visibility = visibility,
     owner_id = .dsr_owner_id(),
     expected_n = total_n,
-      spec = list(
-        processor = processor,
-        profile = profile,
-        profile_signature = profile_signature,
-        profile_name = profile$name,
-        segmenter = segmenter
-      )
+    spec = generation_spec
   )
 
   if (gen_result$action == "reuse_asset") {
     return(list(
       action = "reuse_asset",
       asset_id = gen_result$asset_id,
+      dataset_id = dataset_id,
       total = safe_metadata_count(total_n),
       done = safe_metadata_count(total_n),
       pending = 0L
@@ -123,6 +128,8 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
   generation_id <- gen_result$generation_id
 
   if (gen_result$action == "reuse_generation") {
+    .ensure_generation_dataset_context(generation_id, resolved, manifest)
+
     # Resume: reconcile finished/failed jobs first, then check pending items.
     .sync_generation_jobs(generation_id)
     items <- get_generation_items(generation_id)
@@ -145,6 +152,7 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
     return(list(
       action = "resume",
       generation_id = generation_id,
+      dataset_id = dataset_id,
       total = safe_metadata_count(total_n),
       done = safe_metadata_count(length(done_ids)),
       pending_ids = retry_ids,
@@ -169,6 +177,7 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
   list(
     action = "run_new",
     generation_id = generation_id,
+    dataset_id = dataset_id,
     total = safe_metadata_count(total_n),
     done = 0L,
     pending_ids = all_sample_ids,
@@ -212,6 +221,11 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
   # dsJobs is in Imports, always available
 
   resolved <- .resolve_ds(dataset_id)
+  if (is.null(resolved))
+    resolved <- .resolve_ds_from_generation(generation_id, dataset_id)
+  if (is.null(resolved))
+    stop("Cannot resolve dataset for generation: ", dataset_id, call. = FALSE)
+
   # Use pre-parsed manifest from handle, or parse from URI
   manifest <- resolved$manifest
   if (is.null(manifest) && !is.null(resolved$manifest_uri)) {
@@ -219,8 +233,9 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
       parse_manifest(resolved$manifest_uri, resolved$backend),
       error = function(e) NULL)
   }
+  dataset_id <- dataset_id %||% manifest$dataset_id
   image_root <- if (!is.null(manifest)) manifest$assets$images$uri else NULL
-  mask_root <- .resolve_mask_root(dataset_id, segmenter)
+  mask_root <- .resolve_mask_root(dataset_id, segmenter, resolved = resolved)
   backend <- resolved$backend
   processor <- paste0(segmenter$provider, "_", segmenter$task %||% "default")
   profile_signature <- .radiomics_profile_signature(profile)
@@ -420,6 +435,7 @@ imagingRadiomicsCollectionStatusDS <- function(generation_id_enc) {
   gen <- get_generation(generation_id)
   if (is.null(gen))
     stop("Generation not found: ", generation_id, call. = FALSE)
+  dataset_id <- dataset_id %||% gen$dataset_id
 
   items <- get_generation_items(generation_id)
   completed_ids <- items$sample_id[items$status == "completed"]
@@ -427,6 +443,21 @@ imagingRadiomicsCollectionStatusDS <- function(generation_id_enc) {
   pending_ids <- items$sample_id[items$status == "pending"]
   claimed_ids <- items$sample_id[items$status == "claimed"]
   running_ids <- items$sample_id[items$status == "running"]
+
+  if (length(pending_ids) > 0L && gen$state %in% c("RUNNING", "PENDING")) {
+    tryCatch(
+      .drip_feed_next_batch(generation_id, gen$dataset_id),
+      error = function(e) update_generation(generation_id,
+        error = paste("Drip-feed failed:", conditionMessage(e))))
+
+    gen <- get_generation(generation_id)
+    items <- get_generation_items(generation_id)
+    completed_ids <- items$sample_id[items$status == "completed"]
+    failed_ids <- items$sample_id[items$status == "failed"]
+    pending_ids <- items$sample_id[items$status == "pending"]
+    claimed_ids <- items$sample_id[items$status == "claimed"]
+    running_ids <- items$sample_id[items$status == "running"]
+  }
 
   # pending + claimed + running = "not yet done"
   not_done <- length(pending_ids) + length(claimed_ids) + length(running_ids)
@@ -1003,7 +1034,7 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 #'   3. NULL (can't resolve)
 #'
 #' @keywords internal
-.resolve_ds <- function(dataset_id) {
+.resolve_ds <- function(dataset_id = NULL) {
   # 1. Try imaging handle (created by imagingInitDS with backend from resource)
   backend <- tryCatch(
     imagingGetBackendDS("img"),
@@ -1019,10 +1050,10 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
   }
 
   if (!is.null(backend)) {
-    manifest <- imagingGetManifestDS(dataset_id)
+    manifest <- imagingGetManifestDS(dataset_id %||% "img")
     if (!is.null(manifest)) {
       return(list(
-        dataset_id = dataset_id,
+        dataset_id = dataset_id %||% manifest$dataset_id,
         backend = backend,
         manifest = manifest,
         manifest_uri = NULL,
@@ -1033,6 +1064,107 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 
   # 2. Try registry
   tryCatch(resolve_dataset(dataset_id), error = function(e) NULL)
+}
+
+#' Persist enough dataset context for worker-side orchestration
+#'
+#' Fire-and-forget drip feeding runs in the dsJobs worker, outside the
+#' DataSHIELD session that originally resolved the Opal resource. A generation
+#' therefore carries a compact manifest/backend context so later batches can be
+#' staged without a connected analyst session.
+#'
+#' @keywords internal
+.dataset_context_from_resolved <- function(resolved, manifest) {
+  if (is.null(resolved) || is.null(resolved$backend)) return(NULL)
+  list(
+    manifest = manifest,
+    backend = .portable_backend_context(resolved$backend)
+  )
+}
+
+#' @keywords internal
+.portable_backend_context <- function(backend) {
+  cfg <- backend$config %||% list()
+  out <- list(type = backend$type, config = cfg)
+
+  if (identical(backend$type, "s3")) {
+    creds <- tryCatch(.resolve_s3_credentials(cfg$credentials_ref),
+      error = function(e) NULL)
+    if (!is.null(creds)) {
+      out$config$endpoint <- cfg$endpoint %||% creds$endpoint
+      out$config$region <- cfg$region %||% creds$region
+      out$credentials <- list(
+        access_key = creds$access_key,
+        secret_key = creds$secret_key,
+        endpoint = creds$endpoint,
+        region = creds$region
+      )
+    }
+  }
+
+  out
+}
+
+#' @keywords internal
+.ensure_generation_dataset_context <- function(generation_id, resolved, manifest) {
+  gen <- get_generation(generation_id)
+  if (is.null(gen)) return(invisible(FALSE))
+
+  spec <- tryCatch(
+    jsonlite::fromJSON(gen$spec_json, simplifyVector = FALSE),
+    error = function(e) list())
+  if (!is.null(spec$dataset_context)) return(invisible(TRUE))
+
+  spec$dataset_context <- .dataset_context_from_resolved(resolved, manifest)
+  update_generation(generation_id,
+    spec_json = as.character(jsonlite::toJSON(spec, auto_unbox = TRUE)))
+  invisible(TRUE)
+}
+
+#' @keywords internal
+.resolve_ds_from_generation <- function(generation_id, dataset_id = NULL) {
+  gen <- get_generation(generation_id)
+  if (is.null(gen)) return(NULL)
+
+  spec <- tryCatch(
+    jsonlite::fromJSON(gen$spec_json, simplifyVector = FALSE),
+    error = function(e) NULL)
+  ctx <- spec$dataset_context %||% spec$dataset
+  if (is.null(ctx) || is.null(ctx$manifest) || is.null(ctx$backend))
+    return(NULL)
+
+  backend <- .backend_from_context(ctx$backend, generation_id)
+  if (is.null(backend)) return(NULL)
+  list(
+    dataset_id = dataset_id %||% gen$dataset_id,
+    backend = backend,
+    manifest = ctx$manifest,
+    manifest_uri = NULL,
+    publish = backend
+  )
+}
+
+#' @keywords internal
+.backend_from_context <- function(ctx, generation_id) {
+  if (is.null(ctx$type)) return(NULL)
+  cfg <- ctx$config %||% list()
+
+  if (identical(ctx$type, "s3")) {
+    creds <- ctx$credentials
+    if (!is.null(creds)) {
+      ref <- cfg$credentials_ref %||%
+        paste0("generation_", digest::digest(list(generation_id, creds$access_key),
+          algo = "sha256"))
+      store <- getOption("dsimaging.credentials", list())
+      store[[ref]] <- creds
+      options(dsimaging.credentials = store)
+      cfg$credentials_ref <- ref
+      cfg$endpoint <- cfg$endpoint %||% creds$endpoint
+      cfg$region <- cfg$region %||% creds$region
+    }
+  }
+
+  tryCatch(storage_backend(ctx$type, cfg), error = function(e) NULL)
 }
 
 #' Resolve image root URI from manifest
@@ -1050,9 +1182,9 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 
 #' Resolve mask root URI when using existing masks
 #' @keywords internal
-.resolve_mask_root <- function(dataset_id, segmenter) {
+.resolve_mask_root <- function(dataset_id, segmenter, resolved = NULL) {
   if (!identical(segmenter$provider, "existing_mask_asset")) return(NULL)
-  resolved <- .resolve_ds(dataset_id)
+  if (is.null(resolved)) resolved <- .resolve_ds(dataset_id)
   if (is.null(resolved)) return(NULL)
   tryCatch({
     manifest <- resolved$manifest

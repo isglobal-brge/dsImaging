@@ -56,12 +56,13 @@
   invisible(TRUE)
 }
 
-#' Validate that asset roots exist on disk
+#' Validate that asset roots exist in the configured backend
 #'
 #' @param manifest List; parsed manifest.
+#' @param backend Optional storage backend for non-local URIs.
 #' @return Named list of validation results per asset.
 #' @keywords internal
-validate_asset_roots <- function(manifest) {
+validate_asset_roots <- function(manifest, backend = NULL) {
   results <- list()
   assets <- manifest$assets %||% list()
 
@@ -75,7 +76,7 @@ validate_asset_roots <- function(manifest) {
 
     if (asset_type %in% dir_types) {
       root <- uri
-      exists <- !is.null(root) && dir.exists(root)
+      exists <- .backend_uri_exists(root, backend, directory = TRUE)
       results[[name]] <- list(
         type   = asset_type,
         root   = root,
@@ -84,7 +85,7 @@ validate_asset_roots <- function(manifest) {
       )
     } else if (asset_type %in% file_types) {
       fpath <- uri
-      exists <- !is.null(fpath) && file.exists(fpath)
+      exists <- .backend_uri_exists(fpath, backend, directory = FALSE)
       results[[name]] <- list(
         type   = asset_type,
         file   = fpath,
@@ -93,7 +94,7 @@ validate_asset_roots <- function(manifest) {
       )
     } else if (identical(asset_type, "multimodal_ref")) {
       mpath <- uri
-      exists <- !is.null(mpath) && file.exists(mpath)
+      exists <- .backend_uri_exists(mpath, backend, directory = FALSE)
       results[[name]] <- list(
         type   = asset_type,
         manifest = mpath,
@@ -105,7 +106,7 @@ validate_asset_roots <- function(manifest) {
 
   # Metadata file
   meta_file <- manifest$metadata$uri %||% manifest$metadata$file
-  meta_exists <- !is.null(meta_file) && file.exists(meta_file)
+  meta_exists <- .backend_uri_exists(meta_file, backend, directory = FALSE)
   results[["_metadata"]] <- list(
     type   = "metadata",
     file   = meta_file,
@@ -116,15 +117,41 @@ validate_asset_roots <- function(manifest) {
   results
 }
 
+#' Check URI existence through the active storage backend
+#'
+#' Local manifests can still use regular filesystem paths. Store-backed
+#' manifests use S3 URIs, where directory-like assets are prefixes and
+#' therefore must be validated by listing rather than by HEAD.
+#'
+#' @keywords internal
+.backend_uri_exists <- function(uri, backend = NULL, directory = FALSE) {
+  if (is.null(uri) || !nzchar(uri)) return(FALSE)
+
+  if (grepl("^s3://", uri)) {
+    if (is.null(backend)) return(FALSE)
+    return(isTRUE(tryCatch({
+      if (isTRUE(directory)) {
+        length(backend_list(backend, uri)) > 0L
+      } else {
+        head <- backend_head(backend, uri)
+        !is.null(head) && isTRUE(head$exists)
+      }
+    }, error = function(e) FALSE)))
+  }
+
+  if (isTRUE(directory)) dir.exists(uri) else file.exists(uri)
+}
+
 #' Run full validation on a manifest
 #'
 #' Checks structural validity, path safety, and asset existence.
 #'
 #' @param manifest List; parsed manifest.
+#' @param backend Optional storage backend for non-local URIs.
 #' @return Named list with \code{valid} (logical), \code{errors} (character),
 #'   \code{warnings} (character), \code{asset_status} (list).
 #' @export
-validate_imaging_dataset <- function(manifest) {
+validate_imaging_dataset <- function(manifest, backend = NULL) {
   errors <- character(0)
   warnings_out <- character(0)
 
@@ -142,7 +169,7 @@ validate_imaging_dataset <- function(manifest) {
   }
 
   # Asset existence check
-  asset_status <- validate_asset_roots(manifest)
+  asset_status <- validate_asset_roots(manifest, backend = backend)
 
   for (name in names(asset_status)) {
     status <- asset_status[[name]]
