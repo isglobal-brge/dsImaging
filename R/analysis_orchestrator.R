@@ -141,6 +141,7 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
 
     # Resume: reconcile finished/failed jobs first, then check pending items.
     .sync_generation_jobs(generation_id)
+    requeue_stale_claimed_items(generation_id)
     items <- get_generation_items(generation_id)
 
     # If generation exists but has no items, populate them
@@ -452,6 +453,7 @@ imagingRadiomicsCollectionStatusDS <- function(generation_id_enc) {
 
   # Sync dsJobs terminal states -> mark asset_items as completed/failed.
   .sync_generation_jobs(generation_id)
+  requeue_stale_claimed_items(generation_id)
   reconcile_generation_counters(generation_id)
 
   gen <- get_generation(generation_id)
@@ -503,6 +505,83 @@ imagingRadiomicsCollectionStatusDS <- function(generation_id_enc) {
   )
 }
 
+#' Recover a Radiomics Collection Generation
+#'
+#' DataSHIELD aggregate method. Reconciles dsJobs state, requeues stale claimed
+#' items left by interrupted submitters, and triggers the next drip-feed batch
+#' if capacity is available.
+#'
+#' @param generation_id_enc Encoded generation id.
+#' @return Same payload as `imagingRadiomicsCollectionStatusDS`.
+#' @export
+imagingRadiomicsRecoverCollectionDS <- function(generation_id_enc) {
+  generation_id <- .dsr_decode(generation_id_enc)
+  .sync_generation_jobs(generation_id)
+  requeue_stale_claimed_items(generation_id)
+  reconcile_generation_counters(generation_id)
+
+  gen <- get_generation(generation_id)
+  if (is.null(gen))
+    stop("Generation not found: ", generation_id, call. = FALSE)
+  if (gen$state %in% c("RUNNING", "PENDING")) {
+    tryCatch(
+      .drip_feed_next_batch(generation_id, gen$dataset_id),
+      error = function(e) update_generation(generation_id,
+        error = paste("Recovery drip-feed failed:", conditionMessage(e))))
+  }
+
+  imagingRadiomicsCollectionStatusDS(.dsr_encode(generation_id))
+}
+
+#' Cancel a Radiomics Collection Generation
+#'
+#' DataSHIELD aggregate method. Admin-only; protected by `dsjobs.admin_key`.
+#' Cancels dsJobs belonging to the generation and marks unfinished items as
+#' skipped, without exposing sample identifiers to the client.
+#'
+#' @param generation_id_enc Encoded generation id.
+#' @param admin_key_enc Encoded admin key payload.
+#' @param reason_enc Encoded cancellation reason.
+#' @return Named list with cancellation counts.
+#' @export
+imagingRadiomicsCancelCollectionDS <- function(generation_id_enc,
+                                               admin_key_enc,
+                                               reason_enc = NULL) {
+  generation_id <- .dsr_decode(generation_id_enc)
+  reason <- if (is.null(reason_enc)) {
+    "Cancelled by admin"
+  } else {
+    .dsr_decode(reason_enc)
+  }
+  if (is.null(reason) || !nzchar(reason)) reason <- "Cancelled by admin"
+  .verify_radiomics_admin(admin_key_enc)
+
+  gen <- get_generation(generation_id)
+  if (is.null(gen))
+    stop("Generation not found: ", generation_id, call. = FALSE)
+  if (gen$state %in% c("ACTIVE"))
+    stop("Cannot cancel an already published generation.", call. = FALSE)
+
+  cancelled <- dsJobs::cancel_jobs_by_tag(
+    paste0("%", generation_id, "%"),
+    admin_key = admin_key_enc,
+    reason = reason,
+    states = c("PENDING", "RUNNING"))
+  skipped <- skip_unfinished_generation_items(generation_id,
+    paste("Cancelled:", reason))
+  update_generation(generation_id, state = "CANCELLED",
+    error = paste("Cancelled:", reason))
+  reconcile_generation_counters(generation_id)
+
+  list(
+    generation_id = generation_id,
+    state = "CANCELLED",
+    cancelled_jobs = nrow(cancelled),
+    skipped_items = skipped,
+    reason = safe_metadata_string(reason)
+  )
+}
+
 # ---------------------------------------------------------------------------
 # 4. Publish: aggregate per-image outputs into collection asset
 # ---------------------------------------------------------------------------
@@ -526,11 +605,14 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
 
   # Final sync to catch any late completions/failures
   .sync_generation_jobs(generation_id)
+  requeue_stale_claimed_items(generation_id)
   reconcile_generation_counters(generation_id)
 
   gen <- get_generation(generation_id)
   if (is.null(gen))
     stop("Generation not found: ", generation_id, call. = FALSE)
+  if (gen$state %in% c("CANCELLED"))
+    stop("Generation was cancelled and cannot be published.", call. = FALSE)
 
   items <- get_generation_items(generation_id)
   completed <- items[items$status == "completed", ]
@@ -857,6 +939,8 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 .sync_generation_jobs <- function(generation_id) {
   .sync_completed_jobs(generation_id)
   .sync_failed_jobs(generation_id)
+  .sync_cancelled_jobs(generation_id)
+  .sync_active_jobs(generation_id)
   invisible(NULL)
 }
 
@@ -980,6 +1064,57 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
     err_msg <- failed_jobs$error_message[i] %||% "dsJobs job failed"
     complete_item_atomic(generation_id, sid, "failed",
       error = err_msg)
+  }
+  invisible(NULL)
+}
+
+#' Sync dsJobs cancelled states back to asset_items
+#'
+#' Cancelled dsJobs are terminal. Mark their corresponding generation items as
+#' skipped so status/publish never leaves a collection stuck in `running`.
+#'
+#' @keywords internal
+.sync_cancelled_jobs <- function(generation_id) {
+  items <- get_generation_items(generation_id)
+  pending_items <- items[items$status %in% c("pending", "claimed", "running"), ,
+                         drop = FALSE]
+  if (nrow(pending_items) == 0) return(invisible(NULL))
+
+  cancelled_jobs <- dsJobs::query_jobs_by_tag(paste0("%", generation_id, "%"),
+    states = "CANCELLED")
+  if (nrow(cancelled_jobs) == 0) return(invisible(NULL))
+
+  for (i in seq_len(nrow(cancelled_jobs))) {
+    tags <- strsplit(cancelled_jobs$tags[i], ",", fixed = TRUE)[[1]]
+    sid <- .sample_id_from_tags(tags, pending_items$sample_id)
+    if (is.null(sid)) next
+    err_msg <- cancelled_jobs$error_message[i] %||% "dsJobs job cancelled"
+    complete_item_atomic(generation_id, sid, "skipped", error = err_msg)
+  }
+  invisible(NULL)
+}
+
+#' Sync dsJobs active states back to asset_items
+#'
+#' This closes the crash window where `jobSubmitDS()` succeeds but the caller
+#' dies before the generation item is moved from `claimed` to `running`.
+#'
+#' @keywords internal
+.sync_active_jobs <- function(generation_id) {
+  items <- get_generation_items(generation_id)
+  pending_items <- items[items$status %in% c("pending", "claimed", "running"), ,
+                         drop = FALSE]
+  if (nrow(pending_items) == 0) return(invisible(NULL))
+
+  active_jobs <- dsJobs::query_jobs_by_tag(paste0("%", generation_id, "%"),
+    states = c("PENDING", "RUNNING"))
+  if (nrow(active_jobs) == 0) return(invisible(NULL))
+
+  for (i in seq_len(nrow(active_jobs))) {
+    tags <- strsplit(active_jobs$tags[i], ",", fixed = TRUE)[[1]]
+    sid <- .sample_id_from_tags(tags, pending_items$sample_id)
+    if (is.null(sid)) next
+    record_item_status(generation_id, sid, "running")
   }
   invisible(NULL)
 }

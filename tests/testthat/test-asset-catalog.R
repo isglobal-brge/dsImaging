@@ -218,3 +218,118 @@ test_that("generation counter reconciliation repairs stale counts", {
   expect_equal(repaired$completed_n, 1L)
   expect_equal(repaired$failed_n, 0L)
 })
+
+test_that("stale claimed items are requeued for recovery", {
+  tmp <- tempfile(fileext = ".sqlite")
+  on.exit(unlink(tmp))
+  withr::local_options(list(dsimaging.asset_db = tmp))
+
+  gen <- claim_or_reuse_generation("ds.v1", "feature_table",
+    "hash_stale_claim", owner_id = "tester", expected_n = 1L)$generation_id
+  record_item_status(gen, "sample_a", "pending")
+  claimed <- claim_pending_items(gen, 1L, claimer_id = "test")
+  expect_equal(claimed, "sample_a")
+
+  db <- dsImaging:::.asset_db_connect()
+  DBI::dbExecute(db,
+    "UPDATE asset_items SET claimed_at = '2000-01-01T00:00:00.000Z'
+     WHERE generation_id = ? AND sample_id = ?",
+    params = list(gen, "sample_a"))
+  dsImaging:::.asset_db_close(db)
+
+  n <- dsImaging:::requeue_stale_claimed_items(gen, timeout_secs = 1)
+  expect_equal(n, 1L)
+  item <- get_generation_items(gen)
+  expect_equal(item$status, "pending")
+  expect_true(is.na(item$claimed_at))
+})
+
+test_that("active dsJobs prevent stale claimed items from being duplicated", {
+  asset_db <- tempfile(fileext = ".sqlite")
+  home <- tempfile("dsjobs-home")
+  dir.create(home, recursive = TRUE, showWarnings = FALSE)
+  on.exit(unlink(c(asset_db, home), recursive = TRUE))
+  withr::local_options(list(dsimaging.asset_db = asset_db, dsjobs.home = home))
+
+  gen <- claim_or_reuse_generation("lung", "radiomics_collection",
+    "hash_active_claim", owner_id = "tester", expected_n = 1L)$generation_id
+  record_item_status(gen, "sample_a", "pending")
+  expect_equal(claim_pending_items(gen, 1L, claimer_id = "test"), "sample_a")
+
+  adb <- dsImaging:::.asset_db_connect()
+  DBI::dbExecute(adb,
+    "UPDATE asset_items SET claimed_at = '2000-01-01T00:00:00.000Z'
+     WHERE generation_id = ? AND sample_id = ?",
+    params = list(gen, "sample_a"))
+  dsImaging:::.asset_db_close(adb)
+
+  db <- dsJobs:::.db_connect()
+  on.exit(dsJobs:::.db_close(db), add = TRUE)
+  spec <- list(
+    label = "dsImaging_image",
+    tags = c("per_image", "lung", "sample_a", gen),
+    steps = list(list(type = "emit", plane = "session",
+      output_name = "x", value = 1))
+  )
+  dsJobs:::.store_create_job(db, "job_active_sample", "tester", spec, 1L)
+
+  dsImaging:::.sync_generation_jobs(gen)
+  n <- dsImaging:::requeue_stale_claimed_items(gen, timeout_secs = 1)
+
+  expect_equal(n, 0L)
+  item <- get_generation_items(gen)
+  expect_equal(item$status, "running")
+})
+
+test_that("generation cancellation is admin-gated and cancels tagged jobs", {
+  asset_db <- tempfile(fileext = ".sqlite")
+  home <- tempfile("dsjobs-home")
+  dir.create(home, recursive = TRUE, showWarnings = FALSE)
+  on.exit(unlink(c(asset_db, home), recursive = TRUE))
+  withr::local_options(list(
+    dsimaging.asset_db = asset_db,
+    dsjobs.home = home,
+    dsjobs.admin_key = "secret"
+  ))
+
+  gen <- claim_or_reuse_generation("lung", "radiomics_collection",
+    "hash_cancel", owner_id = "tester", expected_n = 2L)$generation_id
+  update_generation(gen, state = "RUNNING")
+  record_item_status(gen, "sample_a", "running")
+  record_item_status(gen, "sample_b", "pending")
+
+  db <- dsJobs:::.db_connect()
+  on.exit(dsJobs:::.db_close(db), add = TRUE)
+  spec <- list(
+    label = "dsImaging_image",
+    tags = c("per_image", "lung", "sample_a", gen),
+    visibility = "private",
+    steps = list(list(type = "emit", plane = "session",
+      output_name = "x", value = 1))
+  )
+  dsJobs:::.store_create_job(db, "job_sample_a", "tester", spec, 1L)
+  dsJobs:::.store_update_job(db, "job_sample_a", state = "RUNNING")
+
+  expect_error(
+    imagingRadiomicsCancelCollectionDS(
+      dsImaging:::.dsr_encode(gen),
+      dsImaging:::.dsr_encode(list(.admin_key = "wrong")),
+      dsImaging:::.dsr_encode("test cancel")
+    ),
+    "invalid admin_key"
+  )
+  expect_equal(dsJobs:::.store_get_job(db, "job_sample_a")$state, "RUNNING")
+
+  out <- imagingRadiomicsCancelCollectionDS(
+    dsImaging:::.dsr_encode(gen),
+    dsImaging:::.dsr_encode(list(.admin_key = "secret")),
+    dsImaging:::.dsr_encode("test cancel")
+  )
+
+  expect_equal(out$state, "CANCELLED")
+  expect_equal(out$cancelled_jobs, 1L)
+  expect_equal(dsJobs:::.store_get_job(db, "job_sample_a")$state, "CANCELLED")
+  expect_equal(get_generation(gen)$state, "CANCELLED")
+  items <- get_generation_items(gen)
+  expect_true(all(items$status == "skipped"))
+})

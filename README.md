@@ -70,6 +70,7 @@ options(
   dsimaging.asset_db = "/var/lib/dsimaging/imaging_assets.sqlite",
   dsimaging.analysis.max_inflight = 2L,
   dsimaging.analysis.batch_size = 1L,
+  dsimaging.analysis.claim_timeout_secs = 3600L,
   dsimaging.analysis.container_runtime = "auto",
   dsimaging.analysis.container_pull = "missing",
   dsimaging.analysis.container_images = list(
@@ -81,6 +82,12 @@ options(
 `dsJobs` controls the shared scheduler, adaptive resource limits, GPU detection,
 container execution, and external/HPC backend. `dsImaging` only declares the
 domain runners and publishes domain outputs.
+
+Generation recovery is automatic during status/publish checks. If a process dies
+after claiming samples but before submitting their dsJobs, claimed items older
+than `dsimaging.analysis.claim_timeout_secs` are returned to `pending` and the
+drip-feed loop can submit them again. Destructive generation cancellation is
+admin-only and reuses `dsjobs.admin_key`.
 
 ## Server Methods
 

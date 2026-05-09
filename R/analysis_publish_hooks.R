@@ -224,6 +224,8 @@
 
   gen <- get_generation(generation_id)
   if (is.null(gen) || !gen$state %in% c("RUNNING", "PENDING")) return(invisible(NULL))
+  .sync_active_jobs(generation_id)
+  requeue_stale_claimed_items(generation_id)
 
   # Check how many per-image jobs for this generation are currently active
   active_n <- dsJobs::count_active_jobs(paste0("%", generation_id, "%"))

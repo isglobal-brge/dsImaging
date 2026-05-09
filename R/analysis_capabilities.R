@@ -70,11 +70,10 @@ imagingListModelsDS <- function() {
   if (is.null(expected) || !nzchar(expected))
     stop("Admin access is not enabled. Set dsjobs.admin_key option.", call. = FALSE)
 
-  # Decode B64
+  # Decode the same URL-safe B64 JSON transport used by dsJobsClient.
   decoded <- tryCatch({
-    d <- jsonlite::base64_dec(gsub("^B64:", "", admin_key_encoded))
-    parsed <- jsonlite::fromJSON(rawToChar(d), simplifyVector = FALSE)
-    parsed$.admin_key
+    parsed <- .dsr_decode(admin_key_encoded)
+    if (is.list(parsed)) parsed$.admin_key else parsed
   }, error = function(e) admin_key_encoded)
 
   if (is.null(decoded) || !nzchar(decoded))

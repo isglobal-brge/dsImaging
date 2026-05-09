@@ -43,6 +43,20 @@ radiomicsCollectionStatusDS <- function(generation_id_enc) {
   imagingRadiomicsCollectionStatusDS(generation_id_enc)
 }
 
+#' @rdname imagingRadiomicsRecoverCollectionDS
+#' @export
+radiomicsRecoverCollectionDS <- function(generation_id_enc) {
+  imagingRadiomicsRecoverCollectionDS(generation_id_enc)
+}
+
+#' @rdname imagingRadiomicsCancelCollectionDS
+#' @export
+radiomicsCancelCollectionDS <- function(generation_id_enc, admin_key_enc,
+                                        reason_enc = NULL) {
+  imagingRadiomicsCancelCollectionDS(generation_id_enc, admin_key_enc,
+    reason_enc)
+}
+
 #' @rdname imagingRadiomicsPublishCollectionDS
 #' @export
 radiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_enc,

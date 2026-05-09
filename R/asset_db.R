@@ -749,6 +749,86 @@ claim_pending_items <- function(generation_id, n, claimer_id = NULL) {
   })
 }
 
+#' Requeue stale claimed items
+#'
+#' Items are marked `claimed` while a server process is preparing their dsJobs
+#' submissions. If that process dies before it records `running` or a terminal
+#' status, the generation must not stall forever.
+#'
+#' @param generation_id Character; generation identifier.
+#' @param timeout_secs Numeric; claim age threshold in seconds.
+#' @return Integer count of items requeued.
+#' @keywords internal
+requeue_stale_claimed_items <- function(generation_id, timeout_secs = NULL) {
+  timeout_secs <- as.numeric(timeout_secs %||%
+    getOption("dsimaging.analysis.claim_timeout_secs",
+      getOption("default.dsimaging.analysis.claim_timeout_secs",
+        getOption("dsimaging.claim_timeout_secs",
+          getOption("default.dsimaging.claim_timeout_secs", 3600)))))
+  if (is.na(timeout_secs) || timeout_secs <= 0) return(0L)
+
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+  now <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
+  cutoff <- format(Sys.time() - timeout_secs, "%Y-%m-%dT%H:%M:%OS3Z",
+    tz = "UTC")
+
+  DBI::dbExecute(db, "BEGIN IMMEDIATE")
+  tryCatch({
+    n <- DBI::dbExecute(db,
+      "UPDATE asset_items
+       SET status = 'pending',
+           claimed_by = NULL,
+           claimed_at = NULL,
+           error = 'Stale claim requeued after submit interruption'
+       WHERE generation_id = ?
+         AND status = 'claimed'
+         AND (claimed_at IS NULL OR claimed_at = '' OR claimed_at < ?)",
+      params = list(generation_id, cutoff))
+    if (n > 0)
+      .recompute_generation_counters(db, generation_id, now = now)
+    DBI::dbExecute(db, "COMMIT")
+    as.integer(n)
+  }, error = function(e) {
+    tryCatch(DBI::dbExecute(db, "ROLLBACK"), error = function(e2) NULL)
+    stop(e)
+  })
+}
+
+#' Mark unfinished generation items as skipped
+#'
+#' @param generation_id Character; generation identifier.
+#' @param reason Character; reason stored on skipped items.
+#' @return Integer count of items skipped.
+#' @keywords internal
+skip_unfinished_generation_items <- function(generation_id,
+                                             reason = "Cancelled") {
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+  now <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
+  DBI::dbExecute(db, "BEGIN IMMEDIATE")
+  tryCatch({
+    n <- DBI::dbExecute(db,
+      "UPDATE asset_items
+       SET status = 'skipped',
+           artifact_relpath = NULL,
+           checksum = NULL,
+           error = ?,
+           claimed_by = NULL,
+           claimed_at = NULL
+       WHERE generation_id = ?
+         AND status IN ('pending', 'claimed', 'running')",
+      params = list(reason %||% "Cancelled", generation_id))
+    if (n > 0)
+      .recompute_generation_counters(db, generation_id, now = now)
+    DBI::dbExecute(db, "COMMIT")
+    as.integer(n)
+  }, error = function(e) {
+    tryCatch(DBI::dbExecute(db, "ROLLBACK"), error = function(e2) NULL)
+    stop(e)
+  })
+}
+
 #' Get generation summary
 #'
 #' @param generation_id Character; generation identifier.

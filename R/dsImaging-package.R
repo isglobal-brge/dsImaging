@@ -44,6 +44,8 @@
 #' - `dsimaging.analysis.model_registry`: model registry path.
 #' - `dsimaging.max_inflight`: per-generation active image-analysis job cap.
 #' - `dsimaging.batch_size`: server-side drip-feed batch size.
+#' - `dsimaging.analysis.claim_timeout_secs`: age after which interrupted
+#'   submit claims are returned to pending. Defaults to 3600 seconds.
 #'
 #' @section Containerized clinical imaging runners:
 #' Runners may use local Python environments or container images. Container
