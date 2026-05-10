@@ -74,7 +74,7 @@ images.
 
 The radiomics analysis environment also carries the shared clinical imaging IO
 dependencies used by the lightweight runners: `pydicom`, `rt-utils`,
-`highdicom`, and `Pillow`.
+`highdicom`, `Pillow`, `openslide-python`, and `openslide-bin`.
 
 ## Important Options
 
