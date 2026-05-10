@@ -10,7 +10,7 @@ import json
 import os
 import sys
 
-from dsimaging_utils import package_versions
+from dsimaging_utils import package_versions, resolve_asset_path
 
 
 def _strip_extensions(filename):
@@ -187,7 +187,16 @@ def main():
     else:
         # Collection mode (original behavior)
         dataset_id = os.environ.get("DSHPC_CFG_DATASET_ID", "")
-        image_root, mask_root = find_dataset_roots(dataset_id or None)
+        image_asset = os.environ.get("DSHPC_CFG_IMAGE_ASSET", "images")
+        mask_asset = os.environ.get("DSHPC_CFG_MASK_ASSET", "masks")
+        image_root = resolve_asset_path(image_asset, "images",
+                                        os.environ.get("DSHPC_CFG_IMAGE_ROOT"))
+        mask_root = resolve_asset_path(mask_asset, "masks",
+                                       os.environ.get("DSHPC_CFG_MASK_ROOT"))
+        if image_root and not mask_root and os.path.isdir(args.input):
+            mask_root = args.input
+        if not image_root or not mask_root:
+            image_root, mask_root = find_dataset_roots(dataset_id or None)
 
         if image_root and mask_root:
             print(f"  Image root: {image_root}")

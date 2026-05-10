@@ -80,6 +80,9 @@ validate_asset <- function(asset, name, source = "manifest") {
   valid_kinds <- c("image_root", "mask_root", "feature_table",
                     "wsi_root", "dicom_series_root",
                     "rt_struct_root", "rt_dose_file", "rt_plan_file",
+                    "rt_seg_root", "dose_table", "qc_table",
+                    "qc_visual_asset", "embedding_table",
+                    "wsi_tile_root", "registration_root",
                     "multimodal_ref")
   if (!is.null(kind) && !kind %in% valid_kinds)
     stop("Asset '", name, "': unknown kind '", kind, "'.", call. = FALSE)

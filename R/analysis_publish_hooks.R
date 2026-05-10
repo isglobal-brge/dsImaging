@@ -13,8 +13,9 @@
     return(list(status = "skipped"))
   }
 
-  deriv_hash <- NULL
-  if (!is.null(step$config)) {
+  cfg <- step$config %||% list()
+  deriv_hash <- step$derivation_hash %||% cfg$derivation_hash
+  if (is.null(deriv_hash) && !is.null(step$config)) {
     deriv_hash <- compute_derivation_hash(
       dataset_id = dataset_id,
       runner = step$runner %||% "pyradiomics",

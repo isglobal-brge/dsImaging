@@ -101,7 +101,9 @@ test_that("validate_asset rejects unknown asset kind", {
 test_that("validate_asset accepts supported imaging asset kinds", {
   kinds <- c("image_root", "mask_root", "feature_table", "wsi_root",
              "dicom_series_root", "rt_struct_root", "rt_dose_file",
-             "rt_plan_file", "multimodal_ref")
+             "rt_plan_file", "rt_seg_root", "dose_table", "qc_table",
+             "qc_visual_asset", "embedding_table", "wsi_tile_root",
+             "registration_root", "multimodal_ref")
   for (kind in kinds) {
     expect_invisible(
       validate_asset(list(kind = kind, uri = file.path("/srv/data", kind)),

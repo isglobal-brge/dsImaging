@@ -67,8 +67,10 @@ validate_asset_roots <- function(manifest, backend = NULL) {
   assets <- manifest$assets %||% list()
 
   dir_types <- c("image_root", "mask_root", "wsi_root", "dicom_series_root",
-                 "rt_struct_root")
-  file_types <- c("feature_table", "rt_dose_file", "rt_plan_file")
+                 "rt_struct_root", "rt_seg_root", "qc_visual_asset",
+                 "wsi_tile_root", "registration_root")
+  file_types <- c("feature_table", "rt_dose_file", "rt_plan_file",
+                  "dose_table", "qc_table", "embedding_table")
 
   for (name in names(assets)) {
     asset <- assets[[name]]

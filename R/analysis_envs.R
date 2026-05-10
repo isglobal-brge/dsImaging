@@ -2,7 +2,9 @@
 
 .RADIOMICS_PYTHON_DEPS <- list(
   radiomics = c("pyradiomics>=3.0.1,<3.1", "SimpleITK>=2.0.0", "pandas>=1.3.0",
-                "numpy>=1.23.0,<2", "pyyaml>=5.0", "pyarrow>=10.0.0"),
+                "numpy>=1.23.0,<2", "pyyaml>=5.0", "pyarrow>=10.0.0",
+                "pydicom>=2.4.0", "rt-utils>=1.2.0",
+                "highdicom>=0.23.0", "Pillow>=9.0.0"),
   seg_lungmask = c("lungmask>=0.2.0", "torch>=2.0.0",
                    "SimpleITK>=2.0.0", "nibabel>=4.0.0"),
   seg_totalseg = c("TotalSegmentator>=2.0.0", "torch>=2.0.0",
@@ -59,7 +61,9 @@ list_imaging_analysis_envs <- function() {
                 "ct_lung_threshold",
                 "totalsegmentator_infer", "nnunetv2_predict",
                 "monai_bundle_infer", "dicom_convert",
-                "image_preprocess", "mask_ops", "imaging_qc_metrics")
+                "image_preprocess", "mask_ops", "imaging_qc_metrics",
+                "rt_convert", "rt_dose_plan", "imaging_qc_visuals",
+                "image_spatial", "wsi_tile", "image_embeddings")
   data.frame(
     runner = expected,
     path = file.path(runners_dir, paste0(expected, ".yml")),

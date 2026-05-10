@@ -6,6 +6,10 @@ Authors@R:
     c(person("David", "Sarrat González", , "david.sarrat@isglobal.org", role = c("aut", "cre")),
       person("Xavier", "Escribà-Montagut", , "xavier.escriba@isglobal.org", role = c("aut")),
       person("Juan R", "González", , "juanr.gonzalez@isglobal.org", role = c("aut")))
+Author: David Sarrat González [aut, cre],
+    Xavier Escribà-Montagut [aut],
+    Juan R González [aut]
+Maintainer: David Sarrat González <david.sarrat@isglobal.org>
 Description: Server-side DataSHIELD package for clinical imaging. Provides
     manifest-based dataset descriptors, storage backends, a SQLite asset
     catalog for immutable derived assets, DICOM conversion, image

@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import sqlite3
 import sys
 
 
@@ -98,7 +99,7 @@ def asset_uri(entry):
 
 
 def manifest_assets_from_registry(dataset_id):
-    registry_path = cfg("registry_path", "/var/lib/dsimaging/registry.yaml")
+    registry_path = cfg("registry_path", os.environ.get("DSIMAGING_REGISTRY_PATH", "/var/lib/dsimaging/registry.yaml"))
     registry = read_yaml(registry_path, {})
     if not isinstance(registry, dict):
         return {}
@@ -114,11 +115,46 @@ def manifest_assets_from_registry(dataset_id):
     return manifest.get("assets", {}) or {}
 
 
+def resolve_catalog_asset_path(asset_name, dataset_id=None):
+    if not asset_name:
+        return None
+    dataset_id = dataset_id or cfg("dataset_id", "")
+    db_path = cfg("asset_db", os.environ.get("DSIMAGING_ASSET_DB", "/var/lib/dsimaging/imaging_assets.sqlite"))
+    if not db_path or not os.path.exists(db_path):
+        return None
+    try:
+        con = sqlite3.connect(db_path)
+        con.row_factory = sqlite3.Row
+        row = con.execute(
+            "SELECT path_or_root FROM assets WHERE asset_id = ? AND status = 'active'",
+            (asset_name,),
+        ).fetchone()
+        if row is None and dataset_id:
+            row = con.execute(
+                "SELECT a.path_or_root FROM asset_aliases aa "
+                "JOIN assets a ON a.asset_id = aa.asset_id "
+                "WHERE aa.dataset_id = ? AND aa.alias = ? AND a.status = 'active'",
+                (dataset_id, asset_name),
+            ).fetchone()
+        con.close()
+        if row is not None:
+            path = row["path_or_root"]
+            if path and os.path.exists(path):
+                return path
+    except Exception:
+        return None
+    return None
+
+
 def resolve_asset_path(asset_name, role="images", explicit=None):
     if explicit and os.path.exists(explicit):
         return explicit
 
     dataset_id = cfg("dataset_id", "")
+    catalog_path = resolve_catalog_asset_path(asset_name, dataset_id)
+    if catalog_path:
+        return catalog_path
+
     if dataset_id:
         assets = manifest_assets_from_registry(dataset_id)
         candidates = [asset_name, role, "images" if role == "image" else role]

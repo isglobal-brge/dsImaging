@@ -114,7 +114,8 @@ imagingLineageDS <- function(asset_id) {
 #' minimum-row disclosure guard used for imaging resources.
 #'
 #' Supported asset kinds are \code{radiomics_collection},
-#' \code{feature_table}, \code{qc_table}, and \code{embedding_table}.
+#' \code{feature_table}, \code{qc_table}, \code{dose_table}, and
+#' \code{embedding_table}.
 #'
 #' @param dataset_id Character; dataset identifier used for alias resolution
 #'   and backend lookup.
@@ -139,7 +140,7 @@ imagingLoadAssetDS <- function(dataset_id, asset_id_or_alias, columns = NULL,
   }
 
   supported <- c("radiomics_collection", "feature_table", "qc_table",
-                 "embedding_table")
+                 "dose_table", "embedding_table")
   if (!asset$kind %in% supported) {
     stop("Asset '", asset_id_or_alias, "' is kind '", asset$kind,
          "', not a loadable feature table.", call. = FALSE)

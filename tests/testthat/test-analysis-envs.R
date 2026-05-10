@@ -13,6 +13,12 @@ test_that("runner health includes clinical imaging analysis runners", {
   expect_true("image_preprocess" %in% runners$runner)
   expect_true("mask_ops" %in% runners$runner)
   expect_true("imaging_qc_metrics" %in% runners$runner)
+  expect_true("rt_convert" %in% runners$runner)
+  expect_true("rt_dose_plan" %in% runners$runner)
+  expect_true("imaging_qc_visuals" %in% runners$runner)
+  expect_true("image_spatial" %in% runners$runner)
+  expect_true("wsi_tile" %in% runners$runner)
+  expect_true("image_embeddings" %in% runners$runner)
 })
 
 test_that("radiomics runners declare scheduler resources", {
@@ -29,6 +35,8 @@ test_that("radiomics runners declare scheduler resources", {
   threshold <- yaml::read_yaml(file.path(home, "runners", "ct_lung_threshold.yml"))
   mask_ops <- yaml::read_yaml(file.path(home, "runners", "mask_ops.yml"))
   qc <- yaml::read_yaml(file.path(home, "runners", "imaging_qc_metrics.yml"))
+  rt <- yaml::read_yaml(file.path(home, "runners", "rt_convert.yml"))
+  embeddings <- yaml::read_yaml(file.path(home, "runners", "image_embeddings.yml"))
 
   expect_equal(pyradiomics$resources$memory_mb, 6144L)
   expect_equal(pyradiomics$resources$max_concurrent, 2L)
@@ -41,6 +49,9 @@ test_that("radiomics runners declare scheduler resources", {
   expect_equal(threshold$resources$memory_mb, 1024L)
   expect_equal(mask_ops$resources$concurrency_group, "mask_ops")
   expect_equal(qc$resources$max_concurrent, 4L)
+  expect_equal(rt$resources$concurrency_group, "imaging_rt")
+  expect_equal(embeddings$resources$optional_gpus, 1L)
+  expect_true("DSIMAGING_ASSET_DB" %in% names(pyradiomics$env))
 })
 
 test_that("radiomics runners can declare containerized execution metadata", {

@@ -34,7 +34,13 @@
   # emulation; harmless on native amd64 and aarch64 hosts.
   rosetta_mkl_env <- list(
     MKL_SERVICE_FORCE_INTEL = "0",
-    MKL_THREADING_LAYER = "GNU"
+    MKL_THREADING_LAYER = "GNU",
+    DSIMAGING_ASSET_DB = getOption("dsimaging.asset_db",
+      getOption("default.dsimaging.asset_db",
+        "/var/lib/dsimaging/imaging_assets.sqlite")),
+    DSIMAGING_REGISTRY_PATH = getOption("dsimaging.registry_path",
+      getOption("default.dsimaging.registry_path",
+        "/var/lib/dsimaging/registry.yaml"))
   )
 
   # PyRadiomics extraction runner
@@ -354,6 +360,184 @@
                         "mask_asset", "mask_root")
   ), "imaging_qc_metrics", list(
     "-m", "dsimaging_qc_metrics",
+    "--input", "{input_dir}",
+    "--output", "{output_dir}"
+  )))
+
+  # RTSTRUCT and DICOM SEG conversion into reusable mask assets.
+  .write_runner_yaml(runners_dir, "rt_convert", .with_container(list(
+    name = "rt_convert",
+    plane = "artifact",
+    resource_class = "cpu",
+    resources = list(
+      memory_mb = 4096L,
+      cpu_slots = 2L,
+      max_concurrent = 2L,
+      concurrency_group = "imaging_rt"
+    ),
+    command = "python",
+    python = file.path(venv_root, "radiomics", "bin", "python"),
+    args_template = list(
+      file.path(scripts_dir, "dsimaging_rt_convert.py"),
+      "--input", "{input_dir}",
+      "--output", "{output_dir}"
+    ),
+    timeout_secs = 3600L,
+    env = rosetta_mkl_env,
+    allowed_params = c("dataset_id", "rt_asset", "rt_struct_asset",
+                        "rt_root", "rt_file", "dicom_asset", "dicom_root",
+                        "reference_asset", "reference_image", "image_asset",
+                        "rois")
+  ), "rt_convert", list(
+    "-m", "dsimaging_rt_convert",
+    "--input", "{input_dir}",
+    "--output", "{output_dir}"
+  )))
+
+  # RTDOSE and RTPLAN summaries with optional dose-in-mask metrics.
+  .write_runner_yaml(runners_dir, "rt_dose_plan", .with_container(list(
+    name = "rt_dose_plan",
+    plane = "artifact",
+    resource_class = "cpu",
+    resources = list(
+      memory_mb = 4096L,
+      cpu_slots = 2L,
+      max_concurrent = 2L,
+      concurrency_group = "imaging_rt"
+    ),
+    command = "python",
+    python = file.path(venv_root, "radiomics", "bin", "python"),
+    args_template = list(
+      file.path(scripts_dir, "dsimaging_rt_dose.py"),
+      "--input", "{input_dir}",
+      "--output", "{output_dir}"
+    ),
+    timeout_secs = 3600L,
+    env = rosetta_mkl_env,
+    allowed_params = c("dataset_id", "dose_asset", "dose_file",
+                        "dose_root", "plan_asset", "plan_file",
+                        "plan_root", "mask_asset", "mask_root")
+  ), "rt_dose_plan", list(
+    "-m", "dsimaging_rt_dose",
+    "--input", "{input_dir}",
+    "--output", "{output_dir}"
+  )))
+
+  # Non-disclosive QC visual thumbnails and overlays.
+  .write_runner_yaml(runners_dir, "imaging_qc_visuals", .with_container(list(
+    name = "imaging_qc_visuals",
+    plane = "artifact",
+    resource_class = "cpu",
+    resources = list(
+      memory_mb = 2048L,
+      cpu_slots = 1L,
+      max_concurrent = 4L,
+      concurrency_group = "imaging_qc"
+    ),
+    command = "python",
+    python = file.path(venv_root, "radiomics", "bin", "python"),
+    args_template = list(
+      file.path(scripts_dir, "dsimaging_qc_visuals.py"),
+      "--input", "{input_dir}",
+      "--output", "{output_dir}"
+    ),
+    timeout_secs = 1800L,
+    env = rosetta_mkl_env,
+    allowed_params = c("dataset_id", "image_asset", "image_root",
+                        "mask_asset", "mask_root", "max_size",
+                        "max_images", "anonymize_names")
+  ), "imaging_qc_visuals", list(
+    "-m", "dsimaging_qc_visuals",
+    "--input", "{input_dir}",
+    "--output", "{output_dir}"
+  )))
+
+  # Spatial operations: registration, crop, resampling, N4 bias correction.
+  .write_runner_yaml(runners_dir, "image_spatial", .with_container(list(
+    name = "image_spatial",
+    plane = "artifact",
+    resource_class = "cpu_heavy",
+    resources = list(
+      memory_mb = 6144L,
+      cpu_slots = 4L,
+      max_concurrent = 2L,
+      concurrency_group = "imaging_cpu"
+    ),
+    command = "python",
+    python = file.path(venv_root, "radiomics", "bin", "python"),
+    args_template = list(
+      file.path(scripts_dir, "dsimaging_spatial.py"),
+      "--input", "{input_dir}",
+      "--output", "{output_dir}",
+      "--operations", "{operations}"
+    ),
+    timeout_secs = 7200L,
+    env = rosetta_mkl_env,
+    allowed_params = c("dataset_id", "image_asset", "image_root",
+                        "mask_asset", "mask_root", "reference_asset",
+                        "reference_image", "operations", "spacing",
+                        "crop_size")
+  ), "image_spatial", list(
+    "-m", "dsimaging_spatial",
+    "--input", "{input_dir}",
+    "--output", "{output_dir}",
+    "--operations", "{operations}"
+  )))
+
+  # Basic WSI/pathology tiling with OpenSlide when available and Pillow fallback.
+  .write_runner_yaml(runners_dir, "wsi_tile", .with_container(list(
+    name = "wsi_tile",
+    plane = "artifact",
+    resource_class = "cpu_heavy",
+    resources = list(
+      memory_mb = 4096L,
+      cpu_slots = 2L,
+      max_concurrent = 2L,
+      concurrency_group = "pathology_io"
+    ),
+    command = "python",
+    python = file.path(venv_root, "radiomics", "bin", "python"),
+    args_template = list(
+      file.path(scripts_dir, "dsimaging_wsi_tile.py"),
+      "--input", "{input_dir}",
+      "--output", "{output_dir}"
+    ),
+    timeout_secs = 7200L,
+    env = rosetta_mkl_env,
+    allowed_params = c("dataset_id", "wsi_asset", "wsi_root",
+                        "tile_size", "stride", "max_tiles",
+                        "tissue_threshold", "write_tiles")
+  ), "wsi_tile", list(
+    "-m", "dsimaging_wsi_tile",
+    "--input", "{input_dir}",
+    "--output", "{output_dir}"
+  )))
+
+  # Deterministic image embeddings table; can run locally or on external HPC.
+  .write_runner_yaml(runners_dir, "image_embeddings", .with_container(list(
+    name = "image_embeddings",
+    plane = "artifact",
+    resource_class = "gpu_optional",
+    resources = list(
+      memory_mb = 4096L,
+      cpu_slots = 2L,
+      optional_gpus = 1L,
+      max_concurrent = 2L,
+      concurrency_group = "image_embeddings"
+    ),
+    command = "python",
+    python = file.path(venv_root, "radiomics", "bin", "python"),
+    args_template = list(
+      file.path(scripts_dir, "dsimaging_embeddings.py"),
+      "--input", "{input_dir}",
+      "--output", "{output_dir}"
+    ),
+    timeout_secs = 3600L,
+    env = rosetta_mkl_env,
+    allowed_params = c("dataset_id", "image_asset", "image_root",
+                        "model", "bins")
+  ), "image_embeddings", list(
+    "-m", "dsimaging_embeddings",
     "--input", "{input_dir}",
     "--output", "{output_dir}"
   )))

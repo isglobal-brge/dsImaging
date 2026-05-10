@@ -23,14 +23,24 @@ external/HPC backend configured in `dsHPC`.
   merges.
 - Immutable derivation hashes, aliases, lineage, and per-image generation state.
 - DICOM series conversion to NIfTI with `dcm2niix` or SimpleITK fallback.
+- RTSTRUCT and DICOM SEG conversion into first-class mask assets.
+- RTDOSE/RTPLAN summaries, with optional dose-in-mask metrics.
 - Image preprocessing runners for resampling, normalization, clamping/windowing,
   and float32 casting.
+- Spatial runners for resampling, registration, cropping, and N4 bias
+  correction.
 - Segmentation runners: existing masks, CT lung threshold, LungMask,
   TotalSegmentator, nnU-Net v2, and MONAI bundles.
 - Mask/ROI operations: label selection, binarization, union, intersection,
   difference, morphology, connected components, and mask-to-image resampling.
 - QC metrics for images and masks, including size, spacing, intensity summaries,
   and mask volumes.
+- Non-disclosive QC thumbnail/overlay artifacts with anonymized filenames and
+  size caps.
+- Basic WSI/pathology tiling with OpenSlide when available and Pillow fallback.
+- Image embedding tables using a deterministic local baseline, scheduled as
+  GPU-optional so external HPC units can accelerate future model-backed
+  embedding runners.
 - PyRadiomics extraction with bundled IBSI, demo, force-2D, voxel-map, and Aerts
   signature profiles.
 - Runner summaries with Python/library versions captured in derived asset
@@ -61,6 +71,10 @@ provisioning for the analysis runners under `/var/lib/dsimaging/venvs`. Set
 `DSIMAGING_SKIP_HEAVY_PROVISION=1` to provision only the radiomics/CT-threshold
 environment and leave torch-heavy segmenters to containers or external HPC
 images.
+
+The radiomics analysis environment also carries the shared clinical imaging IO
+dependencies used by the lightweight runners: `pydicom`, `rt-utils`,
+`highdicom`, and `Pillow`.
 
 ## Important Options
 
