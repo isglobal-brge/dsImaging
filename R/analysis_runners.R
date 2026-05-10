@@ -440,11 +440,8 @@
     .imaging_analysis_option(paste0("container_image_", runner), NULL),
     Sys.getenv(paste0("DSIMAGING_CONTAINER_IMAGE_", toupper(runner)),
       unset = ""),
-    Sys.getenv(paste0("DSRADIOMICS_CONTAINER_IMAGE_", toupper(runner)),
-      unset = ""),
     .imaging_analysis_option("container_image", NULL),
-    Sys.getenv("DSIMAGING_CONTAINER_IMAGE", unset = ""),
-    Sys.getenv("DSRADIOMICS_CONTAINER_IMAGE", unset = "")
+    Sys.getenv("DSIMAGING_CONTAINER_IMAGE", unset = "")
   ))
   candidates <- vapply(candidates, function(x) {
     if (is.null(x) || length(x) == 0) return("")

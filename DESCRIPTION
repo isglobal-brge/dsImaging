@@ -50,16 +50,10 @@ AggregateMethods:
     imagingRadiomicsScanCollectionDS,
     imagingRadiomicsSubmitBatchDS,
     imagingRadiomicsCollectionStatusDS,
+    imagingRadiomicsRecoverCollectionDS,
+    imagingRadiomicsCancelCollectionDS,
     imagingRadiomicsPublishCollectionDS,
-    imagingSegmentationValidateMasksDS,
-    radiomicsCapabilitiesDS,
-    radiomicsInstallModelDS,
-    radiomicsListModelsDS,
-    radiomicsScanCollectionDS,
-    radiomicsSubmitBatchDS,
-    radiomicsCollectionStatusDS,
-    radiomicsPublishCollectionDS,
-    radiomicsValidateMasksDS
+    imagingSegmentationValidateMasksDS
 AssignMethods:
     imagingInitDS,
     imagingLoadAssetDS

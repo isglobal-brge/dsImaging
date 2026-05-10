@@ -252,7 +252,7 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
   profile_signature <- .radiomics_profile_signature(profile)
 
   # Map segmenter to runner. Accept both short forms (e.g. "lungmask") and
-  # the canonical runner names (e.g. "lungmask_infer") that ds.segmenter.* emit.
+  # canonical runner names (e.g. "lungmask_infer") from ds.imaging.segmenter.*.
   seg_runner <- switch(segmenter$provider,
     existing_mask_asset = NULL,
     totalsegmentator = "totalsegmentator_infer",
@@ -1035,8 +1035,8 @@ imagingSegmentationValidateMasksDS <- function(generation_id_enc, dataset_id) {
     n_missing = safe_metadata_count(n_missing),
     n_failed = safe_metadata_count(n_failed),
     needs_regeneration = length(missing_samples) > 0,
-    # mask_paths stays server-side (disclosure: no sample IDs to client)
-    # dsFlower reads it server-side via radiomicsGetMaskManifestDS
+    # mask_paths stays server-side (disclosure: no sample IDs to client).
+    # Downstream packages read it via imagingSegmentationGetMaskPaths().
     ready_for_training = all_valid
   )
 }

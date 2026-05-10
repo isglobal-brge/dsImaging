@@ -41,10 +41,7 @@ def main():
                         help="Sample identifier (single-image mode)")
     args = parser.parse_args()
 
-    models_dir = os.environ.get(
-        "DSIMAGING_MODELS",
-        os.environ.get("DSRADIOMICS_MODELS", "/var/lib/dsimaging/models"),
-    )
+    models_dir = os.environ.get("DSIMAGING_MODELS", "/var/lib/dsimaging/models")
     model_path = os.path.join(models_dir, "nnunetv2", args.model)
 
     print(f"nnU-Net v2 inference")

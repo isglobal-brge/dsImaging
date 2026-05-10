@@ -112,11 +112,14 @@ Primary analysis methods:
 - `imagingRadiomicsScanCollectionDS()`
 - `imagingRadiomicsSubmitBatchDS()`
 - `imagingRadiomicsCollectionStatusDS()`
+- `imagingRadiomicsRecoverCollectionDS()`
+- `imagingRadiomicsCancelCollectionDS()`
 - `imagingRadiomicsPublishCollectionDS()`
 - `imagingLoadAssetDS()`
 - `imagingSegmentationValidateMasksDS()`
 
-Legacy `radiomics*DS` aliases remain available for development compatibility.
+The public DataSHIELD surface is now `imaging*DS`; the former `radiomics*DS`
+server aliases have been retired before production use.
 
 ## Architecture
 

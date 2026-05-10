@@ -32,13 +32,12 @@ The package is organized around stable responsibilities:
 | --- | --- | --- |
 | Storage/backends | `backend*.R`, `registry.R`, `manifest.R`, `resource_client.R`, `interface.R` | Resolve file/S3 datasets, parse manifests, expose DataSHIELD-safe dataset metadata and backend handles. |
 | Asset catalog | `asset_db.R`, `assets_interface.R` | Store immutable derived assets, aliases, lineage, generations, per-sample status, derivation hashes, and content hashes. |
-| Analysis options | `analysis_options.R` | Read `dsimaging.*` and `dsimaging.analysis.*` options with legacy fallback. |
+| Analysis options | `analysis_options.R` | Read `dsimaging.*` and `dsimaging.analysis.*` options. |
 | Runner registration | `analysis_runners.R`, `inst/python/*`, `inst/runners/*` | Register segmentation/radiomics runners in `DSHPC_HOME/runners` on package load. |
 | Profiles/models | `analysis_profiles.R`, `analysis_model_registry.R`, `analysis_install_models.R`, `inst/profiles/*` | Manage bundled radiomics profiles and admin-installed segmentation model metadata. |
 | Orchestration | `analysis_orchestrator.R` | DataSHIELD aggregate methods for per-image collection scans, submission, status sync, publication, and mask validation. |
 | Publishers | `analysis_publish_hooks.R` | dsHPC publisher hooks that register feature tables, mask roots, and per-image results as first-class imaging assets. |
 | Capabilities/admin | `analysis_capabilities.R` | Health, runner, model, profile, scheduler, and admin-visible capability reporting. |
-| Compatibility | `analysis_aliases.R` | Legacy `radiomics*DS` server method wrappers while clients migrate to `imaging*DS`. |
 
 ## Data Model
 
@@ -175,8 +174,10 @@ Canonical client functions:
 - `ds.imaging.radiomics.features()`
 - `ds.imaging.masks()`
 
-Legacy `radiomics*DS`, `ds.radiomics.*`, and `ds.segmenter.*` wrappers may
-remain during development, but docs and demos should use `ds.imaging.*`.
+The public API is intentionally `imaging*DS` and `ds.imaging.*`. The former
+`radiomics*DS`, `ds.radiomics.*`, and `ds.segmenter.*` compatibility wrappers
+were removed before production use so documentation, tests, and demos converge
+on one namespace.
 
 ## Configuration Surface
 
@@ -207,8 +208,7 @@ Minimum validation before a release:
    runner registration, and option fallback.
 2. Load-time smoke test verifying runner YAMLs are written to a temporary
    `dshpc.home`.
-3. Python compile checks for all bundled runner scripts and compatibility
-   wrappers.
+3. Python compile checks for all bundled runner scripts.
 4. Package checks for `dsImaging` and `dsImagingClient`.
 5. Local single-site demo using CT threshold segmentation plus PyRadiomics demo
    profile to produce a real derived `feature_table`.

@@ -52,3 +52,33 @@ test_that("list_datasets returns only enabled entries", {
     expect_true("ds.enabled" %in% names(result))
   })
 })
+
+test_that("imagingListDatasetsDS reads manifest_uri registry entries", {
+  manifest_path <- tempfile(fileext = ".yml")
+  registry_path <- tempfile(fileext = ".yml")
+  on.exit(unlink(c(manifest_path, registry_path)))
+
+  yaml::write_yaml(list(
+    schema_version = 1,
+    dataset_id = "ds.enabled",
+    title = "Enabled imaging dataset",
+    modality = "ct",
+    metadata = list(uri = "/tmp/samples.csv", format = "csv")
+  ), manifest_path)
+
+  yaml::write_yaml(list(
+    schema_version = 1,
+    "ds.enabled" = list(
+      manifest_uri = manifest_path,
+      enabled = TRUE
+    )
+  ), registry_path)
+
+  withr::with_options(list(dsimaging.registry_path = registry_path), {
+    result <- imagingListDatasetsDS()
+    expect_equal(result$dataset_id, "ds.enabled")
+    expect_equal(result$title, "Enabled imaging dataset")
+    expect_equal(result$modality, "ct")
+    expect_true(result$enabled)
+  })
+})

@@ -371,32 +371,58 @@ imagingListDatasetsDS <- function() {
       dataset_id = character(0),
       title = character(0),
       modality = character(0),
+      enabled = logical(0),
       stringsAsFactors = FALSE
     ))
   }
 
   rows <- lapply(names(datasets), function(id) {
     entry <- datasets[[id]]
-    # Try to read title from manifest
-    title <- tryCatch({
-      m <- parse_manifest(entry$manifest)
-      m$title %||% "(untitled)"
-    }, error = function(e) "(error reading manifest)")
-
-    modality <- tryCatch({
-      m <- parse_manifest(entry$manifest)
-      m$modality %||% "unknown"
-    }, error = function(e) "unknown")
+    manifest <- tryCatch(.manifest_for_registry_listing(id, entry),
+      error = function(e) NULL)
+    title <- if (is.null(manifest)) {
+      "(error reading manifest)"
+    } else {
+      manifest$title %||% "(untitled)"
+    }
+    modality <- if (is.null(manifest)) {
+      "unknown"
+    } else {
+      manifest$modality %||% "unknown"
+    }
 
     data.frame(
       dataset_id = id,
       title = title,
       modality = modality,
+      enabled = TRUE,
       stringsAsFactors = FALSE
     )
   })
 
   do.call(rbind, rows)
+}
+
+#' Resolve a manifest for registry listing
+#'
+#' @keywords internal
+.manifest_for_registry_listing <- function(dataset_id, entry) {
+  resolved <- tryCatch(resolve_dataset(dataset_id), error = function(e) NULL)
+  if (!is.null(resolved)) {
+    return(parse_manifest(resolved$manifest_uri, resolved$backend))
+  }
+
+  manifest_uri <- entry$manifest_uri %||% entry$manifest
+  if (is.null(manifest_uri) || !nzchar(manifest_uri))
+    stop("Registry entry for dataset '", dataset_id,
+         "' has no manifest_uri.", call. = FALSE)
+
+  backend <- storage_backend(entry$backend %||% "file", config = list(
+    endpoint = entry$endpoint,
+    credentials_ref = entry$credentials_ref,
+    region = entry$region
+  ))
+  parse_manifest(manifest_uri, backend)
 }
 
 #' Get Imaging Dataset Metadata

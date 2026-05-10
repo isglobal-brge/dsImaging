@@ -49,10 +49,7 @@ def main():
     print(f"TotalSegmentator inference")
     print(f"  Task: {args.task}")
 
-    models_dir = os.environ.get(
-        "DSIMAGING_MODELS",
-        os.environ.get("DSRADIOMICS_MODELS", "/var/lib/dsimaging/models"),
-    )
+    models_dir = os.environ.get("DSIMAGING_MODELS", "/var/lib/dsimaging/models")
     os.environ["TOTALSEG_WEIGHTS_PATH"] = os.path.join(models_dir, "totalsegmentator", args.task)
 
     # Merge CLI args with env vars (dsHPC sets DSHPC_CFG_* from config)

@@ -4,17 +4,14 @@
 #'
 #' Option chain:
 #' `dsimaging.analysis.<name>` -> `default.dsimaging.analysis.<name>` ->
-#' `dsimaging.<name>` -> `default.dsimaging.<name>` -> legacy
-#' `dsradiomics.<name>` -> `default.dsradiomics.<name>` -> default.
+#' `dsimaging.<name>` -> `default.dsimaging.<name>` -> default.
 #'
 #' @keywords internal
 .imaging_analysis_option <- function(name, default = NULL) {
   getOption(paste0("dsimaging.analysis.", name),
     getOption(paste0("default.dsimaging.analysis.", name),
       getOption(paste0("dsimaging.", name),
-        getOption(paste0("default.dsimaging.", name),
-          getOption(paste0("dsradiomics.", name),
-            getOption(paste0("default.dsradiomics.", name), default))))))
+        getOption(paste0("default.dsimaging.", name), default))))
 }
 
 #' Root directory for dsImaging analysis state.

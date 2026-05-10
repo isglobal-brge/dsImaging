@@ -20,9 +20,7 @@
     for (entry in list(
       list(kind = "imaging_asset", fn = .imaging_asset_publisher),
       list(kind = "imaging_radiomics_asset", fn = .radiomics_publisher),
-      list(kind = "radiomics_asset", fn = .radiomics_publisher),
-      list(kind = "imaging_radiomics_image_result", fn = .radiomics_image_publisher),
-      list(kind = "radiomics_image_result", fn = .radiomics_image_publisher)
+      list(kind = "imaging_radiomics_image_result", fn = .radiomics_image_publisher)
     )) {
       tryCatch(
         dsHPC::register_dshpc_publisher(entry$kind, entry$fn),
