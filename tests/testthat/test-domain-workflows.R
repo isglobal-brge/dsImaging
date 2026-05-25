@@ -38,3 +38,13 @@ test_that("profile aggregate methods expose safe profile metadata", {
     expect_true(nzchar(desc$name))
   }
 })
+
+test_that("domain submissions reject missing labels before dsHPC submit", {
+  expect_error(
+    dsImaging:::.imaging_submit_job(list(
+      steps = list(list(type = "emit", plane = "session",
+        output_name = "out", value = 1))
+    )),
+    "non-empty label"
+  )
+})

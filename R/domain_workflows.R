@@ -375,6 +375,11 @@ imagingListProfilesDS <- function() {
 
 #' @keywords internal
 .imaging_submit_job <- function(job) {
+  if (!is.character(job$label) || length(job$label) != 1L ||
+      is.na(job$label) || !nzchar(job$label)) {
+    stop("dsImaging dsHPC submissions must carry a non-empty label.",
+      call. = FALSE)
+  }
   job$.owner <- .dsr_owner_id()
   result <- dsHPC::hpcSubmitDS(.dsr_encode(job))
   c(result, list(domain = "dsImaging", label = job$label,
