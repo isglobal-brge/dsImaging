@@ -214,6 +214,7 @@
   DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_fp_dataset ON content_fingerprints(dataset_id)")
   DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_fp_fingerprint ON content_fingerprints(fingerprint)")
   DBI::dbExecute(db, "CREATE INDEX IF NOT EXISTS idx_fp_content_hash ON content_fingerprints(content_hash)")
+  .content_hash_ensure_schema(db)
 }
 
 #' @keywords internal

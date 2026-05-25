@@ -36,9 +36,11 @@ Imports:
     R6
 Suggests:
     dsFlower,
+    httpuv,
     testthat (>= 3.0.0),
     withr
 AggregateMethods:
+    contentHashDS,
     imagingListDatasetsDS,
     imagingMetadataDS,
     imagingValidateDS,
