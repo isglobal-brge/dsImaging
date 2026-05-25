@@ -1,7 +1,7 @@
 Package: dsImaging
 Type: Package
 Title: DataSHIELD Clinical Imaging Platform
-Version: 0.1.0
+Version: 0.3.0
 Authors@R:
     c(person("David", "Sarrat González", , "david.sarrat@isglobal.org", role = c("aut", "cre")),
       person("Xavier", "Escribà-Montagut", , "xavier.escriba@isglobal.org", role = c("aut")),
@@ -59,10 +59,24 @@ AggregateMethods:
     imagingRadiomicsRecoverCollectionDS,
     imagingRadiomicsCancelCollectionDS,
     imagingRadiomicsPublishCollectionDS,
-    imagingSegmentationValidateMasksDS
+    imagingSegmentationValidateMasksDS,
+    imagingCollectionStatusDS,
+    imagingCollectionRecoverDS,
+    imagingListGenerationsDS,
+    imagingDescribeProfileDS,
+    imagingListProfilesDS
 AssignMethods:
     imagingInitDS,
-    imagingLoadAssetDS
+    imagingLoadAssetDS,
+    imagingProcessRadiomicsCollectionDS,
+    imagingProcessRadiomicsAssetDS,
+    imagingProcessSegmentationCollectionDS,
+    imagingProcessSegmentAndExtractDS,
+    imagingProcessAssetWorkflowDS,
+    imagingProcessQcCollectionDS,
+    imagingConvertCollectionDS,
+    imagingPublishRadiomicsAssetDS,
+    imagingLoadRadiomicsFeaturesDS
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
 Config/testthat/edition: 3
