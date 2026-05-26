@@ -29,7 +29,8 @@ imagingInitDS <- function(resource_symbol) {
         if (!is.null(resolved)) {
           manifest <- parse_manifest(resolved$manifest_uri, resolved$backend)
           desc <- imaging_dataset_descriptor(manifest)
-          return(.make_imaging_handle(desc, resource_symbol, backend = resolved$backend))
+          return(.make_imaging_handle(desc, resource_symbol,
+            backend = resolved$backend, manifest_uri = resolved$manifest_uri))
         }
       }
       stop("Cannot resolve imaging+dataset:// URL: ", url, call. = FALSE)
@@ -39,7 +40,8 @@ imagingInitDS <- function(resource_symbol) {
   # Path 2: Already-resolved ImagingDatasetResourceClient
   if (inherits(obj, "ImagingDatasetResourceClient")) {
     desc <- obj$asImagingDescriptor()
-    return(.make_imaging_handle(desc, resource_symbol, backend = obj$getBackend()))
+    return(.make_imaging_handle(desc, resource_symbol,
+      backend = obj$getBackend(), manifest_uri = obj$getManifestUri()))
   }
 
   # Path 3: FlowerDatasetDescriptor / ImagingDatasetDescriptor
@@ -54,7 +56,8 @@ imagingInitDS <- function(resource_symbol) {
       resolved <- resolve_dataset(obj)
       manifest <- parse_manifest(resolved$manifest_uri, resolved$backend)
       desc <- imaging_dataset_descriptor(manifest)
-      return(.make_imaging_handle(desc, resource_symbol, backend = resolved$backend))
+      return(.make_imaging_handle(desc, resource_symbol,
+        backend = resolved$backend, manifest_uri = resolved$manifest_uri))
     }, error = function(e) NULL)
   }
 
@@ -70,7 +73,8 @@ imagingInitDS <- function(resource_symbol) {
 #' fewer samples than the nfilter threshold.
 #'
 #' @keywords internal
-.make_imaging_handle <- function(desc, symbol, backend = NULL) {
+.make_imaging_handle <- function(desc, symbol, backend = NULL,
+                                 manifest_uri = NULL) {
   # Count samples from metadata (may need S3 download)
   n_samples <- .count_samples_from_manifest(desc$manifest, backend)
   .assert_min_samples(n_samples, context = paste0("dataset '", desc$dataset_id, "'"))
@@ -84,6 +88,10 @@ imagingInitDS <- function(resource_symbol) {
     n_samples   = n_samples,
     created_at  = Sys.time()
   )
+  if (!is.null(backend) && !is.null(manifest_uri) && nzchar(manifest_uri)) {
+    tryCatch(register_dataset(desc$dataset_id, manifest_uri, backend),
+      error = function(e) NULL)
+  }
   key <- paste0("imaging_", symbol)
   assign(key, handle, envir = .dsimaging_env)
   handle
@@ -293,31 +301,15 @@ imagingMasksDS <- function(handle_symbol) {
 
 #' Get the nfilter threshold for minimum sample counts
 #'
-#' Uses DataSHIELD's standard \code{nfilter.subset} option, with
-#' dsFlower's \code{dsflower.min_train_rows} as an additional floor
-#' if dsFlower is loaded.
+#' Uses \code{dsimaging.nfilter.subset} when configured, falling back to
+#' DataSHIELD's standard \code{nfilter.subset} option.
 #'
 #' @return Integer; the minimum number of samples to avoid disclosure.
 #' @keywords internal
 .nfilter_threshold <- function() {
-  # Standard DataSHIELD nfilter
-  nfilter <- as.numeric(getOption("nfilter.subset",
-                                   getOption("default.nfilter.subset", 3)))
-
-  # If dsFlower is loaded, also consider its trust profile minimum
-  if (requireNamespace("dsFlower", quietly = TRUE)) {
-    tryCatch({
-      trust_fn <- tryCatch(get("flowerTrustProfile",
-        envir = asNamespace("dsFlower")), error = function(e) NULL)
-      trust <- if (is.function(trust_fn)) {
-        tryCatch(trust_fn(), error = function(e) NULL)
-      } else {
-        NULL
-      }
-      if (is.null(trust)) trust <- list(min_train_rows = 0)
-      nfilter <- max(nfilter, trust$min_train_rows)
-    }, error = function(e) NULL)
-  }
+  nfilter <- as.numeric(getOption("dsimaging.nfilter.subset",
+    getOption("default.dsimaging.nfilter.subset",
+      getOption("nfilter.subset", getOption("default.nfilter.subset", 3)))))
 
   as.integer(nfilter)
 }

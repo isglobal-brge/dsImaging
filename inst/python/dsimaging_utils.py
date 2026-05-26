@@ -1,10 +1,12 @@
 """Shared helpers for dsImaging Python runners."""
 
 import json
+import hashlib
 import os
 import re
 import sqlite3
 import sys
+from urllib.parse import urlparse
 
 
 IMAGE_EXTS = (".nii.gz", ".nii", ".nrrd", ".mha", ".mhd", ".dcm", ".png", ".jpg", ".jpeg")
@@ -92,13 +94,40 @@ def read_yaml(path, default=None):
         return default
 
 
+def read_yaml_text(text, default=None):
+    try:
+        import yaml
+        return yaml.safe_load(text)
+    except Exception:
+        return default
+
+
 def asset_uri(entry):
     if not isinstance(entry, dict):
         return None
     return entry.get("uri") or entry.get("root") or entry.get("file") or entry.get("path")
 
 
-def manifest_assets_from_registry(dataset_id):
+def is_s3_uri(uri):
+    return isinstance(uri, str) and uri.startswith("s3://")
+
+
+def parse_s3_uri(uri):
+    parsed = urlparse(uri)
+    if parsed.scheme != "s3" or not parsed.netloc:
+        raise ValueError(f"Not an S3 URI: {uri}")
+    return parsed.netloc, parsed.path.lstrip("/")
+
+
+def cache_root():
+    return os.environ.get(
+        "DSIMAGING_CACHE_DIR",
+        os.path.join(os.environ.get("DSHPC_STAGING_ROOT", "/srv/dshpc/staging"),
+                     "dsimaging_s3"),
+    )
+
+
+def registry_entry(dataset_id):
     registry_path = cfg("registry_path", os.environ.get("DSIMAGING_REGISTRY_PATH", "/var/lib/dsimaging/registry.yaml"))
     registry = read_yaml(registry_path, {})
     if not isinstance(registry, dict):
@@ -106,10 +135,141 @@ def manifest_assets_from_registry(dataset_id):
     entry = registry.get(dataset_id)
     if not isinstance(entry, dict):
         return {}
+    return entry
+
+
+def load_persisted_credentials(ref):
+    if not ref:
+        return {}
+    path = os.environ.get(
+        "DSIMAGING_CREDENTIALS_PATH",
+        cfg("credentials_path", "/var/lib/dsimaging/credentials.yaml"),
+    )
+    store = read_yaml(path, {})
+    if not isinstance(store, dict):
+        return {}
+    cred = store.get(ref)
+    return cred if isinstance(cred, dict) else {}
+
+
+def s3_client_for_entry(entry):
+    try:
+        import boto3
+        from botocore.config import Config
+    except Exception as exc:
+        raise RuntimeError(
+            "boto3 is required to materialise S3-backed imaging assets. "
+            "Reinstall dsImaging or add boto3 to the analysis environment."
+        ) from exc
+
+    ref = entry.get("credentials_ref")
+    cred = load_persisted_credentials(ref)
+    endpoint = entry.get("endpoint") or cred.get("endpoint") or None
+    region = entry.get("region") or cred.get("region") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
+    kwargs = {"region_name": region or "us-east-1"}
+    if endpoint:
+        kwargs["endpoint_url"] = endpoint
+
+    access_key = (
+        cred.get("access_key") or cred.get("identity") or
+        os.environ.get("AWS_ACCESS_KEY_ID") or None
+    )
+    secret_key = (
+        cred.get("secret_key") or cred.get("secret") or
+        os.environ.get("AWS_SECRET_ACCESS_KEY") or None
+    )
+    if access_key:
+        kwargs["aws_access_key_id"] = access_key
+    if secret_key:
+        kwargs["aws_secret_access_key"] = secret_key
+
+    config = Config(signature_version="s3v4",
+                    s3={"addressing_style": "path"} if endpoint else None)
+    return boto3.client("s3", config=config, **kwargs)
+
+
+def s3_get_text(entry, uri):
+    bucket, key = parse_s3_uri(uri)
+    s3 = s3_client_for_entry(entry)
+    response = s3.get_object(Bucket=bucket, Key=key)
+    body = response["Body"]
+    try:
+        return body.read().decode("utf-8")
+    finally:
+        body.close()
+
+
+def s3_list_keys(entry, uri):
+    bucket, prefix = parse_s3_uri(uri)
+    s3 = s3_client_for_entry(entry)
+    keys = []
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            key = obj.get("Key")
+            if key and not key.endswith("/"):
+                keys.append((key, int(obj.get("Size", 0))))
+    return bucket, prefix, sorted(keys)
+
+
+def s3_download(entry, bucket, key, dest):
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    s3 = s3_client_for_entry(entry)
+    if os.path.exists(dest) and os.path.getsize(dest) > 0:
+        return dest
+    tmp = f"{dest}.tmp"
+    s3.download_file(bucket, key, tmp)
+    os.replace(tmp, dest)
+    return dest
+
+
+def s3_materialize_uri(entry, uri, dataset_id, role="images"):
+    bucket, key = parse_s3_uri(uri)
+    digest = hashlib.sha256(uri.encode("utf-8")).hexdigest()[:16]
+    root = os.path.join(cache_root(), safe_id(dataset_id), safe_id(role), digest)
+
+    if key and not key.endswith("/"):
+        dest = os.path.join(root, os.path.basename(key))
+        return s3_download(entry, bucket, key, dest)
+
+    bucket, prefix, keys = s3_list_keys(entry, uri)
+    extensions = MASK_EXTS if role in ("mask", "masks") else IMAGE_EXTS
+    selected = [
+        (obj_key, size) for obj_key, size in keys
+        if os.path.basename(obj_key) and
+        os.path.basename(obj_key).lower().endswith(tuple(e.lower() for e in extensions))
+    ]
+    if not selected:
+        return root
+
+    for obj_key, _ in selected:
+        rel = obj_key[len(prefix):].lstrip("/") if obj_key.startswith(prefix) else os.path.basename(obj_key)
+        rel = rel or os.path.basename(obj_key)
+        dest = os.path.join(root, rel)
+        s3_download(entry, bucket, obj_key, dest)
+    return root
+
+
+def manifest_from_registry(dataset_id):
+    entry = registry_entry(dataset_id)
+    if not entry:
+        return {}
     manifest_path = entry.get("manifest") or entry.get("manifest_uri")
-    if not manifest_path or not os.path.exists(manifest_path):
+    if not manifest_path:
+        return {}
+    if is_s3_uri(manifest_path):
+        manifest = read_yaml_text(s3_get_text(entry, manifest_path), {})
+        return manifest if isinstance(manifest, dict) else {}
+    if not os.path.exists(manifest_path):
         return {}
     manifest = read_yaml(manifest_path, {})
+    if not isinstance(manifest, dict):
+        return {}
+    return manifest
+
+
+def manifest_assets_from_registry(dataset_id):
+    manifest = manifest_from_registry(dataset_id)
     if not isinstance(manifest, dict):
         return {}
     return manifest.get("assets", {}) or {}
@@ -156,6 +316,7 @@ def resolve_asset_path(asset_name, role="images", explicit=None):
         return catalog_path
 
     if dataset_id:
+        entry = registry_entry(dataset_id)
         assets = manifest_assets_from_registry(dataset_id)
         candidates = [asset_name, role, "images" if role == "image" else role]
         for name in candidates:
@@ -164,6 +325,10 @@ def resolve_asset_path(asset_name, role="images", explicit=None):
             uri = asset_uri(assets.get(name))
             if uri and os.path.exists(uri):
                 return uri
+            if uri and is_s3_uri(uri) and entry:
+                staged = s3_materialize_uri(entry, uri, dataset_id, role)
+                if staged and os.path.exists(staged):
+                    return staged
 
     input_dir = os.environ.get("DSHPC_INPUT_DIR") or cfg("input_dir")
     if input_dir and os.path.exists(input_dir):

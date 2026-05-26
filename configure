@@ -172,7 +172,8 @@ provision_radiomics() {
   name="radiomics"
   venv_path="${ANALYSIS_VENV_ROOT}/${name}"
   if [ -f "${venv_path}/.dsimaging_ready" ] &&
-     check_import "${venv_path}/bin/python" "radiomics" 2>/dev/null; then
+     check_import "${venv_path}/bin/python" "radiomics" 2>/dev/null &&
+     check_import "${venv_path}/bin/python" "boto3" 2>/dev/null; then
     log_info "  radiomics: OK (cached)"
     return 0
   fi
@@ -195,9 +196,11 @@ provision_radiomics() {
     "pyradiomics>=3.0.1,<3.1" "numpy>=1.23,<2" \
     SimpleITK pandas pyyaml pyarrow pydicom "rt-utils>=1.2.0" \
     "highdicom>=0.23.0" Pillow "openslide-python>=1.4.0" \
-    "openslide-bin>=4.0.0" 2>&1 | tail -5
+    "openslide-bin>=4.0.0" "boto3>=1.28.0" "botocore>=1.31.0" \
+    2>&1 | tail -5
 
-  if check_import "${venv_path}/bin/python" "radiomics"; then
+  if check_import "${venv_path}/bin/python" "radiomics" &&
+     check_import "${venv_path}/bin/python" "boto3"; then
     mark_analysis_ready "${name}"
     log_info "  radiomics: ready."
   else

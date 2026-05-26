@@ -470,6 +470,16 @@ imagingRadiomicsCollectionStatusDS <- function(generation_id_enc) {
   pending_ids <- items$sample_id[items$status == "pending"]
   claimed_ids <- items$sample_id[items$status == "claimed"]
   running_ids <- items$sample_id[items$status == "running"]
+  active_jobs <- tryCatch(
+    dsHPC::query_jobs_by_tag(paste0("%", generation_id, "%"),
+      states = c("PENDING", "RUNNING")),
+    error = function(e) data.frame())
+  retrying_jobs <- if (nrow(active_jobs) > 0 &&
+      "retry_count" %in% names(active_jobs)) {
+    sum(active_jobs$state == "PENDING" &
+          as.integer(active_jobs$retry_count %||% 0L) > 0L,
+        na.rm = TRUE)
+  } else 0L
 
   if (length(pending_ids) > 0L && gen$state %in% c("RUNNING", "PENDING")) {
     tryCatch(
@@ -484,6 +494,16 @@ imagingRadiomicsCollectionStatusDS <- function(generation_id_enc) {
     pending_ids <- items$sample_id[items$status == "pending"]
     claimed_ids <- items$sample_id[items$status == "claimed"]
     running_ids <- items$sample_id[items$status == "running"]
+    active_jobs <- tryCatch(
+      dsHPC::query_jobs_by_tag(paste0("%", generation_id, "%"),
+        states = c("PENDING", "RUNNING")),
+      error = function(e) data.frame())
+    retrying_jobs <- if (nrow(active_jobs) > 0 &&
+        "retry_count" %in% names(active_jobs)) {
+      sum(active_jobs$state == "PENDING" &
+            as.integer(active_jobs$retry_count %||% 0L) > 0L,
+          na.rm = TRUE)
+    } else 0L
   }
 
   # pending + claimed + running = "not yet done"
@@ -505,6 +525,8 @@ imagingRadiomicsCollectionStatusDS <- function(generation_id_enc) {
     pending = safe_metadata_count(length(pending_ids)),
     claimed = safe_metadata_count(length(claimed_ids)),
     running = safe_metadata_count(length(running_ids)),
+    retrying = safe_metadata_count(retrying_jobs),
+    active_jobs = safe_metadata_count(nrow(active_jobs)),
     is_done = all_resolved
   )
 }

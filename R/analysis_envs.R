@@ -5,7 +5,8 @@
                 "numpy>=1.23.0,<2", "pyyaml>=5.0", "pyarrow>=10.0.0",
                 "pydicom>=2.4.0", "rt-utils>=1.2.0",
                 "highdicom>=0.23.0", "Pillow>=9.0.0",
-                "openslide-python>=1.4.0", "openslide-bin>=4.0.0"),
+                "openslide-python>=1.4.0", "openslide-bin>=4.0.0",
+                "boto3>=1.28.0", "botocore>=1.31.0"),
   seg_lungmask = c("lungmask>=0.2.0", "torch>=2.0.0",
                    "SimpleITK>=2.0.0", "nibabel>=4.0.0"),
   seg_totalseg = c("TotalSegmentator>=2.0.0", "torch>=2.0.0",
@@ -17,7 +18,7 @@
 )
 
 .RADIOMICS_HEALTH_IMPORTS <- list(
-  radiomics = "radiomics",
+  radiomics = c("radiomics", "boto3"),
   seg_lungmask = "lungmask",
   seg_totalseg = "totalsegmentator",
   seg_nnunetv2 = "nnunetv2",
@@ -47,11 +48,13 @@ list_imaging_analysis_envs <- function() {
   python <- file.path(venv_root, framework, "bin", "python")
   module <- .RADIOMICS_HEALTH_IMPORTS[[framework]]
   if (is.null(module) || !file.exists(python)) return(FALSE)
-  status <- tryCatch(
-    system2(python, c("-c", shQuote(paste("import", module))),
-            stdout = FALSE, stderr = FALSE),
-    error = function(e) 1L)
-  identical(status, 0L)
+  all(vapply(module, function(import_name) {
+    status <- tryCatch(
+      system2(python, c("-c", shQuote(paste("import", import_name))),
+              stdout = FALSE, stderr = FALSE),
+      error = function(e) 1L)
+    identical(status, 0L)
+  }, logical(1)))
 }
 
 #' @keywords internal

@@ -182,7 +182,7 @@
 #' @keywords internal
 .imaging_output_metadata <- function(output_dir) {
   if (is.null(output_dir) || !dir.exists(output_dir)) return(list())
-  files <- list.files(output_dir, pattern = "summary\\.json$",
+  files <- list.files(output_dir, pattern = "(summary|manifest)\\.json$",
                       recursive = TRUE, full.names = TRUE)
   if (length(files) == 0) return(list())
   files <- files[seq_len(min(length(files), 20L))]
@@ -199,7 +199,7 @@
     rel <- normalizePath(path, winslash = "/", mustWork = FALSE)
     prefix <- paste0(root, "/")
     if (startsWith(rel, prefix)) rel <- substring(rel, nchar(prefix) + 1L)
-    compact <- obj[setdiff(names(obj), c("columns", "samples"))]
+    compact <- obj[setdiff(names(obj), c("columns", "samples", "images"))]
     compact$file <- rel
     summaries[[key]] <- compact
     if (is.list(obj$versions)) versions[[key]] <- obj$versions

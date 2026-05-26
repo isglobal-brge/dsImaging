@@ -39,7 +39,8 @@ test_that("radiomics runners declare scheduler resources", {
   embeddings <- yaml::read_yaml(file.path(home, "runners", "image_embeddings.yml"))
 
   expect_equal(pyradiomics$resources$memory_mb, 6144L)
-  expect_equal(pyradiomics$resources$max_concurrent, 2L)
+  expect_equal(pyradiomics$resources$max_concurrent, 1L)
+  expect_equal(pyradiomics$resources$oom_cooldown_secs, 120L)
   expect_match(pyradiomics$args_template[[1]],
     file.path(imaging_home, "runtime", "python"), fixed = TRUE)
   expect_false(grepl("00LOCK|site-library", pyradiomics$args_template[[1]]))

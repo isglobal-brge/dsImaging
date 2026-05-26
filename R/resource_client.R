@@ -13,6 +13,7 @@ ImagingDatasetResourceClient <- R6::R6Class(
   inherit = resourcer::ResourceClient,
   private = list(
     .manifest = NULL,
+    .manifest_uri = NULL,
     .dataset_id = NULL,
     .backend = NULL,
 
@@ -31,6 +32,7 @@ ImagingDatasetResourceClient <- R6::R6Class(
       resolved <- tryCatch(resolve_dataset(dataset_id), error = function(e) NULL)
       if (!is.null(resolved)) {
         private$.backend <- resolved$backend
+        private$.manifest_uri <- resolved$manifest_uri
         private$.manifest <- parse_manifest(resolved$manifest_uri, resolved$backend)
         return(invisible(NULL))
       }
@@ -59,6 +61,7 @@ ImagingDatasetResourceClient <- R6::R6Class(
         store[[cred_ref]] <- list(
           access_key = ak, secret_key = sk, endpoint = endpoint)
         options(dsimaging.credentials = store)
+        .persist_s3_credential(cred_ref, store[[cred_ref]])
 
         backend <- storage_backend("s3", config = list(
           endpoint = endpoint, credentials_ref = cred_ref,
@@ -66,6 +69,7 @@ ImagingDatasetResourceClient <- R6::R6Class(
         manifest_uri <- paste0("s3://", bucket, "/", prefix, "/manifest.yaml")
 
         private$.backend <- backend
+        private$.manifest_uri <- manifest_uri
         private$.manifest <- parse_manifest(manifest_uri, backend)
         return(invisible(NULL))
       }
@@ -84,6 +88,8 @@ ImagingDatasetResourceClient <- R6::R6Class(
     },
     #' @description Return the parsed imaging manifest.
     getManifest = function() private$.manifest,
+    #' @description Return the resolved manifest URI.
+    getManifestUri = function() private$.manifest_uri,
     #' @description Return the dataset identifier.
     getDatasetId = function() private$.dataset_id,
     #' @description Return the resolved storage backend.

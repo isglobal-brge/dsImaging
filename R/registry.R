@@ -39,6 +39,76 @@
   raw
 }
 
+#' Persist or update a dataset registry entry
+#'
+#' Server-side resources can be resolved from an Opal/Armadillo session before a
+#' dsHPC worker sees them. Persisting the compact registry entry lets later
+#' worker processes resolve the same dataset without depending on the original
+#' R session.
+#'
+#' @keywords internal
+register_dataset <- function(dataset_id, manifest_uri, backend,
+                             publish = NULL, enabled = TRUE) {
+  if (is.null(dataset_id) || !nzchar(dataset_id))
+    stop("dataset_id is required.", call. = FALSE)
+  if (is.null(manifest_uri) || !nzchar(manifest_uri))
+    stop("manifest_uri is required.", call. = FALSE)
+  if (is.null(backend) || is.null(backend$type))
+    stop("backend is required.", call. = FALSE)
+
+  registry_path <- getOption("dsimaging.registry_path",
+    getOption("default.dsimaging.registry_path",
+              "/var/lib/dsimaging/registry.yaml"))
+  if (identical(getOption("dsimaging.registry_backend",
+    getOption("default.dsimaging.registry_backend", "file")), "s3")) {
+    return(invisible(FALSE))
+  }
+
+  registry <- tryCatch(.load_registry(), error = function(e) list())
+  cfg <- backend$config %||% list()
+  entry <- list(
+    enabled = isTRUE(enabled),
+    backend = backend$type,
+    manifest_uri = manifest_uri,
+    endpoint = cfg$endpoint %||% NULL,
+    credentials_ref = cfg$credentials_ref %||% NULL,
+    region = cfg$region %||% NULL
+  )
+
+  if (identical(backend$type, "s3")) {
+    creds <- tryCatch(.resolve_s3_credentials(cfg$credentials_ref),
+      error = function(e) NULL)
+    if (!is.null(creds)) {
+      entry$endpoint <- cfg$endpoint %||% creds$endpoint
+      entry$region <- cfg$region %||% creds$region
+      entry$credentials_ref <- cfg$credentials_ref %||%
+        paste0("resource_", dataset_id)
+      store <- getOption("dsimaging.credentials", list())
+      store[[entry$credentials_ref]] <- creds
+      options(dsimaging.credentials = store)
+      .persist_s3_credential(entry$credentials_ref, creds)
+    }
+  }
+
+  if (!is.null(publish)) {
+    pcfg <- publish$config %||% list()
+    entry$publish <- list(
+      backend = publish$type,
+      endpoint = pcfg$endpoint %||% entry$endpoint,
+      credentials_ref = pcfg$credentials_ref %||% entry$credentials_ref,
+      region = pcfg$region %||% entry$region,
+      uri_prefix = pcfg$uri_prefix %||% NULL
+    )
+  }
+
+  registry[[dataset_id]] <- entry
+  raw <- c(list(schema_version = 1L), registry)
+  dir.create(dirname(registry_path), recursive = TRUE, showWarnings = FALSE)
+  yaml::write_yaml(raw, registry_path)
+  tryCatch(Sys.chmod(registry_path, "0660"), error = function(e) NULL)
+  invisible(TRUE)
+}
+
 #' Resolve a dataset_id to its backend, manifest, and publish config
 #'
 #' @param dataset_id Character.

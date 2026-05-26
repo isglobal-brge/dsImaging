@@ -121,11 +121,13 @@
     return("us-east-1")  # AWS default
   host <- sub("^https?://", "", endpoint)
   host <- sub(":[0-9]+$", "", host)
-  # IP addresses, localhost, .local -> self-hosted, no region prefix
+  # IP addresses, localhost, container service names and .local hosts are
+  # self-hosted endpoints, so aws.s3 must not prepend an AWS region to them.
   if (grepl("^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$", host) ||
       grepl("^localhost$", host, ignore.case = TRUE) ||
       grepl("^minio", host, ignore.case = TRUE) ||
       grepl("^host\\.docker", host, ignore.case = TRUE) ||
+      !grepl("\\.", host, fixed = FALSE) ||
       grepl("\\.local$", host, ignore.case = TRUE))
     return("")
   "us-east-1"
@@ -135,7 +137,8 @@
 #'
 #' Resolution order:
 #'   1. Named credential in getOption("dsimaging.credentials")
-#'   2. Environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
+#'   2. Named credential persisted under dsimaging.credentials_path
+#'   3. Environment variables (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
 #'
 #' @param ref Character or NULL; credential reference name.
 #' @return Named list: access_key, secret_key, endpoint, region.
@@ -152,9 +155,18 @@
         endpoint = cred$endpoint,
         region = cred$region))
     }
+
+    cred <- .load_persisted_s3_credential(ref)
+    if (!is.null(cred)) {
+      return(list(
+        access_key = cred$access_key %||% cred$identity,
+        secret_key = cred$secret_key %||% cred$secret,
+        endpoint = cred$endpoint,
+        region = cred$region))
+    }
   }
 
-  # 2. Env vars (dev/CI fallback)
+  # 3. Env vars (dev/CI fallback)
   ak <- Sys.getenv("AWS_ACCESS_KEY_ID", "")
   sk <- Sys.getenv("AWS_SECRET_ACCESS_KEY", "")
   if (nzchar(ak) && nzchar(sk)) {
@@ -169,6 +181,44 @@
   stop("S3 credentials not found. Set credentials_ref in registry ",
        "or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars.",
        call. = FALSE)
+}
+
+#' Persist S3 credentials for worker-side dataset resolution
+#' @keywords internal
+.persist_s3_credential <- function(ref, cred) {
+  if (is.null(ref) || !nzchar(ref) || is.null(cred)) return(invisible(FALSE))
+  path <- getOption("dsimaging.credentials_path",
+    getOption("default.dsimaging.credentials_path",
+      file.path(getOption("dsimaging.data_dir",
+        getOption("default.dsimaging.data_dir", "/var/lib/dsimaging")),
+        "credentials.yaml")))
+  store <- tryCatch({
+    if (file.exists(path)) yaml::yaml.load_file(path) else list()
+  }, error = function(e) list())
+  if (is.null(store) || !is.list(store)) store <- list()
+  store[[ref]] <- list(
+    access_key = cred$access_key %||% cred$identity,
+    secret_key = cred$secret_key %||% cred$secret,
+    endpoint = cred$endpoint %||% NULL,
+    region = cred$region %||% NULL
+  )
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  yaml::write_yaml(store, path)
+  tryCatch(Sys.chmod(path, "0600"), error = function(e) NULL)
+  invisible(TRUE)
+}
+
+#' @keywords internal
+.load_persisted_s3_credential <- function(ref) {
+  path <- getOption("dsimaging.credentials_path",
+    getOption("default.dsimaging.credentials_path",
+      file.path(getOption("dsimaging.data_dir",
+        getOption("default.dsimaging.data_dir", "/var/lib/dsimaging")),
+        "credentials.yaml")))
+  if (!file.exists(path)) return(NULL)
+  store <- tryCatch(yaml::yaml.load_file(path), error = function(e) NULL)
+  if (is.null(store) || !is.list(store)) return(NULL)
+  store[[ref]]
 }
 
 # ---------------------------------------------------------------------------

@@ -51,8 +51,9 @@
     resources = list(
       memory_mb = 6144L,
       cpu_slots = 2L,
-      max_concurrent = 2L,
-      concurrency_group = "pyradiomics_cpu"
+      max_concurrent = 1L,
+      concurrency_group = "pyradiomics_cpu",
+      oom_cooldown_secs = 120L
     ),
     command = "python",
     python = file.path(venv_root, "radiomics", "bin", "python"),

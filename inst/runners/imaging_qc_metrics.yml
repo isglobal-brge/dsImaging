@@ -6,4 +6,4 @@ command: python
 args_template: ["-m", "dsimaging_qc_metrics", "--input", "{input_dir}", "--output", "{output_dir}"]
 timeout_secs: 1800
 allowed_params: [dataset_id, image_asset, image_root, mask_asset, mask_root]
-python_deps: ["SimpleITK>=2.0.0", "numpy>=1.23.0,<2"]
+python_deps: ["SimpleITK>=2.0.0", "numpy>=1.23.0,<2", "pyyaml>=5.0", "boto3>=1.28.0", "botocore>=1.31.0"]
