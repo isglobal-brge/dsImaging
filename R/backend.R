@@ -184,9 +184,24 @@ backend_put_directory <- function(backend, local_dir, uri_prefix) {
 #' Resolve S3 config from backend object
 #' @keywords internal
 .resolve_backend_s3_config <- function(backend) {
-  creds <- .resolve_s3_credentials(backend$config$credentials_ref)
-  endpoint <- backend$config$endpoint %||% creds$endpoint %||% ""
-  explicit_region <- backend$config$region %||% creds$region
+  cfg <- backend$config %||% list()
+  # Preferred path: the backend references the resourcer Resource object, which
+  # is the single source of truth. Credentials are resolved FROM the resource
+  # on every call -- never copied into the backend, options, or disk.
+  if (!is.null(cfg$resource)) {
+    creds <- .resource_s3_credentials(cfg$resource)
+    endpoint <- cfg$endpoint %||% ""
+    return(list(
+      endpoint = endpoint,
+      access_key = creds$access_key,
+      secret_key = creds$secret_key,
+      region = .auto_region(endpoint, cfg$region)
+    ))
+  }
+  # Registry path: credentials referenced by name (options / persisted / env).
+  creds <- .resolve_s3_credentials(cfg$credentials_ref)
+  endpoint <- cfg$endpoint %||% creds$endpoint %||% ""
+  explicit_region <- cfg$region %||% creds$region
   list(
     endpoint = endpoint,
     access_key = creds$access_key,

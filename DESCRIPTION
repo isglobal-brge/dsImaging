@@ -1,7 +1,7 @@
 Package: dsImaging
 Type: Package
 Title: DataSHIELD Clinical Imaging Platform
-Version: 0.3.1
+Version: 0.3.2
 Authors@R:
     c(person("David", "Sarrat González", , "david.sarrat@isglobal.org", role = c("aut", "cre")),
       person("Xavier", "Escribà-Montagut", , "xavier.escriba@isglobal.org", role = c("aut")),

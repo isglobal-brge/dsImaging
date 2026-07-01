@@ -28,44 +28,25 @@ ImagingDatasetResourceClient <- R6::R6Class(
 
       private$.dataset_id <- dataset_id
 
-      # Try 1: registry (server has pre-configured registry)
-      resolved <- tryCatch(resolve_dataset(dataset_id), error = function(e) NULL)
-      if (!is.null(resolved)) {
-        private$.backend <- resolved$backend
-        private$.manifest_uri <- resolved$manifest_uri
-        private$.manifest <- parse_manifest(resolved$manifest_uri, resolved$backend)
-        return(invisible(NULL))
-      }
-
-      # Try 2: S3 credentials from Opal resource (resource.js form)
+      # Try 1: the resource itself carries S3 endpoint + credentials. The
+      # resource is the single source of truth, so it takes PRECEDENCE over any
+      # server-side registry entry (a stale registry row must never shadow the
+      # credentials the caller explicitly attached to the resource).
       params <- parsed$params %||% list()
       endpoint <- params$endpoint %||% ""
       bucket <- params$bucket %||% "imaging-data"
       prefix <- params$prefix %||% paste0("datasets/", dataset_id)
-      # Opal may pass identity=NULL due to credential mapping quirks.
-      # Try multiple field names for robustness.
-      ak <- ""
-      for (field in c("identity", "identifier", "access_key", "username")) {
-        v <- resource[[field]]
-        if (!is.null(v) && nzchar(v)) { ak <- v; break }
-      }
-      sk <- ""
-      for (field in c("secret", "password", "secret_key")) {
-        v <- resource[[field]]
-        if (!is.null(v) && nzchar(v)) { sk <- v; break }
-      }
+      # Opal may pass identity=NULL due to credential mapping quirks; the
+      # helper tries several field names. This is only a presence check to
+      # decide the S3 path -- the keys are NOT copied anywhere here.
+      creds <- .resource_s3_credentials(resource)
 
-      if (nzchar(ak) && nzchar(sk)) {
-        cred_ref <- paste0("resource_", dataset_id)
-        store <- getOption("dsimaging.credentials", list())
-        store[[cred_ref]] <- list(
-          access_key = ak, secret_key = sk, endpoint = endpoint)
-        options(dsimaging.credentials = store)
-        .persist_s3_credential(cred_ref, store[[cred_ref]])
-
+      if (nzchar(creds$access_key) && nzchar(creds$secret_key)) {
+        # The S3 backend keeps a reference to the resourcer Resource object and
+        # resolves identity/secret FROM it on demand -- credentials are never
+        # copied into the backend, stashed in options, or written to disk.
         backend <- storage_backend("s3", config = list(
-          endpoint = endpoint, credentials_ref = cred_ref,
-          region = params$region))
+          resource = resource, endpoint = endpoint, region = params$region))
         manifest_uri <- paste0("s3://", bucket, "/", prefix, "/manifest.yaml")
 
         private$.backend <- backend
@@ -74,8 +55,18 @@ ImagingDatasetResourceClient <- R6::R6Class(
         return(invisible(NULL))
       }
 
+      # Try 2: server pre-configured registry (bare imaging+dataset://<id>
+      # URLs with no credentials on the resource).
+      resolved <- tryCatch(resolve_dataset(dataset_id), error = function(e) NULL)
+      if (!is.null(resolved)) {
+        private$.backend <- resolved$backend
+        private$.manifest_uri <- resolved$manifest_uri
+        private$.manifest <- parse_manifest(resolved$manifest_uri, resolved$backend)
+        return(invisible(NULL))
+      }
+
       stop("Cannot resolve dataset '", dataset_id,
-           "': not in registry and no S3 credentials in resource.",
+           "': no S3 credentials on the resource and no registry entry.",
            call. = FALSE)
     }
   ),

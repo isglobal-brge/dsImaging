@@ -221,6 +221,30 @@
   store[[ref]]
 }
 
+#' Read S3 credentials directly from a resourcer Resource object
+#'
+#' The resource is the single source of truth: identity/secret are read from
+#' it on demand and never copied into options, disk, or the backend. Several
+#' field names are tried because Opal's credential mapping may populate
+#' different ones (identity/secret vs identifier/password, etc.).
+#'
+#' @param resource A resourcer Resource object.
+#' @return Named list: access_key, secret_key (empty strings if absent).
+#' @keywords internal
+.resource_s3_credentials <- function(resource) {
+  ak <- ""
+  for (field in c("identity", "identifier", "access_key", "username")) {
+    v <- tryCatch(resource[[field]], error = function(e) NULL)
+    if (!is.null(v) && nzchar(v)) { ak <- v; break }
+  }
+  sk <- ""
+  for (field in c("secret", "password", "secret_key")) {
+    v <- tryCatch(resource[[field]], error = function(e) NULL)
+    if (!is.null(v) && nzchar(v)) { sk <- v; break }
+  }
+  list(access_key = ak, secret_key = sk)
+}
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
