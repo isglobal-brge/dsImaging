@@ -64,7 +64,8 @@ AggregateMethods:
     imagingCollectionRecoverDS,
     imagingListGenerationsDS,
     imagingDescribeProfileDS,
-    imagingListProfilesDS
+    imagingListProfilesDS,
+    imagingLabelDistDS
 AssignMethods:
     imagingInitDS,
     imagingLoadAssetDS,

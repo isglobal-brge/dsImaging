@@ -143,6 +143,81 @@ imagingGetManifestDS <- function(handle_symbol) {
   NULL
 }
 
+#' Disclosure-controlled label distribution for an imaging dataset
+#'
+#' DataSHIELD AGGREGATE method. Reads the dataset's sample-metadata table on the
+#' node, tabulates the requested label column, and returns the per-class counts
+#' with small classes suppressed. Suppression reuses the standard DataSHIELD
+#' \code{nfilter.subset} threshold (via \code{.nfilter_threshold()}), so a class
+#' with fewer than the threshold samples is dropped and only counted in
+#' \code{suppressed_classes}. The pixels never leave the node; only aggregate,
+#' disclosure-safe counts are returned.
+#'
+#' @param handle_symbol Character; the imaging handle symbol.
+#' @param column Character or NULL; the label column to tabulate. Defaults to the
+#'   manifest's \code{label_col}, then to \code{"label"}.
+#' @return A data.frame with columns \code{label} and \code{n} for the classes
+#'   that pass the threshold, plus attributes \code{nfilter} and
+#'   \code{suppressed_classes}.
+#' @export
+imagingLabelDistDS <- function(handle_symbol, column = NULL) {
+  handle <- .getImagingHandle(handle_symbol)
+  manifest <- handle$manifest
+  meta <- manifest$metadata
+  col <- column %||% meta$label_col %||% "label"
+
+  # Read the sample-metadata table as VALUES (imagingMetadataDS only reads the
+  # schema); mirror its local-file-then-S3 resolution exactly.
+  df <- NULL
+  if (!is.null(meta)) {
+    if (!is.null(meta$file) && file.exists(meta$file)) {
+      fmt <- meta$format %||% .guess_format(meta$file)
+      if (identical(fmt, "parquet") && requireNamespace("arrow", quietly = TRUE)) {
+        df <- as.data.frame(arrow::read_parquet(meta$file))
+      } else if (identical(fmt, "csv")) {
+        df <- utils::read.csv(meta$file)
+      }
+    } else if (!is.null(meta$uri) && grepl("^s3://", meta$uri) &&
+               !is.null(handle$backend)) {
+      tryCatch({
+        fmt <- meta$format %||% .guess_format(meta$uri)
+        tmp <- tempfile(fileext = paste0(".", fmt))
+        on.exit(unlink(tmp), add = TRUE)
+        backend_get_file(handle$backend, meta$uri, tmp)
+        if (identical(fmt, "parquet") && requireNamespace("arrow", quietly = TRUE)) {
+          df <- as.data.frame(arrow::read_parquet(tmp))
+        } else if (identical(fmt, "csv")) {
+          df <- utils::read.csv(tmp)
+        }
+      }, error = function(e) NULL)
+    }
+  }
+
+  if (is.null(df) || !nrow(df))
+    stop("No metadata table available to compute a label distribution.",
+         call. = FALSE)
+  if (!col %in% names(df))
+    stop("Column '", col, "' not found in the dataset metadata (have: ",
+         paste(names(df), collapse = ", "), ").", call. = FALSE)
+
+  # Whole-dataset disclosure gate before revealing any per-class structure.
+  .assert_min_samples(nrow(df),
+                      context = paste0("dataset '", manifest$dataset_id %||% "?", "'"))
+
+  # Per-class counts, then drop classes below the DataSHIELD threshold so no small
+  # cell is disclosed; report only HOW MANY classes were hidden, not which.
+  tab <- table(df[[col]])
+  threshold <- .nfilter_threshold()
+  keep <- as.integer(tab) >= threshold
+  out <- data.frame(label = names(tab)[keep],
+                    n     = as.integer(tab)[keep],
+                    stringsAsFactors = FALSE)
+  attr(out, "column") <- col
+  attr(out, "nfilter") <- threshold
+  attr(out, "suppressed_classes") <- as.integer(sum(!keep))
+  out
+}
+
 #' List available label sets for an imaging dataset
 #'
 #' DataSHIELD AGGREGATE method. Returns the label sets defined in the
