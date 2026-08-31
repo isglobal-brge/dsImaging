@@ -1,0 +1,308 @@
+
+> A <- Sys.getenv("AUDIT_ROOT")
+
+> home <- file.path(A, "results_fix", "demo_imaging_home")
+
+> state <- file.path(A, "results_fix", "imaging_state_fix")
+
+> unlink(home, recursive = TRUE)
+
+> unlink(state, recursive = TRUE)
+
+> for (d in c("runners", "artifacts", "publish", "staging")) dir.create(file.path(home, 
++     d), recursive = TRUE, showWarnings = FALSE)
+
+> dir.create(state, recursive = TRUE, showWarnings = FALSE)
+
+> options(dshpc.home = home, dsimaging.registry_path = file.path(state, 
++     "registry.yaml"), dsimaging.asset_db = file.path(state, "imaging_assets.sqlite"), 
++     dsimaging.data_dir = state, dsimaging.venv_root = file.path(A, 
++         "venvs"), dsimaging.batch_size = 4)
+
+> Sys.setenv(R_PROFILE_USER = file.path(A, "results_fix", 
++     "worker_profile_fix.R"))
+
+> suppressPackageStartupMessages({
++     library(DSI)
++     library(DSLite)
++     library(dsHPC)
++     library(dsImaging)
++     library(dsHPCClient)
++     library(dsImagingClient)
++     library(dsBaseClient)
++ })
+
+> cat("dsImaging version:", as.character(packageVersion("dsImaging")), 
++     "| dsImagingClient version:", as.character(packageVersion("dsImagingClient")), 
++     "\n")
+dsImaging version: 0.3.4 | dsImagingClient version: 0.3.1 
+
+> D <- file.path(A, "imaging_data", "datasets", "audit_ct_v2")
+
+> cat("\n[check] manifest declares ONLY metadata.uri (no metadata.file):\n")
+
+[check] manifest declares ONLY metadata.uri (no metadata.file):
+
+> cat(readLines(file.path(D, "manifest.yaml")), sep = "\n")
+schema_version: 1
+dataset_id: audit_ct_v2
+title: Audit synthetic CT collection v2 (uri-only manifest)
+modality: ct
+metadata:
+  uri: /private/tmp/claude-501/-Users-david-Documents-GitHub-thesis/a3f58816-b8a7-4aef-b778-fbf9c9639dd7/scratchpad/dshpc_audit/imaging_data/datasets/audit_ct_v2/metadata/samples.csv
+  format: csv
+assets:
+  images:
+    uri: /private/tmp/claude-501/-Users-david-Documents-GitHub-thesis/a3f58816-b8a7-4aef-b778-fbf9c9639dd7/scratchpad/dshpc_audit/imaging_data/datasets/audit_ct_v2/source/images
+    kind: image_root
+  masks:
+    uri: /private/tmp/claude-501/-Users-david-Documents-GitHub-thesis/a3f58816-b8a7-4aef-b778-fbf9c9639dd7/scratchpad/dshpc_audit/imaging_data/datasets/audit_ct_v2/source/masks
+    kind: mask_root
+
+> dsImaging:::register_dataset(dataset_id = "audit_ct_v2", 
++     manifest_uri = file.path(D, "manifest.yaml"), backend = dsImaging::storage_backend("file"))
+
+> config <- DSLite::defaultDSConfiguration(include = c("dsImaging", 
++     "dsHPC", "dsBase"))
+
+> audit_img_site1 <- DSLite::newDSLiteServer(tables = list(), 
++     resources = list(audit_res = resourcer::newResource(name = "audit_res", 
++         url = "imaging+dataset://audit_ct_v2", format = "imaging.dataset")), 
++     config = config)
+
+> builder <- DSI::newDSLoginBuilder()
+
+> builder$append(server = "site1", url = "audit_img_site1", 
++     driver = "DSLiteDriver", resource = "audit_res")
+
+> conns <- DSI::datashield.login(builder$build())
+
+Logging into the collaborating servers
+
+> cat("\n== ds.imaging.init (uri-only manifest) ==\n")
+
+== ds.imaging.init (uri-only manifest) ==
+
+> ds.imaging.init(conns, resource = "audit_res", symbol = "img")
+
+> print(DSI::datashield.symbols(conns))
+$site1
+[1] "img"
+
+
+> cat("\n== ds.imaging.metadata ==\n")
+
+== ds.imaging.metadata ==
+
+> str(ds.imaging.metadata(conns, "img"))
+List of 1
+ $ site1:List of 11
+  ..$ dataset_id          : chr "audit_ct_v2"
+  ..$ title               : chr "Audit synthetic CT collection v2 (uri-only manifest)"
+  ..$ modality            : chr "ct"
+  ..$ task_types          : chr(0) 
+  ..$ templates           : chr(0) 
+  ..$ n_samples           : int 8
+  ..$ columns             : NULL
+  ..$ id_col              : NULL
+  ..$ label_col           : NULL
+  ..$ n_assets            : int 2
+  ..$ n_samples_sufficient: logi TRUE
+
+> cat("\n== ds.imaging.validate ==\n")
+
+== ds.imaging.validate ==
+
+> str(ds.imaging.validate(conns, "img")$site1[c("valid", 
++     "errors", "warnings")])
+List of 3
+ $ valid   : logi TRUE
+ $ errors  : chr(0) 
+ $ warnings: chr "No compatible_templates specified in manifest."
+
+> cat("\n== ds.imaging.radiomics.process_collection (batch_size = 4) ==\n")
+
+== ds.imaging.radiomics.process_collection (batch_size = 4) ==
+
+> res <- ds.imaging.radiomics.process_collection(conns, 
++     dataset_id = "audit_ct_v2", segmenter = ds.imaging.segmenter.existing_mask("masks"), 
++     profile = ds.imaging.radiomics.profile.demo_ct_firstorder(), 
++     batch_size = 4, poll_interval = 3, timeout = 900)
+Scanning collection: audit_ct_v2
+  Total: 10 | Already done: 0 | Pending: 10
+  Submitting first batch (4 images)...
+  Server will auto-submit remaining batches as jobs complete.
+dsHPC worker started (PID 54601)
+dsHPC worker already running (PID 54601)
+dsHPC worker already running (PID 54601)
+dsHPC worker already running (PID 54601)
+Waiting for completion (Ctrl-C is safe, server continues)...
+dsHPC worker already running (PID 54601)
+dsHPC worker already running (PID 54601)
+dsHPC worker already running (PID 54601)
+dsHPC worker already running (PID 54601)
+  Progress: 0/10 (0%) | Failed: 0 | Pending: 2 | Running: 8 | Retrying: 0
+dsHPC worker already running for cell (Davids-MacBook-Air.local@cell_3a4bd4d7dea4:54601)
+dsHPC worker already running for cell (Davids-MacBook-Air.local@cell_3a4bd4d7dea4:54601)
+  Progress: 0/10 (0%) | Failed: 0 | Pending: 0 | Running: 10 | Retrying: 0
+  Progress: 2/10 (20%) | Failed: 0 | Pending: 0 | Running: 8 | Retrying: 0
+  Progress: 3/10 (30%) | Failed: 0 | Pending: 0 | Running: 7 | Retrying: 0
+  Progress: 4/10 (40%) | Failed: 0 | Pending: 0 | Running: 6 | Retrying: 0
+  Progress: 5/10 (50%) | Failed: 0 | Pending: 0 | Running: 5 | Retrying: 0
+  Progress: 6/10 (60%) | Failed: 0 | Pending: 0 | Running: 4 | Retrying: 0
+  Progress: 7/10 (70%) | Failed: 0 | Pending: 0 | Running: 3 | Retrying: 0
+  Progress: 9/10 (90%) | Failed: 0 | Pending: 0 | Running: 1 | Retrying: 0
+  Progress: 10/10 (100%) | Failed: 0 | Pending: 0 | Running: 0 | Retrying: 0
+All jobs completed.
+Publishing collection asset...
+Published: asset_20260831_170955_df1fae07 (10/10 images)
+
+> cat("\n== process_collection result (exact 10/10 expected) ==\n")
+
+== process_collection result (exact 10/10 expected) ==
+
+> str(res, max.level = 2)
+List of 8
+ $ action        : chr "completed"
+ $ generation_id : chr "gen_20260831_170927_69d0e4ca"
+ $ dataset_id    : chr "audit_ct_v2"
+ $ asset_id      : chr "asset_20260831_170955_df1fae07"
+ $ total         : int 10
+ $ completed     : int 10
+ $ failed        : int 0
+ $ failed_samples: chr(0) 
+
+> db <- DBI::dbConnect(RSQLite::SQLite(), file.path(state, 
++     "imaging_assets.sqlite"))
+
+> gen_row <- DBI::dbGetQuery(db, "SELECT generation_id, state, expected_n, completed_n, failed_n, error\n   FROM asset_generations")
+
+> items <- DBI::dbGetQuery(db, "SELECT status, COUNT(*) AS n FROM asset_items GROUP BY status")
+
+> DBI::dbDisconnect(db)
+
+> cat("\n[server-side evidence] asset_generations row:\n")
+
+[server-side evidence] asset_generations row:
+
+> print(gen_row)
+                 generation_id  state expected_n completed_n failed_n error
+1 gen_20260831_170927_69d0e4ca ACTIVE         10          10        0  <NA>
+
+> cat("[server-side evidence] item status counts:\n")
+[server-side evidence] item status counts:
+
+> print(items)
+     status  n
+1 completed 10
+
+> stopifnot(is.na(gen_row$error[1]) || !nzchar(gen_row$error[1]))
+
+> cat("[check] generation error field is empty: PASS\n")
+[check] generation error field is empty: PASS
+
+> stopifnot(identical(res$total, 10), identical(res$completed, 
++     10))
+
+> cat("[check] exact accounting 10/10: PASS\n")
+[check] exact accounting 10/10: PASS
+
+> cat("\n== ds.hpc.list: per-image jobs as a table ==\n")
+
+== ds.hpc.list: per-image jobs as a table ==
+
+> print(ds.hpc.list(conns))
+dshpc_result
+  Servers: site1 
+  site1: 10 job(s)
+                                       job_id    state name           label
+     job_9a4d7961-040c-4737-9fb7-84a1c22ff78c FINISHED <NA> dsImaging_image
+     job_72e5e5dd-0a63-498a-8572-389beddc353c FINISHED <NA> dsImaging_image
+     job_c03c630e-0bb9-477a-9f4d-414da71f27cb FINISHED <NA> dsImaging_image
+     job_719c45c9-d214-411b-8798-d87f0e178fb7 FINISHED <NA> dsImaging_image
+     job_313f05c3-6614-4528-bf17-25a309310614 FINISHED <NA> dsImaging_image
+     job_f4f60293-729f-4bb4-a6a1-927883ceabfd FINISHED <NA> dsImaging_image
+     job_42448be1-26f7-43b5-a72c-20b4367a5578 FINISHED <NA> dsImaging_image
+     job_ae76d6f0-4751-4f43-96ea-b4af27d8248a FINISHED <NA> dsImaging_image
+     job_821d6b51-4120-4d81-a998-ca4ae8660b3e FINISHED <NA> dsImaging_image
+     job_b43110db-a78e-4140-ae97-625d89919e46 FINISHED <NA> dsImaging_image
+                 submitted_at progress
+     2026-08-31T15:09:31.036Z      3/3
+     2026-08-31T15:09:31.007Z      3/3
+     2026-08-31T15:09:27.854Z      3/3
+     2026-08-31T15:09:27.822Z      3/3
+     2026-08-31T15:09:27.791Z      3/3
+     2026-08-31T15:09:27.760Z      3/3
+     2026-08-31T15:09:27.648Z      3/3
+     2026-08-31T15:09:27.610Z      3/3
+     2026-08-31T15:09:27.579Z      3/3
+     2026-08-31T15:09:27.517Z      3/3
+
+> cat("\n== Asset catalog ==\n")
+
+== Asset catalog ==
+
+> cat_res <- ds.imaging.catalog(conns, "audit_ct_v2")
+
+> print(cat_res$site1[, c("asset_id", "kind", "visibility")])
+                         asset_id                 kind visibility
+1  asset_20260831_170955_df1fae07 radiomics_collection    private
+2  asset_20260831_170954_b9e13a94     per_image_result     global
+3  asset_20260831_170952_771a573a     per_image_result     global
+4  asset_20260831_170949_81cde8e9     per_image_result     global
+5  asset_20260831_170947_665a7f04     per_image_result     global
+6  asset_20260831_170944_87d8e329     per_image_result     global
+7  asset_20260831_170942_7ad3f66a     per_image_result     global
+8  asset_20260831_170939_47d9d012     per_image_result     global
+9  asset_20260831_170936_d521cf9b     per_image_result     global
+10 asset_20260831_170934_3cbdb116     per_image_result     global
+11 asset_20260831_170931_a47cb947     per_image_result     global
+
+> asset_id <- res$asset_id
+
+> cat("\nLoading features from asset:", asset_id, "\n")
+
+Loading features from asset: asset_20260831_170955_df1fae07 
+
+> ds.imaging.radiomics.load_features(conns, dataset_id = "audit_ct_v2", 
++     asset_id = asset_id, symbol = "radiomics")
+
+> print(dsBaseClient::ds.dim("radiomics", datasources = conns))
+Registered S3 method overwritten by 'gamlss':
+  method   from
+  print.ri bit 
+$`dimensions of radiomics in site1`
+[1] 10 19
+
+$`dimensions of radiomics in combined studies`
+[1] 10 19
+
+
+> cn <- dsBaseClient::ds.colnames("radiomics", datasources = conns)$site1
+
+> mean_col <- grep("firstorder_Mean$", cn, value = TRUE)[1]
+
+> if (!is.na(mean_col)) {
++     cat("\nFederated mean of", mean_col, ":\n")
++     print(dsBaseClient::ds.mean(paste0("radiomics$", mean_col), 
++         datasources = conns))
++ }
+
+Federated mean of original_firstorder_Mean :
+$Mean.by.Study
+      EstimatedMean Nmissing Nvalid Ntotal
+site1      105.8326        0     10     10
+
+$Nstudies
+[1] 1
+
+$ValidityMessage
+      ValidityMessage 
+site1 "VALID ANALYSIS"
+
+
+> DSI::datashield.logout(conns)
+
+> cat("\n== IMAGING FIX TRANSCRIPT COMPLETE ==\n")
+
+== IMAGING FIX TRANSCRIPT COMPLETE ==
