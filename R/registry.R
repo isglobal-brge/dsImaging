@@ -146,9 +146,14 @@ resolve_dataset <- function(dataset_id) {
     ))
   }
 
+  # `manifest` must be present (as NULL) so that consumers doing
+  # `resolved$manifest` get NULL instead of `$` partial-matching to
+  # `manifest_uri`, which silently returned the URI string and broke the
+  # worker-side drip feed ("$ operator is invalid for atomic vectors").
   list(
     dataset_id = dataset_id,
     backend = backend,
+    manifest = NULL,
     manifest_uri = entry$manifest_uri,
     publish = publish,
     entry = entry

@@ -354,8 +354,19 @@ imagingMasksDS <- function(handle_symbol) {
       return(length(readLines(local_file)) - 1L)
   }
 
-  # Try S3 URI via backend
+  # Local absolute metadata.uri (the documented manifest field). Manifest
+  # validation guarantees uri is an absolute path or an s3:// URI, so any
+  # non-s3 uri is a local file.
   uri <- meta$uri
+  if (!is.null(uri) && !grepl("^s3://", uri) && file.exists(uri)) {
+    fmt <- meta$format %||% .guess_format(uri)
+    if (identical(fmt, "parquet") && requireNamespace("arrow", quietly = TRUE))
+      return(nrow(arrow::read_parquet(uri, as_data_frame = FALSE)))
+    if (identical(fmt, "csv"))
+      return(length(readLines(uri)) - 1L)
+  }
+
+  # Try S3 URI via backend
   if (!is.null(uri) && grepl("^s3://", uri) && !is.null(backend)) {
     tmp <- tempfile(fileext = if (grepl("\\.parquet$", uri)) ".parquet" else ".csv")
     on.exit(unlink(tmp), add = TRUE)

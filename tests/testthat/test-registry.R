@@ -82,3 +82,24 @@ test_that("imagingListDatasetsDS reads manifest_uri registry entries", {
     expect_true(result$enabled)
   })
 })
+
+test_that("resolve_dataset exposes an explicit NULL manifest element", {
+  # Regression: without an exact `manifest` element, `resolved$manifest`
+  # partial-matched `manifest_uri` and returned the URI string, crashing the
+  # worker-side drip feed with "$ operator is invalid for atomic vectors".
+  tmp <- tempfile(fileext = ".yml")
+  on.exit(unlink(tmp))
+
+  yaml::write_yaml(list(
+    schema_version = 1,
+    "test.dataset" = list(manifest_uri = "/tmp/m.yml", enabled = TRUE,
+                          backend = "file")
+  ), tmp)
+
+  withr::with_options(list(dsimaging.registry_path = tmp), {
+    res <- resolve_dataset("test.dataset")
+    expect_true("manifest" %in% names(res))
+    expect_null(res$manifest)
+    expect_identical(res$manifest_uri, "/tmp/m.yml")
+  })
+})

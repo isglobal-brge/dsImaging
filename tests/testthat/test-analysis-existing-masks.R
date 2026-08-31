@@ -147,3 +147,36 @@ test_that("transient submit errors are retryable", {
   expect_true(dsImaging:::.is_transient_job_submit_error("quota exceeded"))
   expect_false(dsImaging:::.is_transient_job_submit_error("Mask file not found"))
 })
+
+test_that("collection status reports exact counts, not power-of-2 buckets", {
+  # Regression: safe_metadata_count() bucketed workflow counts, so a 6-image
+  # collection displayed as "8/8" although the DB tracked 6/6.
+  db_path <- tempfile(fileext = ".sqlite")
+  withr::local_options(list(dsimaging.asset_db = db_path))
+
+  gen <- claim_or_reuse_generation(
+    dataset_id = "lung6",
+    kind = "radiomics_collection",
+    derivation_hash = "exact-count-test",
+    expected_n = 6L,
+    owner_id = "tester"
+  )
+  generation_id <- gen$generation_id
+  for (sid in paste0("case00", 1:6)) {
+    record_item_status(generation_id, sid, "completed")
+  }
+  update_generation(generation_id, state = "RUNNING", completed_n = 6L)
+
+  testthat::local_mocked_bindings(
+    .sync_generation_jobs = function(generation_id) NULL,
+    .package = "dsImaging"
+  )
+
+  status <- imagingRadiomicsCollectionStatusDS(
+    dsImaging:::.dsr_encode(generation_id)
+  )
+  expect_equal(status$total, 6L)
+  expect_equal(status$completed, 6L)
+  expect_equal(status$failed, 0L)
+  expect_true(status$is_done)
+})

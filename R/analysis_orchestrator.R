@@ -123,13 +123,19 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
     spec = generation_spec
   )
 
+  # Collection workflow counts are exact operational telemetry: the same
+  # API surface already returns per-sample identifiers (pending_ids,
+  # failed_samples) to the caller, so power-of-2 bucketing here disclosed
+  # nothing extra while corrupting the displayed accounting (e.g. a 6-image
+  # collection reported as "8/8"). Dataset metadata endpoints keep
+  # safe_metadata_count().
   if (gen_result$action == "reuse_asset") {
     return(list(
       action = "reuse_asset",
       asset_id = gen_result$asset_id,
       dataset_id = dataset_id,
-      total = safe_metadata_count(total_n),
-      done = safe_metadata_count(total_n),
+      total = as.integer(total_n),
+      done = as.integer(total_n),
       pending = 0L
     ))
   }
@@ -163,8 +169,8 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
       action = "resume",
       generation_id = generation_id,
       dataset_id = dataset_id,
-      total = safe_metadata_count(total_n),
-      done = safe_metadata_count(length(done_ids)),
+      total = as.integer(total_n),
+      done = length(done_ids),
       pending_ids = retry_ids,
       fingerprints = fp_result$fingerprints[retry_ids],
       content_hashes = fp_result$content_hashes[retry_ids]
@@ -188,7 +194,7 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
     action = "run_new",
     generation_id = generation_id,
     dataset_id = dataset_id,
-    total = safe_metadata_count(total_n),
+    total = as.integer(total_n),
     done = 0L,
     pending_ids = all_sample_ids,
     fingerprints = fp_result$fingerprints,
@@ -444,10 +450,12 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
 #' Get Radiomics Collection Status
 #'
 #' DataSHIELD aggregate method. Reconciles finished/failed dsHPC state back
-#' into dsImaging generation items and returns disclosure-safe progress counts.
+#' into dsImaging generation items and returns exact operational progress
+#' counts (the workflow already exposes per-sample identifiers to the same
+#' caller, so counts are not additionally disclosive).
 #'
 #' @param generation_id_enc Encoded generation id.
-#' @return Named list with generation state, disclosure-safe counts, and
+#' @return Named list with generation state, exact item counts, and
 #'   `is_done`.
 #' @export
 imagingRadiomicsCollectionStatusDS <- function(generation_id_enc) {
@@ -515,18 +523,22 @@ imagingRadiomicsCollectionStatusDS <- function(generation_id_enc) {
   # Guard against empty items table (generation exists but scan hasn't populated items yet)
   all_resolved <- not_done == 0L && total_items > 0 && total_items >= expected
 
-  # Apply disclosure control to all counts returned to client
+  # Exact operational counts: this workflow already exposes per-sample
+  # identifiers to the same caller (scan pending_ids, publish
+  # failed_samples), so bucketing progress counts disclosed nothing extra
+  # and made the displayed accounting wrong (6-image collections shown as
+  # "8/8"). Dataset metadata endpoints keep safe_metadata_count().
   list(
     generation_id = generation_id,
     state = gen$state,
-    total = safe_metadata_count(expected),
-    completed = safe_metadata_count(length(completed_ids)),
-    failed = safe_metadata_count(length(failed_ids)),
-    pending = safe_metadata_count(length(pending_ids)),
-    claimed = safe_metadata_count(length(claimed_ids)),
-    running = safe_metadata_count(length(running_ids)),
-    retrying = safe_metadata_count(retrying_jobs),
-    active_jobs = safe_metadata_count(nrow(active_jobs)),
+    total = as.integer(expected),
+    completed = length(completed_ids),
+    failed = length(failed_ids),
+    pending = length(pending_ids),
+    claimed = length(claimed_ids),
+    running = length(running_ids),
+    retrying = as.integer(retrying_jobs),
+    active_jobs = nrow(active_jobs),
     is_done = all_resolved
   )
 }
@@ -744,13 +756,16 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
          call. = FALSE)
   }
 
+  # Exact counts: failed_samples already carries per-sample identifiers, so
+  # bucketing these totals disclosed nothing and misreported the collection
+  # size (e.g. "8/8 images" for a 6-image collection).
   list(
     asset_id = asset_id,
     generation_id = generation_id,
     feature_table = feature_table,
-    total = safe_metadata_count(total),
-    completed = safe_metadata_count(n_completed),
-    failed = safe_metadata_count(n_failed),
+    total = as.integer(total),
+    completed = as.integer(n_completed),
+    failed = as.integer(n_failed),
     failed_samples = if (n_failed > 0) failed$sample_id else character(0)
   )
 }
