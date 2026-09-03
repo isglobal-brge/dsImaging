@@ -236,8 +236,8 @@ register_derived_asset <- function(dataset_id, kind, path_or_root,
 
 #' Resolve a feature_table asset by alias or ID
 #'
-#' Returns the asset metadata needed by dsFlower to consume
-#' the feature table directly without materializing it in R.
+#' Returns the asset metadata needed by downstream consumers to use the feature
+#' table directly without materializing it in R.
 #'
 #' @param dataset_id Character.
 #' @param alias_or_id Character; alias name or asset_id.

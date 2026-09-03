@@ -22,18 +22,10 @@ imagingInitDS <- function(resource_symbol) {
   if (inherits(obj, "Resource") || (is.list(obj) && !is.null(obj$url))) {
     url <- obj$url %||% ""
     if (grepl("^imaging\\+dataset://", url)) {
-      # Resolve the imaging+dataset:// URL ourselves
-      parsed <- .parse_imaging_url(url)
-      if (!is.null(parsed$dataset_id)) {
-        resolved <- tryCatch(resolve_dataset(parsed$dataset_id), error = function(e) NULL)
-        if (!is.null(resolved)) {
-          manifest <- parse_manifest(resolved$manifest_uri, resolved$backend)
-          desc <- imaging_dataset_descriptor(manifest)
-          return(.make_imaging_handle(desc, resource_symbol,
-            backend = resolved$backend, manifest_uri = resolved$manifest_uri))
-        }
-      }
-      stop("Cannot resolve imaging+dataset:// URL: ", url, call. = FALSE)
+      client <- ImagingDatasetResourceClient$new(obj)
+      desc <- client$asImagingDescriptor()
+      return(.make_imaging_handle(desc, resource_symbol,
+        backend = client$getBackend(), manifest_uri = client$getManifestUri()))
     }
   }
 
@@ -44,9 +36,8 @@ imagingInitDS <- function(resource_symbol) {
       backend = obj$getBackend(), manifest_uri = obj$getManifestUri()))
   }
 
-  # Path 3: FlowerDatasetDescriptor / ImagingDatasetDescriptor
-  if (inherits(obj, "ImagingDatasetDescriptor") ||
-      inherits(obj, "FlowerDatasetDescriptor")) {
+  # Path 3: dsImaging's package-independent descriptor
+  if (inherits(obj, "ImagingDatasetDescriptor")) {
     return(.make_imaging_handle(obj, resource_symbol))
   }
 
@@ -85,6 +76,7 @@ imagingInitDS <- function(resource_symbol) {
     descriptor  = desc,
     manifest    = desc$manifest,
     backend     = backend,
+    manifest_uri = manifest_uri,
     n_samples   = n_samples,
     created_at  = Sys.time()
   )
@@ -293,7 +285,7 @@ imagingMasksDS <- function(handle_symbol) {
 
     if (nrow(gens) == 0) return(.empty_masks_df())
 
-    profile <- getOption("dsflower.privacy_profile", "clinical_default")
+    profile <- .get_active_profile()
     rows <- lapply(seq_len(nrow(gens)), function(i) {
       spec <- tryCatch(
         jsonlite::fromJSON(gens$spec_json[i], simplifyVector = FALSE),

@@ -1,14 +1,14 @@
 # Module: Imaging Dataset Descriptor
-# ImagingDatasetDescriptor inherits FlowerDatasetDescriptor.
+# Package-independent descriptor for an imaging dataset.
 
 #' Create an ImagingDatasetDescriptor
 #'
-#' Wraps a parsed manifest into a descriptor suitable for dsFlower's
-#' \code{as_flower_dataset()} pipeline. This is a specialized
-#' \code{FlowerDatasetDescriptor} with \code{source_kind = "image_bundle"}.
+#' Wraps a parsed manifest into dsImaging's package-independent dataset
+#' descriptor. Downstream consumers may adapt this public structure without
+#' dsImaging importing or inheriting their classes.
 #'
 #' @param manifest List; a parsed and validated imaging manifest.
-#' @return An \code{ImagingDatasetDescriptor} (also a \code{FlowerDatasetDescriptor}).
+#' @return An \code{ImagingDatasetDescriptor}.
 #' @export
 imaging_dataset_descriptor <- function(manifest) {
   if (is.null(manifest$dataset_id)) {
@@ -24,8 +24,7 @@ imaging_dataset_descriptor <- function(manifest) {
     table_data  = NULL
   )
 
-  structure(desc, class = c("ImagingDatasetDescriptor",
-                             "FlowerDatasetDescriptor"))
+  structure(desc, class = "ImagingDatasetDescriptor")
 }
 
 #' Create a descriptor from a dataset_id

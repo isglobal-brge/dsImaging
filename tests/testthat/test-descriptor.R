@@ -13,9 +13,17 @@ test_that("imaging_dataset_descriptor creates valid object", {
 
   desc <- imaging_dataset_descriptor(manifest)
   expect_s3_class(desc, "ImagingDatasetDescriptor")
-  expect_s3_class(desc, "FlowerDatasetDescriptor")
+  expect_false(inherits(desc, "FlowerDatasetDescriptor"))
   expect_equal(desc$dataset_id, "test.dataset.v1")
   expect_equal(desc$source_kind, "image_bundle")
+})
+
+test_that("dsImaging declares no dependency on dsFlower", {
+  description <- utils::packageDescription("dsImaging")
+  dependencies <- paste(unlist(description[
+    intersect(c("Depends", "Imports", "Suggests", "Enhances"),
+              names(description))]), collapse = ",")
+  expect_false(grepl("dsFlower", dependencies, fixed = TRUE))
 })
 
 test_that("imaging_dataset_descriptor errors without dataset_id", {

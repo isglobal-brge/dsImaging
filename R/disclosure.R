@@ -104,6 +104,12 @@ safe_metadata_string <- function(x) {
 #' Get the active trust profile name
 #' @keywords internal
 .get_active_profile <- function() {
+  profile <- getOption("dsimaging.privacy_profile",
+    getOption("default.dsimaging.privacy_profile", NULL))
+  if (!is.null(profile)) return(profile)
+
+  # Compatibility for existing node profiles. This reads an option only and
+  # does not require dsFlower; the dsImaging-specific key always takes priority.
   getOption("dsflower.privacy_profile",
     getOption("default.dsflower.privacy_profile", "clinical_default"))
 }

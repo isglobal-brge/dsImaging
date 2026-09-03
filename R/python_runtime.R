@@ -1,6 +1,6 @@
 # Module: Python Runtime Management
 #
-# All dsFlower-framework packages use the same pattern:
+# dsImaging uses the following self-contained pattern:
 #   1. Ensure uv is available (download if needed)
 #   2. uv creates a Python venv (downloads Python if needed)
 #   3. Use the venv's Python

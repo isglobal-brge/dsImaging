@@ -960,7 +960,7 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
 }
 
 # ---------------------------------------------------------------------------
-# 5. Validate mask-image correspondence for dsFlower
+# 5. Validate mask-image correspondence for downstream training
 # ---------------------------------------------------------------------------
 
 #' Validate that segmentation masks correspond to a set of images
@@ -1081,7 +1081,7 @@ imagingSegmentationValidateMasksDS <- function(generation_id_enc, dataset_id) {
 #' Get the mask manifest for a validated generation
 #'
 #' DataSHIELD server-side function (NOT aggregate -- called internally
-#' by dsFlower's flowerPrepareRunDS for segmentation tasks).
+#' by downstream server-side training consumers for segmentation tasks).
 #' Returns the sample_id -> mask_path mapping.
 #'
 #' @param generation_id Character; the generation to query.
