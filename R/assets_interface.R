@@ -103,10 +103,37 @@ imagingLoadAssetDS <- function(handle_symbol, asset_id_or_alias, columns = NULL,
                                include_metadata = FALSE,
                                syntactic_names = FALSE) {
   .dsimaging_require_literal_arguments()
+  columns <- .decode_imaging_columns_arg(columns)
+  owner_env <- parent.frame()
   authorized <- .authorized_imaging_dataset(
-    handle_symbol, owner_env = parent.frame())
-  .imaging_load_asset(authorized, asset_id_or_alias, columns,
-                      include_metadata, syntactic_names)
+    handle_symbol, owner_env = owner_env)
+  data <- .imaging_load_asset(authorized, asset_id_or_alias, columns,
+                              include_metadata, syntactic_names)
+  .mark_imaging_feature_table_export(owner_env)
+  data
+}
+
+#' Decode a public column selection carried as one literal argument
+#' @keywords internal
+.decode_imaging_columns_arg <- function(columns) {
+  if (is.null(columns)) return(NULL)
+  if (is.character(columns) && length(columns) == 1L &&
+      !is.na(columns) && startsWith(columns, "B64:")) {
+    columns <- .dsr_decode(columns)
+  }
+  if (is.list(columns)) {
+    valid <- vapply(columns, function(value) {
+      is.character(value) && length(value) == 1L && !is.na(value)
+    }, logical(1))
+    if (!all(valid)) {
+      stop("columns must contain only public column names.", call. = FALSE)
+    }
+    columns <- unname(vapply(columns, as.character, character(1)))
+  }
+  if (!is.character(columns) || anyNA(columns)) {
+    stop("columns must contain only public column names.", call. = FALSE)
+  }
+  enc2utf8(columns)
 }
 
 #' @keywords internal

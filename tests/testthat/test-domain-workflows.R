@@ -8,8 +8,14 @@ test_that("radiomics domain method composes a labelled dsHPC job", {
         records = list())), manifest = list(),
         backend = NULL, privacy = list(), n_privacy_units = 3L)
     },
+    .imaging_worker_manifest = function(...) list(
+      dataset_id = "lung1", assets = list()),
+    .imaging_worker_collection_map = function(...) NULL,
+    .imaging_worker_asset_identity = function(...) strrep("f", 64),
     .register_imaging_worker_context = function(authorized,
-                                                asset_names = NULL) {
+                                                asset_names = NULL,
+                                                collection_map = NULL,
+                                                worker_manifest = NULL) {
       paste0("dsctx_", strrep("a", 64))
     },
     find_asset_by_hash = function(dataset_id, derivation_hash,
@@ -42,6 +48,205 @@ test_that("radiomics domain method composes a labelled dsHPC job", {
   expect_match(submitted$steps[[2]]$config$dataset_id,
                "^dsctx_[0-9a-f]{64}$")
   expect_identical(anyDuplicated(names(submitted$steps[[2]]$config)), 0L)
+})
+
+test_that("exact asset map hashes are ordered and cover immutable identity", {
+  record <- function(id, suffix) list(
+    sample_id = id, source_kind = "mask_file",
+    uri = paste0("s3://imaging/masks/", suffix, ".nii.gz"),
+    relative_path = paste0(suffix, ".nii.gz"),
+    content_hash = strrep(suffix, 64), size = 100L,
+    n_files = 1L, version_id = paste0("version-", suffix))
+  records <- list(record("case-B", "b"), record("case-A", "a"))
+  map_hash <- function(value) dsImaging:::.imaging_worker_asset_map_hash(
+    list(records_by_asset = list(masks = value)), "masks")
+  baseline <- map_hash(records)
+
+  expect_identical(baseline, map_hash(rev(records)))
+  for (field in c("uri", "version_id", "content_hash", "size")) {
+    changed <- records
+    changed[[1L]][[field]] <- switch(field,
+      uri = "s3://imaging/masks/replaced.nii.gz",
+      version_id = "version-replaced",
+      content_hash = strrep("c", 64),
+      size = 101L)
+    expect_false(identical(baseline, map_hash(changed)), info = field)
+  }
+})
+
+test_that("changed source masks cannot reuse a direct radiomics asset", {
+  mask_hash <- strrep("b", 64)
+  observed_hashes <- character(0)
+  submitted <- FALSE
+  registered <- 0L
+  collection_seal <- strrep("a", 64)
+  exact_map <- function() {
+    image_record <- list(
+      sample_id = "case-A", source_kind = "single_file",
+      uri = "s3://imaging/source/images/opaque.nii.gz",
+      relative_path = "opaque.nii.gz", content_hash = strrep("d", 64),
+      size = 200L, n_files = 1L, version_id = "image-version-1")
+    mask_record <- list(
+      sample_id = "case-A", source_kind = "mask_file",
+      uri = "s3://imaging/source/masks/opaque.nii.gz",
+      relative_path = "opaque.nii.gz", content_hash = mask_hash,
+      size = 100L, n_files = 1L, version_id = "version-1")
+    list(version = 1L, seal = collection_seal,
+      asset_names = list("images", "masks"), records = list(image_record),
+      records_by_asset = list(
+        images = list(image_record), masks = list(mask_record)))
+  }
+  testthat::local_mocked_bindings(
+    .authorized_imaging_dataset = function(...) list(
+      dataset_id = "lung1", collection_seal = collection_seal,
+      handle = list(collection_seal = collection_seal), manifest = list(),
+      backend = NULL, privacy = list(), n_privacy_units = 3L),
+    .imaging_worker_manifest = function(...) list(
+      dataset_id = "lung1", assets = list()),
+    .imaging_worker_collection_map = function(...) exact_map(),
+    find_asset_by_hash = function(dataset_id, derivation_hash,
+                                  collection_seal) {
+      observed_hashes <<- c(observed_hashes, derivation_hash)
+      if (length(observed_hashes) == 1L ||
+          identical(derivation_hash, observed_hashes[[1L]])) {
+        return("asset-existing")
+      }
+      NULL
+    },
+    .register_imaging_worker_context = function(
+        authorized, asset_names = NULL, collection_map = NULL,
+        worker_manifest = NULL) {
+      registered <<- registered + 1L
+      expect_identical(collection_map, exact_map())
+      expect_identical(worker_manifest$dataset_id, "lung1")
+      paste0("dsctx_", strrep("a", 64))
+    },
+    .content_hash_for_resource = function(...) NULL,
+    .imaging_submit_job = function(job, ...) {
+      submitted <<- TRUE
+      structure(list(capability = paste0("imgw_", strrep("2", 64))),
+        class = "dsimaging_workflow_ref")
+    },
+    .package = "dsImaging"
+  )
+  encoded <- dsImaging:::.dsr_encode(list(
+    handle = "img", dataset_id = "lung1", image_asset = "images",
+    mask_asset = "masks",
+    profile = list(name = "demo_ct_firstorder_v1")))
+
+  first <- imagingProcessRadiomicsAssetDS(encoded)
+  mask_hash <- strrep("c", 64)
+  second <- imagingProcessRadiomicsAssetDS(encoded)
+
+  expect_s3_class(first, "dsimaging_workflow_ref")
+  expect_s3_class(second, "dsimaging_workflow_ref")
+  expect_length(observed_hashes, 2L)
+  expect_false(identical(observed_hashes[[1L]], observed_hashes[[2L]]))
+  expect_identical(registered, 1L)
+  expect_true(submitted)
+
+  mask_hash <- strrep("b", 64)
+  observed_hashes <- character(0)
+  registered <- 0L
+  submitted <- FALSE
+  chained <- dsImaging:::.dsr_encode(list(
+    handle = "img", dataset_id = "lung1", image_asset = "images",
+    segmenter = list(
+      provider = "existing_mask_asset", mask_asset = "masks"),
+    profile = list(name = "demo_ct_firstorder_v1")))
+  imagingProcessSegmentAndExtractDS(chained)
+  mask_hash <- strrep("c", 64)
+  imagingProcessSegmentAndExtractDS(chained)
+
+  expect_length(observed_hashes, 2L)
+  expect_false(identical(observed_hashes[[1L]], observed_hashes[[2L]]))
+  expect_identical(registered, 1L)
+  expect_true(submitted)
+})
+
+test_that("derived alias promotion changes radiomics input identity", {
+  collection_seal <- strrep("a", 64)
+  resolved_asset_id <- paste0("asset_", strrep("1", 32))
+  observed_hashes <- character(0)
+  registered_manifest_ids <- character(0)
+  image_record <- list(
+    sample_id = "case-A", source_kind = "single_file",
+    uri = "s3://imaging/source/images/opaque.nii.gz",
+    relative_path = "opaque.nii.gz", content_hash = strrep("d", 64),
+    size = 200L, n_files = 1L, version_id = "image-version-1")
+  exact_map <- list(
+    version = 1L, seal = collection_seal,
+    asset_names = list("images"), records = list(image_record),
+    records_by_asset = list(images = list(image_record)))
+  testthat::local_mocked_bindings(
+    .authorized_imaging_dataset = function(...) list(
+      dataset_id = "lung1", collection_seal = collection_seal,
+      handle = list(collection_seal = collection_seal), manifest = list(),
+      backend = NULL, privacy = list(), n_privacy_units = 3L),
+    .imaging_worker_manifest = function(authorized, asset_names) {
+      assets <- list()
+      for (asset_name in asset_names) {
+        if (identical(asset_name, "images")) {
+          assets[[asset_name]] <- list(uri = "s3://imaging/source/images")
+        } else {
+          assets[[asset_name]] <- list(
+            uri = paste0("/derived/", resolved_asset_id),
+            .dsimaging_asset_identity = list(
+              asset_id = resolved_asset_id,
+              derivation_hash = if (endsWith(resolved_asset_id, "1")) {
+                strrep("b", 64)
+              } else strrep("c", 64)))
+        }
+      }
+      list(dataset_id = "lung1", assets = assets)
+    },
+    .imaging_worker_collection_map = function(...) exact_map,
+    find_asset_by_hash = function(dataset_id, derivation_hash,
+                                  collection_seal) {
+      observed_hashes <<- c(observed_hashes, derivation_hash)
+      if (length(observed_hashes) == 1L ||
+          identical(derivation_hash, observed_hashes[[1L]])) {
+        return(paste0("asset_", strrep("e", 32)))
+      }
+      NULL
+    },
+    .register_imaging_worker_context = function(
+        authorized, asset_names = NULL, collection_map = NULL,
+        worker_manifest = NULL) {
+      registered_manifest_ids <<- c(registered_manifest_ids,
+        worker_manifest$assets$latest_masks$.dsimaging_asset_identity$asset_id)
+      paste0("dsctx_", strrep("a", 64))
+    },
+    .content_hash_for_resource = function(...) NULL,
+    .imaging_submit_job = function(job, ...) {
+      structure(list(capability = paste0("imgw_", strrep("2", 64))),
+        class = "dsimaging_workflow_ref")
+    },
+    .package = "dsImaging"
+  )
+
+  exercise <- function(method, encoded) {
+    observed_hashes <<- character(0)
+    registered_manifest_ids <<- character(0)
+    resolved_asset_id <<- paste0("asset_", strrep("1", 32))
+    method(encoded)
+    resolved_asset_id <<- paste0("asset_", strrep("2", 32))
+    method(encoded)
+    expect_length(observed_hashes, 2L)
+    expect_false(identical(observed_hashes[[1L]], observed_hashes[[2L]]))
+    expect_identical(
+      registered_manifest_ids, paste0("asset_", strrep("2", 32)))
+  }
+
+  exercise(imagingProcessRadiomicsAssetDS, dsImaging:::.dsr_encode(list(
+    handle = "img", dataset_id = "lung1", image_asset = "images",
+    mask_asset = "latest_masks",
+    profile = list(name = "demo_ct_firstorder_v1"))))
+  exercise(imagingProcessSegmentAndExtractDS, dsImaging:::.dsr_encode(list(
+    handle = "img", dataset_id = "lung1", image_asset = "images",
+    segmenter = list(
+      provider = "existing_mask_asset", mask_asset = "latest_masks"),
+    profile = list(name = "demo_ct_firstorder_v1"))))
 })
 
 test_that("workflow configs reject analyst paths and orchestration controls", {
@@ -301,8 +506,9 @@ test_that("active workflows cannot be destroyed and terminal cleanup is exact", 
     eval(quote(imagingWorkflowDestroyDS("workflow")), envir = session),
     "active imaging workflow")
   expect_true(exists("workflow", envir = session, inherits = FALSE))
+  state <- dsImaging:::.imaging_session_state(session, create = FALSE)
   expect_true(exists(ref$capability,
-    envir = dsImaging:::.imaging_workflow_registry, inherits = FALSE))
+    envir = state$workflows, inherits = FALSE))
 })
 
 test_that("workflow destroy returns an idempotent transport tombstone", {
@@ -313,12 +519,25 @@ test_that("workflow destroy returns an idempotent transport tombstone", {
   assign("imagingWorkflowDestroyDS", dsImaging::imagingWorkflowDestroyDS,
          envir = session)
 
+  other_session <- new.env(parent = globalenv())
+  other_reference <- dsImaging:::.register_imaging_workflow(
+    list(action = "reuse_asset", dataset_id = "other"), other_session)
+  assign("other_workflow", other_reference, envir = other_session)
+  assign("workflow", reference, envir = other_session)
+  assign("imagingWorkflowDestroyDS", dsImaging::imagingWorkflowDestroyDS,
+         envir = other_session)
+  expect_error(
+    eval(quote(imagingWorkflowDestroyDS("workflow")), envir = other_session),
+    "unavailable")
+
   tombstone <- eval(
     quote(imagingWorkflowDestroyDS("workflow")), envir = session)
   expect_identical(tombstone, reference)
   expect_false(exists("workflow", envir = session, inherits = FALSE))
-  expect_false(exists(reference$capability,
-    envir = dsImaging:::.imaging_workflow_registry, inherits = FALSE))
+  state <- dsImaging:::.imaging_session_state(session, create = FALSE)
+  expect_identical(
+    state$workflows[[reference$capability]],
+    dsImaging:::.dsimaging_session_tombstone)
 
   assign("workflow", tombstone, envir = session)
   retry <- eval(quote(imagingWorkflowDestroyDS("workflow")), envir = session)

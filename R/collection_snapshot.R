@@ -209,9 +209,20 @@
   }
 
   sizes <- suppressWarnings(as.numeric(idx$size))
+  version_ids <- if ("version_id" %in% names(idx)) {
+    as.character(idx$version_id)
+  } else {
+    rep(NA_character_, length(ids))
+  }
+  version_ids[version_ids %in% c("", "null")] <- NA_character_
+  valid_versions <- is.na(version_ids) | vapply(version_ids, function(value) {
+    is.character(value) && length(value) == 1L &&
+      nchar(value, type = "bytes") <= 1024L && !grepl("[\r\n]", value)
+  }, logical(1))
   n_files <- suppressWarnings(as.numeric(sm$n_files))
   if (length(sizes) != length(ids) || anyNA(sizes) ||
       any(!is.finite(sizes)) || any(sizes < 0) || any(sizes %% 1 != 0) ||
+      length(version_ids) != length(ids) || !all(valid_versions) ||
       length(n_files) != length(ids) || anyNA(n_files) ||
       any(!is.finite(n_files)) || any(n_files < 1) || any(n_files %% 1 != 0)) {
     .snapshot_fail()
@@ -259,6 +270,7 @@
     sample_id = ids[[i]], source_kind = sm_kind[[i]],
     uri = index_uris[[i]], relative_path = relative[[i]],
     content_hash = hashes[[i]], size = as.numeric(sizes[[i]]),
+    version_id = if (is.na(version_ids[[i]])) NULL else version_ids[[i]],
     n_files = as.integer(n_files[[i]]), files = files[[i]]))
   seal <- digest::digest(list(
     manifest = manifest_hash,
@@ -315,7 +327,9 @@
     dir.create(dirname(dest), recursive = TRUE, showWarnings = FALSE,
                mode = "0700")
     tmp <- tempfile(pattern = ".image-", tmpdir = dirname(dest))
-    tryCatch(backend_get_file(backend, record$uri, tmp, overwrite = TRUE),
+    tryCatch(backend_get_file(
+      backend, record$uri, tmp, overwrite = TRUE,
+      version_id = record$version_id %||% NULL),
              error = function(e) .snapshot_fail())
     info <- file.info(tmp)
     actual_hash <- tryCatch(digest::digest(file = tmp, algo = "sha256"),

@@ -42,8 +42,9 @@
     stop("Invalid imaging handle registration.", call. = FALSE)
   }
   capability <- .new_imaging_handle_capability()
-  .imaging_handle_registry[[capability]] <- list(
-    handle = handle, owner_env = owner_env)
+  state <- .imaging_session_state(owner_env, create = TRUE)
+  handles <- state$handles
+  handles[[capability]] <- list(handle = handle)
   structure(list(capability = capability), class = "dsimaging_handle_ref")
 }
 
@@ -74,8 +75,9 @@
     stop("Invalid imaging workflow registration.", call. = FALSE)
   }
   capability <- .new_imaging_workflow_capability()
-  .imaging_workflow_registry[[capability]] <- list(
-    workflow = workflow, owner_env = owner_env)
+  state <- .imaging_session_state(owner_env, create = TRUE)
+  workflows <- state$workflows
+  workflows[[capability]] <- list(workflow = workflow)
   structure(list(capability = capability), class = "dsimaging_workflow_ref")
 }
 
@@ -105,9 +107,10 @@
   if (is.null(found)) {
     stop("Unknown or unavailable imaging workflow reference.", call. = FALSE)
   }
-  entry <- .imaging_workflow_registry[[found$reference$capability]]
-  if (is.null(entry) || !is.list(entry$workflow) ||
-      !identical(entry$owner_env, found$owner_env)) {
+  state <- .imaging_session_state(found$owner_env, create = FALSE)
+  entry <- if (is.null(state)) NULL else
+    state$workflows[[found$reference$capability]]
+  if (is.null(entry) || !is.list(entry$workflow)) {
     stop("Unknown, stale, or cross-session imaging workflow reference.",
          call. = FALSE)
   }
@@ -130,10 +133,12 @@
     if (!exists(symbol, envir = env, inherits = FALSE)) next
     object <- get(symbol, envir = env, inherits = FALSE)
     if (!inherits(object, "dsimaging_workflow_ref")) next
-    entry <- .imaging_workflow_registry[[object$capability]]
-    if (is.null(entry) || !identical(entry$owner_env, env)) break
+    state <- .imaging_session_state(env, create = FALSE)
+    entry <- if (is.null(state)) NULL else state$workflows[[object$capability]]
+    if (!is.list(entry) || !is.list(entry$workflow)) break
     entry$workflow <- workflow
-    .imaging_workflow_registry[[object$capability]] <- entry
+    workflows <- state$workflows
+    workflows[[object$capability]] <- entry
     return(invisible(TRUE))
   }
   stop("Unknown or unavailable imaging workflow reference.", call. = FALSE)
@@ -173,7 +178,9 @@
   for (asset_name in asset_names) {
     asset_name <- .imaging_safe_name(asset_name, "asset name")
     if (!is.null(source_assets[[asset_name]])) {
-      manifest$assets[[asset_name]] <- source_assets[[asset_name]]
+      source_asset <- source_assets[[asset_name]]
+      source_asset$.dsimaging_asset_identity <- NULL
+      manifest$assets[[asset_name]] <- source_asset
       next
     }
     db <- .asset_db_connect()
@@ -186,10 +193,15 @@
         is.na(asset$path_or_root) || !nzchar(asset$path_or_root)) {
       stop("Requested imaging asset is unavailable.", call. = FALSE)
     }
+    derivation_hash <- asset$derivation_hash %||% ""
+    if (is.na(derivation_hash)) derivation_hash <- ""
     manifest$assets[[asset_name]] <- list(
       type = asset$kind %||% "derived",
       kind = asset$kind %||% "derived",
-      uri = asset$path_or_root)
+      uri = asset$path_or_root,
+      .dsimaging_asset_identity = list(
+        asset_id = asset$asset_id,
+        derivation_hash = as.character(derivation_hash)))
   }
   manifest
 }
@@ -209,7 +221,7 @@
   invisible(target)
 }
 
-#' Project the admitted image routes into a worker-only exact sample map
+#' Project admitted source routes into a worker-only exact sample map
 #' @keywords internal
 .imaging_worker_collection_map <- function(authorized, worker_manifest) {
   snapshot <- authorized$collection_snapshot %||%
@@ -217,26 +229,182 @@
   if (is.null(snapshot)) return(NULL)
   snapshot <- .validate_imaging_collection_snapshot(snapshot)
 
-  source_uri <- ((authorized$manifest %||% list())$assets %||%
-    list())$images$uri %||% NULL
+  source_assets <- (authorized$manifest %||% list())$assets %||% list()
   worker_assets <- worker_manifest$assets %||% list()
-  mapped_assets <- names(worker_assets)[vapply(worker_assets, function(asset) {
-    is.list(asset) && is.character(asset$uri) && length(asset$uri) == 1L &&
-      !is.na(asset$uri) && identical(asset$uri, source_uri)
-  }, logical(1))]
-  if (length(mapped_assets) == 0L) return(NULL)
+  project_record <- function(record) {
+    projected <- list(
+      sample_id = record$sample_id,
+      source_kind = record$source_kind,
+      uri = record$uri,
+      relative_path = record$relative_path,
+      content_hash = record$content_hash,
+      size = record$size,
+      n_files = record$n_files
+    )
+    if (!is.null(record$version_id) && !is.na(record$version_id) &&
+        nzchar(as.character(record$version_id))) {
+      projected$version_id <- as.character(record$version_id)
+    }
+    projected
+  }
 
-  records <- lapply(snapshot$records, function(record) list(
-    sample_id = record$sample_id,
-    source_kind = record$source_kind,
-    uri = record$uri,
-    relative_path = record$relative_path,
-    content_hash = record$content_hash,
-    size = record$size,
-    n_files = record$n_files
-  ))
+  records_by_asset <- list()
+  image_uri <- (source_assets$images %||% list())$uri %||% NULL
+  image_records <- lapply(snapshot$records, project_record)
+  for (asset_name in names(worker_assets)) {
+    asset <- worker_assets[[asset_name]]
+    kind <- if (is.list(asset)) asset$kind %||% asset$type %||% NULL else NULL
+    if (is.list(asset) && is.character(asset$uri) &&
+        length(asset$uri) == 1L && !is.na(asset$uri) &&
+        identical(kind, "image_root") &&
+        identical(asset$uri, image_uri)) {
+      records_by_asset[[asset_name]] <- image_records
+    }
+  }
+
+  roster <- authorized$privacy_roster %||%
+    (authorized$handle %||% list())$privacy_roster
+  backend <- authorized$backend %||% (authorized$handle %||% list())$backend
+  for (asset_name in intersect(names(worker_assets), names(source_assets))) {
+    if (!is.null(records_by_asset[[asset_name]])) next
+    source_asset <- source_assets[[asset_name]]
+    worker_asset <- worker_assets[[asset_name]]
+    kind <- source_asset$kind %||% source_asset$type %||% NULL
+    if (!identical(kind, "mask_root") || !is.list(worker_asset) ||
+        !identical(worker_asset$uri %||% NULL, source_asset$uri %||% NULL)) {
+      next
+    }
+    if (!inherits(backend, "dsimaging_backend")) {
+      stop("Mask asset index is invalid.", call. = FALSE)
+    }
+    index <- .validated_mask_hash_index(
+      backend, authorized$manifest, asset_name, required = TRUE)
+    index_ids <- as.character(index$sample_id)
+    canonical_ids <- .canonical_imaging_privacy_ids(index_ids)
+    if (!identical(index_ids, canonical_ids)) {
+      stop("Mask asset index is invalid.", call. = FALSE)
+    }
+    .assert_exact_imaging_roster(
+      index_ids, roster, context = "Imaging mask index")
+    snapshot_ids <- vapply(
+      snapshot$records, `[[`, character(1), "sample_id")
+    index <- index[match(snapshot_ids, index_ids), , drop = FALSE]
+    if (!all(c("size", "source_kind") %in% names(index))) {
+      stop("Mask asset index is invalid.", call. = FALSE)
+    }
+    sizes <- suppressWarnings(as.numeric(index$size))
+    source_kinds <- as.character(index$source_kind)
+    relative <- tryCatch(vapply(index$uri, .snapshot_relative_object,
+      character(1), root = source_asset$uri, backend_type = backend$type),
+      error = function(e) NULL)
+    valid <- length(sizes) == nrow(index) && !anyNA(sizes) &&
+      all(is.finite(sizes)) && all(sizes >= 0) && all(sizes %% 1 == 0) &&
+      length(source_kinds) == nrow(index) && !anyNA(source_kinds) &&
+      all(source_kinds == "mask_file") && !is.null(relative) &&
+      !anyDuplicated(relative)
+    if (!isTRUE(valid)) stop("Mask asset index is invalid.", call. = FALSE)
+
+    versions <- rep(NA_character_, nrow(index))
+    if ("version_id" %in% names(index)) {
+      versions <- as.character(index$version_id)
+      versions[versions %in% c("", "null")] <- NA_character_
+      valid_versions <- is.na(versions) | vapply(versions, .snapshot_scalar,
+        logical(1), max_bytes = 1024L)
+      if (!all(valid_versions)) {
+        stop("Mask asset index is invalid.", call. = FALSE)
+      }
+    }
+    records_by_asset[[asset_name]] <- lapply(seq_len(nrow(index)), function(i) {
+      record <- list(
+        sample_id = as.character(index$sample_id[[i]]),
+        source_kind = "mask_file",
+        uri = as.character(index$uri[[i]]),
+        relative_path = relative[[i]],
+        content_hash = as.character(index$content_hash[[i]]),
+        size = sizes[[i]],
+        n_files = 1L
+      )
+      if (!is.na(versions[[i]])) record$version_id <- versions[[i]]
+      record
+    })
+  }
+
+  mapped_assets <- names(records_by_asset)
+  if (length(mapped_assets) == 0L) return(NULL)
   list(version = 1L, seal = snapshot$seal,
-       asset_names = as.list(unname(mapped_assets)), records = records)
+       asset_names = as.list(unname(mapped_assets)),
+       records = records_by_asset[[mapped_assets[[1L]]]],
+       records_by_asset = records_by_asset)
+}
+
+#' Hash one exact worker asset map in stable sample order
+#' @keywords internal
+.imaging_worker_asset_map_hash <- function(collection_map, asset_name) {
+  if (is.null(collection_map)) return(NULL)
+  records_by_asset <- collection_map$records_by_asset
+  records <- if (is.list(records_by_asset)) {
+    records_by_asset[[asset_name]]
+  } else NULL
+  if (is.null(records)) return(NULL)
+  if (!is.list(records) || length(records) == 0L) {
+    stop("Imaging asset mapping is invalid.", call. = FALSE)
+  }
+  canonical <- lapply(records, function(record) {
+    if (!is.list(record) || !.snapshot_scalar(record$sample_id) ||
+        !.snapshot_scalar(record$uri) ||
+        !.snapshot_scalar(record$content_hash, max_bytes = 64L) ||
+        !grepl("^[0-9a-f]{64}$", record$content_hash) ||
+        length(record$size) != 1L || is.na(record$size) ||
+        !is.finite(as.numeric(record$size)) || as.numeric(record$size) < 0 ||
+        as.numeric(record$size) %% 1 != 0) {
+      stop("Imaging asset mapping is invalid.", call. = FALSE)
+    }
+    version_id <- record$version_id %||% ""
+    if (!identical(version_id, "") &&
+        !.snapshot_scalar(version_id, max_bytes = 1024L)) {
+      stop("Imaging asset mapping is invalid.", call. = FALSE)
+    }
+    list(
+      sample_id = record$sample_id,
+      uri = record$uri,
+      version_id = version_id,
+      content_hash = record$content_hash,
+      size = format(as.numeric(record$size), scientific = FALSE, trim = TRUE,
+                    digits = 22L)
+    )
+  })
+  ids <- vapply(canonical, `[[`, character(1), "sample_id")
+  if (anyDuplicated(ids)) {
+    stop("Imaging asset mapping is invalid.", call. = FALSE)
+  }
+  canonical <- canonical[order(ids, method = "radix")]
+  compute_derivation_hash(asset_name = asset_name, records = canonical)
+}
+
+#' Resolve an immutable identity for one exact worker input
+#' @keywords internal
+.imaging_worker_asset_identity <- function(collection_map, worker_manifest,
+                                           asset_name) {
+  map_hash <- .imaging_worker_asset_map_hash(collection_map, asset_name)
+  if (!is.null(map_hash)) {
+    return(compute_derivation_hash(kind = "exact_map", hash = map_hash))
+  }
+  asset <- (worker_manifest$assets %||% list())[[asset_name]]
+  identity <- if (is.list(asset)) asset$.dsimaging_asset_identity else NULL
+  asset_id <- identity$asset_id %||% NULL
+  derivation_hash <- identity$derivation_hash %||% NULL
+  uri <- if (is.list(asset)) asset$uri %||% NULL else NULL
+  valid <- is.list(identity) && .snapshot_scalar(asset_id, max_bytes = 64L) &&
+    grepl("^asset_[0-9a-f]{32}$", asset_id) &&
+    is.character(derivation_hash) && length(derivation_hash) == 1L &&
+    !is.na(derivation_hash) && nchar(derivation_hash, type = "bytes") <= 128L &&
+    !grepl("[\r\n]", derivation_hash) && .snapshot_scalar(uri)
+  if (!isTRUE(valid)) {
+    stop("Requested imaging asset has no immutable identity.", call. = FALSE)
+  }
+  compute_derivation_hash(
+    kind = "catalog_asset", asset_id = asset_id,
+    derivation_hash = derivation_hash, uri = uri)
 }
 
 #' Register an opaque worker-only dataset context
@@ -247,7 +415,9 @@
 #' job specification.
 #' @keywords internal
 .register_imaging_worker_context <- function(authorized,
-                                             asset_names = character(0)) {
+                                             asset_names = character(0),
+                                             collection_map = NULL,
+                                             worker_manifest = NULL) {
   roster <- .validate_imaging_privacy_roster(
     authorized$privacy_roster %||% authorized$handle$privacy_roster)
   backend <- authorized$backend %||% storage_backend("file")
@@ -277,7 +447,33 @@
   on.exit({
     if (!committed) unlink(c(manifest_path, context_path), force = TRUE)
   }, add = TRUE)
-  context_manifest <- .imaging_worker_manifest(authorized, asset_names)
+  normalized_asset_names <- unique(as.character(
+    unlist(asset_names, use.names = FALSE)))
+  normalized_asset_names <- normalized_asset_names[
+    !is.na(normalized_asset_names) & nzchar(normalized_asset_names)]
+  normalized_asset_names <- vapply(
+    normalized_asset_names, .imaging_safe_name, character(1),
+    name = "asset name")
+  if (is.null(worker_manifest)) {
+    context_manifest <- .imaging_worker_manifest(
+      authorized, normalized_asset_names)
+  } else {
+    manifest_assets <- if (is.list(worker_manifest)) {
+      worker_manifest$assets
+    } else NULL
+    valid_manifest <- is.list(worker_manifest) && is.list(manifest_assets) &&
+      is.character(worker_manifest$dataset_id) &&
+      length(worker_manifest$dataset_id) == 1L &&
+      !is.na(worker_manifest$dataset_id) &&
+      identical(worker_manifest$dataset_id, authorized$dataset_id) &&
+      !is.null(names(manifest_assets)) &&
+      identical(sort(names(manifest_assets), method = "radix"),
+                sort(normalized_asset_names, method = "radix"))
+    if (!isTRUE(valid_manifest)) {
+      stop("Imaging worker manifest is invalid.", call. = FALSE)
+    }
+    context_manifest <- worker_manifest
+  }
   context_manifest$.dsimaging_privacy_roster <- roster
   context_manifest$.dsimaging_collection_seal <-
     .imaging_authorized_collection_seal(authorized)
@@ -286,8 +482,13 @@
     context_id = context_id,
     manifest = context_manifest,
     backend = portable_backend)
-  collection_map <- .imaging_worker_collection_map(
-    authorized, context_manifest)
+  if (is.null(collection_map)) {
+    collection_map <- .imaging_worker_collection_map(
+      authorized, context_manifest)
+  } else if (!is.list(collection_map) ||
+             !identical(as.integer(collection_map$version), 1L)) {
+    stop("Imaging asset mapping is invalid.", call. = FALSE)
+  }
   if (!is.null(collection_map)) {
     worker_context$collection_map <- collection_map
   }
@@ -389,9 +590,10 @@
     stop("No imaging handle for symbol '", symbol,
          "'. Call imagingInitDS first.", call. = FALSE)
   }
-  entry <- .imaging_handle_registry[[found$reference$capability]]
-  if (is.null(entry) || !is.list(entry$handle) ||
-      !identical(entry$owner_env, found$owner_env)) {
+  state <- .imaging_session_state(found$owner_env, create = FALSE)
+  entry <- if (is.null(state)) NULL else
+    state$handles[[found$reference$capability]]
+  if (is.null(entry) || !is.list(entry$handle)) {
     stop("No imaging handle for symbol '", symbol,
          "' (unknown, stale, or cross-session reference).", call. = FALSE)
   }
@@ -836,19 +1038,17 @@
       !is.environment(owner_env)) {
     stop("Invalid private imaging asset authorization.", call. = FALSE)
   }
-  environments <- .imaging_private_asset_authorizations[[asset_id]] %||%
-    list()
-  if (!any(vapply(environments, identical, logical(1), y = owner_env))) {
-    environments[[length(environments) + 1L]] <- owner_env
-  }
-  .imaging_private_asset_authorizations[[asset_id]] <- environments
+  state <- .imaging_session_state(owner_env, create = TRUE)
+  authorizations <- state$private_asset_authorizations
+  authorizations[[asset_id]] <- TRUE
   invisible(TRUE)
 }
 
 #' @keywords internal
 .private_imaging_asset_is_authorized <- function(asset_id, owner_env) {
   if (!is.environment(owner_env)) return(FALSE)
-  environments <- .imaging_private_asset_authorizations[[asset_id]] %||%
-    list()
-  any(vapply(environments, identical, logical(1), y = owner_env))
+  state <- tryCatch(
+    .imaging_session_state(owner_env, create = FALSE),
+    error = function(e) NULL)
+  !is.null(state) && isTRUE(state$private_asset_authorizations[[asset_id]])
 }

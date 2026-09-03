@@ -4,7 +4,7 @@
 \alias{backend_get_file}
 \title{Download a file from the backend to a local destination}
 \usage{
-backend_get_file(backend, uri, dest, overwrite = FALSE)
+backend_get_file(backend, uri, dest, overwrite = FALSE, version_id = NULL)
 }
 \arguments{
 \item{backend}{A dsimaging_backend object.}
@@ -14,6 +14,9 @@ backend_get_file(backend, uri, dest, overwrite = FALSE)
 \item{dest}{Character; local destination path.}
 
 \item{overwrite}{Logical.}
+
+\item{version_id}{Optional immutable S3 object version. Ignored only when
+absent; file backends do not accept version identifiers.}
 }
 \value{
 Character; the dest path (invisibly).

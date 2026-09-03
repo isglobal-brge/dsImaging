@@ -1,3 +1,30 @@
+# dsImaging 0.3.6
+
+* Private handles, workflows, feature views, export taint, and asset grants now
+  live in locked session-owned state. Session teardown releases their private
+  resources without explicit destroy, and destroying an imaging handle also
+  invalidates its dependent feature views.
+* Added an opaque, session-bound feature view for dsFlower. It binds a complete
+  feature table to the admitted collection seal and exact sample-to-patient
+  roster without placing the table or patient mapping in the DataSHIELD
+  workspace. Public multi-column selections use a scalar encoded transport so
+  they remain compatible with the strict expression boundary. Legacy raw
+  feature-table loading remains available, but marks the session so the table
+  cannot be laundered through a subset or copy into dsFlower.
+* Collection downloads now carry and use exact S3 object VersionIds for images
+  and masks. Worker maps, caches, radiomics, segmentation chains, and derived
+  asset identities include the resolved source asset and exact mask map, so an
+  alias change or object replacement cannot reuse stale output.
+* Mask assets use their own validated sample index even when their storage root
+  is identical to the image root; catalog aliases are resolved through the
+  exact output manifest and admitted roster.
+* Public label distributions include every operator-approved level before the
+  disclosure threshold is applied; an unobserved approved level therefore
+  suppresses the complete distribution instead of revealing a zero.
+* TIFF images and masks are supported by the SimpleITK/PyRadiomics collection
+  path. NRRD and MHA remain supported only when self-contained; detached MHD,
+  NRRD/MHA sidecars, multi-file DICOM, and WSI inputs fail before processing.
+
 # dsImaging 0.3.5
 
 * Derived assets, aliases, fingerprints, sample manifests, and reusable

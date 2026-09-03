@@ -81,9 +81,20 @@ imagingProcessRadiomicsAssetDS <- function(request_encoded) {
     list(name = "ibsi_ct_3d_v1", bin_width = 25))
   visibility <- "private"
 
+  worker_assets <- c(image_asset, mask_asset)
+  worker_manifest <- .imaging_worker_manifest(
+    context$authorized, asset_names = worker_assets)
+  collection_map <- .imaging_worker_collection_map(
+    context$authorized, worker_manifest)
+  image_input_identity <- .imaging_worker_asset_identity(
+    collection_map, worker_manifest, image_asset)
+  mask_input_identity <- .imaging_worker_asset_identity(
+    collection_map, worker_manifest, mask_asset)
   hash <- compute_derivation_hash(dataset_id = dataset_id,
     collection_seal = collection_seal,
     image_asset = image_asset, mask_asset = mask_asset,
+    image_input_identity = image_input_identity,
+    mask_input_identity = mask_input_identity,
     profile = profile)
   existing <- find_asset_by_hash(dataset_id, hash, collection_seal)
   if (!is.null(existing)) {
@@ -91,7 +102,8 @@ imagingProcessRadiomicsAssetDS <- function(request_encoded) {
   }
 
   worker_dataset_id <- .register_imaging_worker_context(context$authorized,
-    asset_names = c(image_asset, mask_asset))
+    asset_names = worker_assets, collection_map = collection_map,
+    worker_manifest = worker_manifest)
   config <- profile
   config$mask_asset <- mask_asset
   config$image_asset <- image_asset
@@ -146,9 +158,17 @@ imagingProcessSegmentationCollectionDS <- function(request_encoded) {
   image_asset <- .imaging_safe_name(req$image_asset %||% "images",
                                     "image_asset")
   visibility <- "private"
+  worker_manifest <- .imaging_worker_manifest(
+    context$authorized, asset_names = image_asset)
+  collection_map <- .imaging_worker_collection_map(
+    context$authorized, worker_manifest)
+  image_input_identity <- .imaging_worker_asset_identity(
+    collection_map, worker_manifest, image_asset)
   hash <- compute_derivation_hash(dataset_id = dataset_id,
     collection_seal = collection_seal,
-    image_asset = image_asset, segmenter = segmenter)
+    image_asset = image_asset,
+    image_input_identity = image_input_identity,
+    segmenter = segmenter)
   existing <- find_asset_by_hash(dataset_id, hash, collection_seal)
   if (!is.null(existing)) {
     return(.imaging_reuse_handle(existing, dataset_id, owner_env))
@@ -156,7 +176,8 @@ imagingProcessSegmentationCollectionDS <- function(request_encoded) {
 
   runner <- .imaging_segmenter_runner(segmenter$provider)
   worker_dataset_id <- .register_imaging_worker_context(context$authorized,
-    asset_names = image_asset)
+    asset_names = image_asset, collection_map = collection_map,
+    worker_manifest = worker_manifest)
   config <- segmenter
   config$image_asset <- image_asset
   config$dataset_id <- worker_dataset_id
@@ -201,13 +222,36 @@ imagingProcessSegmentAndExtractDS <- function(request_encoded) {
     list(name = "ibsi_ct_3d_v1", bin_width = 25))
   visibility <- "private"
 
+  existing_mask <- identical(
+    segmenter$provider, "existing_mask_asset")
+  initial_worker_assets <- c(image_asset,
+    if (existing_mask) segmenter$mask_asset %||% "masks" else character(0))
+  worker_manifest <- .imaging_worker_manifest(
+    context$authorized, asset_names = initial_worker_assets)
+  collection_map <- .imaging_worker_collection_map(
+    context$authorized, worker_manifest)
+  image_input_identity <- .imaging_worker_asset_identity(
+    collection_map, worker_manifest, image_asset)
+  mask_input_identity <- if (existing_mask) {
+    .imaging_worker_asset_identity(
+      collection_map, worker_manifest, segmenter$mask_asset %||% "masks")
+  } else NULL
+
   seg_hash <- compute_derivation_hash(dataset_id = dataset_id,
     collection_seal = collection_seal,
-    image_asset = image_asset, segmenter = segmenter)
-  full_hash <- compute_derivation_hash(dataset_id = dataset_id,
+    image_asset = image_asset,
+    image_input_identity = image_input_identity,
+    segmenter = segmenter)
+  full_hash_params <- list(dataset_id = dataset_id,
     collection_seal = collection_seal,
-    image_asset = image_asset, segmenter = segmenter,
+    image_asset = image_asset,
+    image_input_identity = image_input_identity,
+    segmenter = segmenter,
     profile = profile)
+  if (!is.null(mask_input_identity)) {
+    full_hash_params$mask_input_identity <- mask_input_identity
+  }
+  full_hash <- do.call(compute_derivation_hash, full_hash_params)
   existing <- find_asset_by_hash(dataset_id, full_hash, collection_seal)
   if (!is.null(existing)) {
     return(.imaging_reuse_handle(existing, dataset_id, owner_env))
@@ -225,12 +269,19 @@ imagingProcessSegmentAndExtractDS <- function(request_encoded) {
     if (!is.null(existing_seg)) {
       mask_asset_for_extract <- existing_seg
       seg_runner <- NULL
+      mask_manifest <- .imaging_worker_manifest(
+        context$authorized, asset_names = mask_asset_for_extract)
+      worker_manifest$assets[[mask_asset_for_extract]] <-
+        mask_manifest$assets[[mask_asset_for_extract]]
+      collection_map <- .imaging_worker_collection_map(
+        context$authorized, worker_manifest)
     }
   }
   worker_assets <- c(image_asset,
     if (is.null(seg_runner)) mask_asset_for_extract else character(0))
   worker_dataset_id <- .register_imaging_worker_context(context$authorized,
-    asset_names = worker_assets)
+    asset_names = worker_assets, collection_map = collection_map,
+    worker_manifest = worker_manifest)
   worker_context <- .imaging_worker_context_file(worker_dataset_id)
   steps <- list(.imaging_step_resolve_dataset(worker_dataset_id))
   if (!is.null(seg_runner)) {
@@ -345,12 +396,14 @@ imagingLoadRadiomicsFeaturesDS <- function(request_encoded) {
     "workflow request")
   context <- .imaging_authorized_request(req, owner_env)
   req <- context$request
-  .imaging_load_asset(context$authorized,
+  data <- .imaging_load_asset(context$authorized,
     .required_scalar(req$asset_id_or_alias %||% req$asset_id %||% req$alias,
       "asset_id_or_alias"),
     columns = req$columns %||% NULL,
     include_metadata = isTRUE(req$include_metadata),
     syntactic_names = isTRUE(req$syntactic_names))
+  .mark_imaging_feature_table_export(owner_env)
+  data
 }
 
 #' Get collection status
@@ -555,12 +608,16 @@ imagingWorkflowDestroyDS <- function(reference_symbol) {
       bindingIsLocked(reference_symbol, owner_env)) {
     unavailable()
   }
-  entry <- .imaging_workflow_registry[[reference$capability]]
-  if (is.null(entry)) {
+  state <- tryCatch(
+    .imaging_session_state(owner_env, create = FALSE),
+    error = function(e) NULL)
+  if (is.null(state)) unavailable()
+  entry <- state$workflows[[reference$capability]]
+  if (identical(entry, .dsimaging_session_tombstone)) {
     rm(list = reference_symbol, envir = owner_env)
     return(invisible(reference))
   }
-  if (!is.list(entry$workflow) || !identical(entry$owner_env, owner_env)) {
+  if (is.null(entry) || !is.list(entry$workflow)) {
     unavailable()
   }
   context <- list(
@@ -584,7 +641,9 @@ imagingWorkflowDestroyDS <- function(reference_symbol) {
   if (bindingIsLocked(reference_symbol, owner_env)) {
     stop("Workflow reference is unavailable.", call. = FALSE)
   }
-  rm(list = context$capability, envir = .imaging_workflow_registry)
+  state <- .imaging_session_state(owner_env, create = FALSE)
+  workflows <- state$workflows
+  workflows[[context$capability]] <- .dsimaging_session_tombstone
   rm(list = reference_symbol, envir = owner_env)
   invisible(reference)
 }
@@ -1160,15 +1219,18 @@ imagingListProfilesDS <- function() {
   result <- tryCatch(
     dsHPC::hpcSubmitInternal(.dsr_encode(job)),
     error = function(e) {
-      rm(list = capability, envir = .imaging_workflow_registry)
+      state <- .imaging_session_state(owner_env, create = FALSE)
+      rm(list = capability, envir = state$workflows)
       tryCatch(.unregister_imaging_worker_context(worker_context_id),
                error = function(e2) NULL)
       stop("Imaging workflow submission failed.", call. = FALSE)
     })
-  entry <- .imaging_workflow_registry[[capability]]
+  state <- .imaging_session_state(owner_env, create = FALSE)
+  entry <- state$workflows[[capability]]
   entry$workflow$action <- "job"
   entry$workflow$job <- result
-  .imaging_workflow_registry[[capability]] <- entry
+  workflows <- state$workflows
+  workflows[[capability]] <- entry
   workflow_ref
 }
 

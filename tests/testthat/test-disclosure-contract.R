@@ -249,6 +249,31 @@ test_that("label distributions require an administrator-declared public vocabula
     "privacy contract")
 })
 
+test_that("unobserved approved label levels suppress the full distribution", {
+  metadata_path <- tempfile(fileext = ".csv")
+  on.exit(unlink(metadata_path))
+  manifest <- privacy_manifest(
+    metadata_path, paste0("patient-", letters[1:6]))
+  manifest$metadata$label_levels <- c("case", "control", "rare")
+  metadata <- utils::read.csv(metadata_path, stringsAsFactors = FALSE)
+  metadata$label <- rep(c("case", "control"), each = 3L)
+  utils::write.csv(metadata, metadata_path, row.names = FALSE)
+  handle <- dsImaging:::.make_imaging_handle(
+    imaging_dataset_descriptor(manifest), "img")
+  env <- new.env(parent = globalenv())
+  assign("img", dsImaging:::.register_imaging_handle(handle, env), envir = env)
+  withr::local_options(list(
+    dsimaging.nfilter.subset = 3L,
+    dsimaging.nfilter.tab = 3L,
+    nfilter.levels.density = 0.5,
+    dsimaging.privacy_profile = "sandbox_open"
+  ))
+
+  out <- eval(quote(imagingLabelDistDS("img")), envir = env)
+  expect_named(out, c("label", "n"))
+  expect_equal(nrow(out), 0L)
+})
+
 test_that("public label vocabularies cannot contain private identifiers", {
   metadata_path <- tempfile(fileext = ".csv")
   manifest <- privacy_manifest(
@@ -465,10 +490,11 @@ test_that("session resolvers never fall back to process-global references", {
   assign(workflow_symbol, workflow_ref, envir = globalenv())
   on.exit({
     rm(list = c(handle_symbol, workflow_symbol), envir = globalenv())
+    state <- dsImaging:::.imaging_session_state(globalenv(), create = FALSE)
     rm(list = handle_ref$capability,
-       envir = dsImaging:::.imaging_handle_registry)
+       envir = state$handles)
     rm(list = workflow_ref$capability,
-       envir = dsImaging:::.imaging_workflow_registry)
+       envir = state$workflows)
   }, add = TRUE)
 
   other_session <- new.env(parent = globalenv())
@@ -492,43 +518,42 @@ test_that("imagingDestroyDS removes only a session-owned handle capability", {
   session_a <- new.env(parent = globalenv())
   session_b <- new.env(parent = globalenv())
   reference <- dsImaging:::.register_imaging_handle(handle, session_a)
+  other_reference <- dsImaging:::.register_imaging_handle(handle, session_b)
   assign("img", reference, envir = session_a)
   assign("img", reference, envir = session_b)
+  assign("other_img", other_reference, envir = session_b)
   assign("imagingDestroyDS", dsImaging::imagingDestroyDS, envir = session_a)
   assign("imagingDestroyDS", dsImaging::imagingDestroyDS, envir = session_b)
 
   expect_error(eval(quote(imagingDestroyDS("img")), envir = session_b),
                "unavailable")
+  state_a <- dsImaging:::.imaging_session_state(session_a, create = FALSE)
   expect_true(exists(reference$capability,
-                     envir = dsImaging:::.imaging_handle_registry,
+                     envir = state_a$handles,
                      inherits = FALSE))
   expect_true(exists("img", envir = session_a, inherits = FALSE))
 
   destroyed <- eval(quote(imagingDestroyDS("img")), envir = session_a)
   expect_s3_class(destroyed, "dsimaging_handle_ref")
   expect_false(exists("img", envir = session_a, inherits = FALSE))
-  expect_false(exists(reference$capability,
-                      envir = dsImaging:::.imaging_handle_registry,
-                      inherits = FALSE))
+  expect_identical(
+    state_a$handles[[reference$capability]],
+    dsImaging:::.dsimaging_session_tombstone)
 
-  retry <- dsImaging:::.register_imaging_handle(handle, session_a)
-  assign("retry", retry, envir = session_a)
-  rm(list = retry$capability,
-     envir = dsImaging:::.imaging_handle_registry)
+  assign("retry", destroyed, envir = session_a)
   expect_s3_class(
     eval(quote(imagingDestroyDS("retry")), envir = session_a),
     "dsimaging_handle_ref")
   expect_false(exists("retry", envir = session_a, inherits = FALSE))
 
-  # An unknown but structurally valid reference is indistinguishable from a
-  # lost-response tombstone. Retrying may only remove that local symbol.
+  # An unknown but structurally valid reference is not an owner-local retry.
   forged <- structure(list(capability = paste0("imgh_", strrep("f", 64))),
                       class = "dsimaging_handle_ref")
   assign("forged", forged, envir = session_a)
-  expect_s3_class(
+  expect_error(
     eval(quote(imagingDestroyDS("forged")), envir = session_a),
-    "dsimaging_handle_ref")
-  expect_false(exists("forged", envir = session_a, inherits = FALSE))
+    "unavailable")
+  expect_true(exists("forged", envir = session_a, inherits = FALSE))
 
   assign("malformed", list(capability = "not-a-capability"),
          envir = session_a)

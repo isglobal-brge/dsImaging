@@ -15,7 +15,8 @@ assigns it back to the same symbol until the client confirms removal.
 }
 \description{
 DataSHIELD ASSIGN method. Removes a session-owned imaging handle capability
-and its symbol without returning dataset details. A retry is idempotent only
-when the same session still contains the well-formed opaque reference after
-its private registry entry has already been removed.
+and its symbol without returning dataset details. Dependent feature views
+are invalidated at the same time. A retry is idempotent only when the same
+session still contains the well-formed opaque reference after its private
+payload has already been removed.
 }

@@ -14,6 +14,7 @@ from dsimaging_utils import (
     MASK_EXTS,
     mapped_sample_files,
     package_versions,
+    validate_input_file,
 )
 
 
@@ -87,6 +88,12 @@ def main():
             mask = _find_mask_from_manifest(args.input, sid)
         if not mask:
             print("ERROR: No mask found for the admitted image", file=sys.stderr)
+            sys.exit(1)
+        try:
+            validate_input_file(image, IMAGE_EXTS)
+            validate_input_file(mask, MASK_EXTS)
+        except RuntimeError:
+            print("ERROR: Admitted imaging inputs are unavailable", file=sys.stderr)
             sys.exit(1)
         pairs = [(image, mask, sid)]
         print("  Single-image mode")

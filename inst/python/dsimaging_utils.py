@@ -8,8 +8,8 @@ import sys
 from urllib.parse import urlparse
 
 
-IMAGE_EXTS = (".nii.gz", ".nii", ".nrrd", ".mha", ".mhd", ".dcm", ".png", ".jpg", ".jpeg")
-MASK_EXTS = (".nii.gz", ".nii", ".nrrd", ".mha", ".mhd", ".png", ".jpg", ".jpeg")
+IMAGE_EXTS = (".nii.gz", ".nii", ".nrrd", ".mha", ".dcm", ".png", ".jpg", ".jpeg", ".tif", ".tiff")
+MASK_EXTS = (".nii.gz", ".nii", ".nrrd", ".mha", ".png", ".jpg", ".jpeg", ".tif", ".tiff")
 
 
 def cfg(name, default=None):
@@ -49,7 +49,7 @@ def cfg_list(name, default=None):
 
 def strip_extensions(filename):
     lower = filename.lower()
-    for ext in (".nii.gz", ".nii", ".nrrd", ".mha", ".mhd", ".dcm", ".png", ".jpg", ".jpeg"):
+    for ext in IMAGE_EXTS:
         if lower.endswith(ext):
             return filename[: -len(ext)]
     return os.path.splitext(filename)[0]
@@ -245,13 +245,17 @@ def s3_list_keys(entry, uri):
     return bucket, prefix, sorted(keys)
 
 
-def s3_download(entry, bucket, key, dest):
+def s3_download(entry, bucket, key, dest, version_id=None):
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     s3 = s3_client_for_entry(entry)
     if os.path.exists(dest) and os.path.getsize(dest) > 0:
         return dest
     tmp = f"{dest}.tmp"
-    s3.download_file(bucket, key, tmp)
+    if version_id is None:
+        s3.download_file(bucket, key, tmp)
+    else:
+        s3.download_file(
+            bucket, key, tmp, ExtraArgs={"VersionId": version_id})
     os.replace(tmp, dest)
     return dest
 
@@ -344,11 +348,43 @@ def _sha256_file(path):
     return digest.hexdigest()
 
 
-def _verify_mapped_file(path, record, extensions):
+def validate_input_file(path, extensions=IMAGE_EXTS):
+    """Reject unsupported or detached image containers before decoding."""
     if not os.path.isfile(path):
         raise RuntimeError("An admitted imaging sample is unavailable")
-    if extensions and not path.lower().endswith(tuple(e.lower() for e in extensions)):
+    lower = path.lower()
+    if lower.endswith(".mhd"):
+        raise RuntimeError("Detached MetaImage samples are not supported")
+    if extensions and not lower.endswith(tuple(e.lower() for e in extensions)):
         raise RuntimeError("An admitted imaging sample has an unsupported format")
+    if lower.endswith(".nrrd"):
+        with open(path, "rb") as handle:
+            prefix = handle.read(1024 * 1024 + 1)
+        separators = [position for position in (
+            prefix.find(b"\n\n"), prefix.find(b"\r\n\r\n"))
+            if position >= 0]
+        if not separators:
+            raise RuntimeError("An admitted NRRD header is invalid")
+        header = prefix[:min(separators)]
+        for line in header.splitlines():
+            line = line.strip()
+            if not line or line.startswith(b"#") or b":" not in line:
+                continue
+            key = line.split(b":", 1)[0].strip().lower().replace(b" ", b"")
+            if key == b"datafile":
+                raise RuntimeError("Detached NRRD samples are not supported")
+    if lower.endswith(".mha"):
+        with open(path, "rb") as handle:
+            prefix = handle.read(1024 * 1024 + 1)
+        match = re.search(
+            br"(?im)^\s*ElementDataFile\s*=\s*([^\r\n]+)", prefix)
+        if match is None or match.group(1).strip().upper() != b"LOCAL":
+            raise RuntimeError("Detached MetaImage samples are not supported")
+    return path
+
+
+def _verify_mapped_file(path, record, extensions):
+    validate_input_file(path, extensions)
     expected_size = record.get("size")
     expected_hash = str(record.get("content_hash", "")).lower()
     try:
@@ -374,9 +410,15 @@ def collection_sample_files(asset_name="images", role="images", extensions=IMAGE
     if not isinstance(mapping, dict) or mapping.get("version") != 1:
         raise RuntimeError("The admitted collection mapping is unavailable")
     asset_names = mapping.get("asset_names")
-    records = mapping.get("records")
     if not isinstance(asset_names, list) or asset_name not in asset_names:
         raise RuntimeError("The requested asset has no exact sample mapping")
+    records_by_asset = mapping.get("records_by_asset")
+    if records_by_asset is None:
+        records = mapping.get("records")
+    elif not isinstance(records_by_asset, dict):
+        raise RuntimeError("The admitted collection mapping is invalid")
+    else:
+        records = records_by_asset.get(asset_name)
     if not isinstance(records, list) or len(records) != len(sample_ids):
         raise RuntimeError("The admitted collection mapping is invalid")
     by_id = {}
@@ -402,10 +444,17 @@ def collection_sample_files(asset_name="images", role="images", extensions=IMAGE
     resolved = []
     for sid in sample_ids:
         record = by_id[sid]
-        if record.get("source_kind") != "single_file" or record.get("n_files") != 1:
+        if (record.get("source_kind") not in ("single_file", "mask_file") or
+                record.get("n_files") != 1):
             raise RuntimeError("Multi-file imaging samples are not supported by this runner")
         uri = record.get("uri")
         relative = _safe_relative_path(record.get("relative_path"))
+        version_id = record.get("version_id")
+        if version_id is not None and (
+                not isinstance(version_id, str) or not version_id or
+                len(version_id.encode("utf-8")) > 1024 or
+                "\r" in version_id or "\n" in version_id):
+            raise RuntimeError("An admitted imaging sample has invalid integrity metadata")
         if not isinstance(uri, str) or not uri:
             raise RuntimeError("An admitted imaging sample route is invalid")
 
@@ -417,10 +466,13 @@ def collection_sample_files(asset_name="images", role="images", extensions=IMAGE
                 raise RuntimeError("An admitted imaging sample leaves its collection")
             if key[len(prefix):] != relative:
                 raise RuntimeError("An admitted imaging sample route is inconsistent")
-            digest = hashlib.sha256(uri.encode("utf-8")).hexdigest()[:16]
+            cache_identity = "\0".join(
+                (uri, version_id or "", str(record.get("content_hash", ""))))
+            digest = hashlib.sha256(
+                cache_identity.encode("utf-8")).hexdigest()[:16]
             path = os.path.join(cache_root(), context["context_id"],
                                 safe_id(role), digest, os.path.basename(relative))
-            s3_download(entry, bucket, key, path)
+            s3_download(entry, bucket, key, path, version_id=version_id)
         elif backend_type == "file":
             root = os.path.realpath(root_uri)
             path = os.path.realpath(uri)

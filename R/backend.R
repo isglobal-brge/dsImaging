@@ -30,14 +30,22 @@ storage_backend <- function(type, config = list()) {
 #' @param uri Character; the URI to fetch (s3://... or /local/path).
 #' @param dest Character; local destination path.
 #' @param overwrite Logical.
+#' @param version_id Optional immutable S3 object version. Ignored only when
+#'   absent; file backends do not accept version identifiers.
 #' @return Character; the dest path (invisibly).
 #' @export
-backend_get_file <- function(backend, uri, dest, overwrite = FALSE) {
+backend_get_file <- function(backend, uri, dest, overwrite = FALSE,
+                             version_id = NULL) {
   if (!overwrite && file.exists(dest)) return(invisible(dest))
   dir.create(dirname(dest), recursive = TRUE, showWarnings = FALSE)
   switch(backend$type,
-    file = .backend_get_file_local(uri, dest),
-    s3   = .backend_get_file_s3(backend, uri, dest),
+    file = {
+      if (!is.null(version_id)) {
+        stop("File backends do not support object versions.", call. = FALSE)
+      }
+      .backend_get_file_local(uri, dest)
+    },
+    s3   = .backend_get_file_s3(backend, uri, dest, version_id),
     stop("Unknown backend type: ", backend$type, call. = FALSE))
   invisible(dest)
 }
@@ -157,10 +165,10 @@ backend_put_directory <- function(backend, local_dir, uri_prefix) {
 # S3 backend implementations (delegate to backend_s3.R)
 # ---------------------------------------------------------------------------
 
-.backend_get_file_s3 <- function(backend, uri, dest) {
+.backend_get_file_s3 <- function(backend, uri, dest, version_id = NULL) {
   parsed <- .parse_s3_uri(uri)
   config <- .resolve_backend_s3_config(backend)
-  .s3_download(config, parsed$bucket, parsed$key, dest)
+  .s3_download(config, parsed$bucket, parsed$key, dest, version_id)
 }
 
 .backend_put_file_s3 <- function(backend, local_path, uri) {

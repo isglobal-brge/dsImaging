@@ -56,9 +56,10 @@ imagingInitDS <- function(resource_symbol) {
 #' Destroy an Imaging Handle
 #'
 #' DataSHIELD ASSIGN method. Removes a session-owned imaging handle capability
-#' and its symbol without returning dataset details. A retry is idempotent only
-#' when the same session still contains the well-formed opaque reference after
-#' its private registry entry has already been removed.
+#' and its symbol without returning dataset details. Dependent feature views
+#' are invalidated at the same time. A retry is idempotent only when the same
+#' session still contains the well-formed opaque reference after its private
+#' payload has already been removed.
 #'
 #' @param handle_symbol Character; symbol of the imaging handle to destroy.
 #' @return The opaque reference as an invisible retry tombstone. DataSHIELD
@@ -79,18 +80,25 @@ imagingDestroyDS <- function(handle_symbol) {
   reference <- get(handle_symbol, envir = owner_env, inherits = FALSE)
   if (!.is_imaging_handle_reference(reference)) unavailable()
   if (bindingIsLocked(handle_symbol, owner_env)) unavailable()
-  entry <- .imaging_handle_registry[[reference$capability]]
-  if (is.null(entry)) {
+  state <- tryCatch(
+    .imaging_session_state(owner_env, create = FALSE),
+    error = function(e) NULL)
+  if (is.null(state)) unavailable()
+  entry <- state$handles[[reference$capability]]
+  if (identical(entry, .dsimaging_session_tombstone)) {
     # Idempotent retry after authoritative state was removed but the session
     # symbol could not be cleared (for example, a lost destroy response).
+    .invalidate_imaging_feature_views(state, reference$capability)
     rm(list = handle_symbol, envir = owner_env)
     return(invisible(reference))
   }
-  if (!is.list(entry$handle) || !identical(entry$owner_env, owner_env)) {
+  if (is.null(entry) || !is.list(entry$handle)) {
     unavailable()
   }
 
-  rm(list = reference$capability, envir = .imaging_handle_registry)
+  .invalidate_imaging_feature_views(state, reference$capability)
+  handles <- state$handles
+  handles[[reference$capability]] <- .dsimaging_session_tombstone
   rm(list = handle_symbol, envir = owner_env)
   invisible(reference)
 }
@@ -271,7 +279,7 @@ imagingLabelDistDS <- function(handle_symbol, column = NULL) {
     return(data.frame(label = character(0), n = integer(0),
                       stringsAsFactors = FALSE))
   }
-  counts <- table(patient_labels)
+  counts <- table(factor(patient_labels, levels = approved_levels))
   safe <- safe_metadata_distribution(counts)
   if (is.null(safe)) {
     return(data.frame(label = character(0), n = integer(0),

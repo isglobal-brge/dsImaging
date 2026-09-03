@@ -55,6 +55,46 @@ test_that("snapshot materialization verifies every object hash and size", {
   expect_false(dir.exists(destination))
 })
 
+test_that("S3 snapshot materialization fetches the admitted object version", {
+  root <- withr::local_tempdir()
+  payload <- charToRaw("immutable-image")
+  requests <- list()
+  snapshot <- list(
+    version = 1L,
+    seal = strrep("a", 64L),
+    artifacts = list(),
+    records = list(list(
+      source_kind = "single_file",
+      relative_path = "scan-1.nii.gz",
+      uri = "s3://imaging/datasets/study/source/images/scan-1.nii.gz",
+      content_hash = digest::digest(payload, algo = "sha256", serialize = FALSE),
+      size = length(payload),
+      version_id = "immutable-version-1"
+    ))
+  )
+  backend <- structure(list(type = "s3", config = list()),
+                       class = "dsimaging_backend")
+  testthat::local_mocked_bindings(
+    backend_get_file = function(backend, uri, dest, overwrite = FALSE,
+                                version_id = NULL) {
+      requests[[length(requests) + 1L]] <<- list(
+        uri = uri, version_id = version_id)
+      writeBin(payload, dest)
+      invisible(dest)
+    },
+    .package = "dsImaging"
+  )
+
+  materialized <- dsImaging:::.materialize_imaging_snapshot(
+    snapshot, backend, file.path(root, "materialized"))
+
+  expect_true(file.exists(file.path(materialized$root, "scan-1.nii.gz")))
+  expect_identical(requests, list(list(
+    uri = snapshot$records[[1L]]$uri,
+    version_id = "immutable-version-1"
+  )))
+})
+
 test_that("collection snapshots require exact artifact rosters", {
   root <- withr::local_tempdir()
   collection <- write_test_imaging_collection(
@@ -108,4 +148,62 @@ test_that("worker contexts carry only the admitted image sample map", {
     vapply(handle$collection_snapshot$records, `[[`, character(1),
            "content_hash"))
   expect_null(context$collection_map$records[[1L]]$files)
+})
+
+test_that("same-URI mask roots use their exact validated mask index", {
+  skip_if_not_installed("arrow")
+  root <- withr::local_tempdir()
+  ids <- c("scan-A", "scan-B", "scan-C")
+  collection <- write_test_imaging_collection(
+    root, "snapshot.same-uri-masks",
+    data.frame(sample_id = ids,
+      patient_id = c("patient-A", "patient-B", "patient-C")))
+  mask_paths <- file.path(
+    collection$image_root, paste0("opaque-mask-", seq_along(ids), ".nii.gz"))
+  for (i in seq_along(mask_paths)) {
+    writeBin(charToRaw(paste0("test-mask-", ids[[i]])), mask_paths[[i]])
+  }
+  mask_index <- file.path(root, "indexes", "masks.parquet")
+  reverse <- rev(seq_along(ids))
+  mask_rows <- data.frame(
+    sample_id = ids[reverse],
+    uri = mask_paths[reverse],
+    content_hash = vapply(mask_paths[reverse], digest::digest, character(1),
+      algo = "sha256", file = TRUE),
+    size = as.numeric(file.info(mask_paths[reverse])$size),
+    source_kind = "mask_file",
+    stringsAsFactors = FALSE)
+  arrow::write_parquet(mask_rows, mask_index)
+  collection$manifest$assets$masks <- list(
+    kind = "mask_root", uri = collection$image_root,
+    content_hash_index = mask_index)
+  yaml::write_yaml(collection$manifest, collection$manifest_path)
+
+  backend <- storage_backend("file")
+  handle <- dsImaging:::.make_imaging_handle(
+    imaging_dataset_descriptor(collection$manifest), "img",
+    backend = backend, manifest_uri = collection$manifest_path,
+    require_snapshot = TRUE)
+  authorized <- list(
+    handle = handle, dataset_id = handle$dataset_id,
+    manifest = handle$manifest, backend = handle$backend,
+    privacy_roster = handle$privacy_roster,
+    collection_snapshot = handle$collection_snapshot)
+  worker_manifest <- dsImaging:::.imaging_worker_manifest(
+    authorized, c("images", "masks"))
+  collection_map <- dsImaging:::.imaging_worker_collection_map(
+    authorized, worker_manifest)
+
+  expect_identical(
+    vapply(collection_map$records_by_asset$masks, `[[`, character(1),
+           "sample_id"), ids)
+  expect_identical(
+    vapply(collection_map$records_by_asset$masks, `[[`, character(1),
+           "content_hash"),
+    unname(vapply(mask_paths, digest::digest, character(1),
+                  algo = "sha256", file = TRUE)))
+
+  arrow::write_parquet(mask_rows[-1L, ], mask_index)
+  expect_error(dsImaging:::.imaging_worker_collection_map(
+    authorized, worker_manifest), "complete admitted collection", fixed = TRUE)
 })

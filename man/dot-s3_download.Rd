@@ -4,7 +4,7 @@
 \alias{.s3_download}
 \title{Download an S3 object to a local file}
 \usage{
-.s3_download(config, bucket, key, dest)
+.s3_download(config, bucket, key, dest, version_id = NULL)
 }
 \description{
 Download an S3 object to a local file

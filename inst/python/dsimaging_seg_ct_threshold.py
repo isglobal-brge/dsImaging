@@ -18,6 +18,7 @@ from dsimaging_utils import (
     mapped_sample_files,
     package_versions,
     sample_token,
+    validate_input_file,
     write_collection_output_manifest,
 )
 
@@ -99,6 +100,11 @@ def main():
     if image:
         if not sample_id:
             print("ERROR: Single-image mode requires sample_id", file=sys.stderr)
+            sys.exit(1)
+        try:
+            validate_input_file(image, IMAGE_EXTS)
+        except RuntimeError:
+            print("ERROR: Admitted imaging inputs are unavailable", file=sys.stderr)
             sys.exit(1)
         sid = sample_id
         images = [(image, sid)]

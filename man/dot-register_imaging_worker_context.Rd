@@ -4,7 +4,12 @@
 \alias{.register_imaging_worker_context}
 \title{Register an opaque worker-only dataset context}
 \usage{
-.register_imaging_worker_context(authorized, asset_names = character(0))
+.register_imaging_worker_context(
+  authorized,
+  asset_names = character(0),
+  collection_map = NULL,
+  worker_manifest = NULL
+)
 }
 \description{
 The original dataset id is never promoted from an analyst's Opal resource

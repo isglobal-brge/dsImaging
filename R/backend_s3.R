@@ -30,10 +30,19 @@
 
 #' Download an S3 object to a local file
 #' @keywords internal
-.s3_download <- function(config, bucket, key, dest) {
+.s3_download <- function(config, bucket, key, dest, version_id = NULL) {
+  if (!is.null(version_id) &&
+      (!is.character(version_id) || length(version_id) != 1L ||
+       is.na(version_id) || !nzchar(version_id) ||
+       nchar(version_id, type = "bytes") > 1024L ||
+       grepl("[\r\n]", version_id))) {
+    stop("S3 object version is invalid.", call. = FALSE)
+  }
+  query <- if (is.null(version_id)) NULL else list(versionId = version_id)
   .s3_call(function() {
     aws.s3::save_object(
       object = key, bucket = bucket, file = dest,
+      query = query,
       key = config$access_key, secret = config$secret_key,
       base_url = .s3_base_url(config$endpoint),
       region = config$region,

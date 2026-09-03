@@ -2,11 +2,11 @@
 % Please edit documentation in R/privacy_contract.R
 \name{.imaging_worker_collection_map}
 \alias{.imaging_worker_collection_map}
-\title{Project the admitted image routes into a worker-only exact sample map}
+\title{Project admitted source routes into a worker-only exact sample map}
 \usage{
 .imaging_worker_collection_map(authorized, worker_manifest)
 }
 \description{
-Project the admitted image routes into a worker-only exact sample map
+Project admitted source routes into a worker-only exact sample map
 }
 \keyword{internal}
