@@ -65,7 +65,7 @@ list_imaging_analysis_envs <- function() {
                 "ct_lung_threshold",
                 "totalsegmentator_infer", "nnunetv2_predict",
                 "monai_bundle_infer", "dicom_convert",
-                "image_preprocess", "mask_ops", "imaging_qc_metrics",
+                "dsimaging_image_preprocess", "mask_ops", "imaging_qc_metrics",
                 "rt_convert", "rt_dose_plan", "imaging_qc_visuals",
                 "image_spatial", "wsi_tile", "image_embeddings")
   data.frame(

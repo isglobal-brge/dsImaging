@@ -72,7 +72,10 @@ test_that("parse_manifest accepts valid manifest", {
       uri = "/srv/datasets/samples.parquet",
       format = "parquet",
       id_col = "sample_id",
-      label_col = "label"
+      label_col = "label",
+      privacy_unit = "patient",
+      privacy_unit_col = "patient_id",
+      privacy_unit_canonicalization = "trim-utf8-v2"
     ),
     assets = list(
       images = list(kind = "image_root", uri = "/srv/datasets/images")
@@ -119,7 +122,10 @@ test_that("parse_manifest accepts advanced asset kinds", {
   yaml::write_yaml(list(
     schema_version = 1,
     dataset_id = "pathology.breast.v1",
-    metadata = list(uri = "/srv/data/samples.csv", format = "csv"),
+    metadata = list(uri = "/srv/data/samples.csv", format = "csv",
+      id_col = "sample_id", privacy_unit = "patient",
+      privacy_unit_col = "patient_id",
+      privacy_unit_canonicalization = "trim-utf8-v2"),
     assets = list(
       slides = list(
         kind = "wsi_root",

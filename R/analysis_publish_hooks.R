@@ -29,6 +29,9 @@
     config = step$config
   )
   provenance$output <- .imaging_output_metadata(output_dir)
+  scope <- .imaging_publisher_scope(db, job_id)
+  collection_seal <- .assert_publishable_imaging_feature_asset(
+    output_dir, asset_type, cfg)
 
   asset_id <- register_derived_asset(
     dataset_id = dataset_id,
@@ -36,9 +39,12 @@
     path_or_root = output_dir,
     derivation_hash = deriv_hash,
     provenance = provenance,
+    created_by = scope$owner_id,
     created_by_job = job_id,
+    collection_seal = collection_seal,
     description = step$description %||% paste(asset_type, "from job", job_id),
-    alias = step$alias
+    alias = step$alias,
+    visibility = scope$visibility
   )
 
   list(status = "published", asset_id = asset_id,
@@ -77,6 +83,9 @@
     config = cfg
   )
   provenance$output <- .imaging_output_metadata(output_dir)
+  scope <- .imaging_publisher_scope(db, job_id)
+  collection_seal <- .assert_publishable_imaging_feature_asset(
+    output_dir, asset_type, cfg)
 
   asset_id <- register_derived_asset(
     dataset_id = dataset_id,
@@ -84,13 +93,191 @@
     path_or_root = output_dir,
     derivation_hash = deriv_hash,
     provenance = provenance,
+    created_by = scope$owner_id,
     created_by_job = job_id,
+    collection_seal = collection_seal,
     description = step$description %||% paste(asset_type, "from job", job_id),
-    alias = step$alias
+    alias = step$alias,
+    visibility = scope$visibility
   )
 
   list(status = "published", asset_id = asset_id,
        dataset_id = dataset_id, kind = asset_type)
+}
+
+#' Validate collection cardinality before an analytical asset enters catalog.
+#' @keywords internal
+.assert_publishable_imaging_feature_asset <- function(output_dir, asset_type,
+                                                      config = list()) {
+  feature_kinds <- c("radiomics_collection", "feature_table", "qc_table",
+    "dose_table", "embedding_table")
+  mapped_kinds <- c("image_root", "mask_root", "qc_visual_asset")
+  if (!asset_type %in% c(feature_kinds, mapped_kinds)) {
+    stop("Imaging publication type is not supported.", call. = FALSE)
+  }
+
+  context_id <- config$dataset_id %||% NULL
+  if (!is.character(context_id) || length(context_id) != 1L ||
+      is.na(context_id) || !grepl("^dsctx_[0-9a-f]{64}$", context_id)) {
+    stop("Feature publication has no admitted dataset context.",
+         call. = FALSE)
+  }
+  resolved <- tryCatch(resolve_dataset(context_id),
+                       error = function(e) NULL)
+  if (is.null(resolved)) {
+    stop("Feature publication dataset context is unavailable.",
+         call. = FALSE)
+  }
+  manifest <- tryCatch(
+    parse_manifest(resolved$manifest_uri, resolved$backend),
+    error = function(e) NULL)
+  if (is.null(manifest)) {
+    stop("Feature publication dataset context is unavailable.",
+         call. = FALSE)
+  }
+  admission <- .imaging_privacy_admission(manifest, resolved$backend)
+  collection_seal <- .asset_collection_seal(
+    manifest$.dsimaging_collection_seal, required = TRUE)
+  authorized <- list(
+    dataset_id = manifest$dataset_id,
+    manifest = manifest,
+    backend = resolved$backend,
+    privacy = admission$contract,
+    privacy_roster = admission$roster)
+  if (asset_type %in% mapped_kinds) {
+    .assert_mapped_imaging_output(output_dir, asset_type,
+                                  admission$roster)
+    return(invisible(collection_seal))
+  }
+
+  tables <- list.files(output_dir, pattern = "[.](csv|parquet)$",
+                       recursive = TRUE, full.names = TRUE,
+                       ignore.case = TRUE)
+  if (length(tables) != 1L) {
+    stop("Feature publication output is unavailable.", call. = FALSE)
+  }
+  asset <- list(path_or_root = output_dir)
+  feature_data <- tryCatch(
+    .read_feature_asset(asset, manifest$dataset_id, resolved = authorized),
+    error = function(e) NULL)
+  if (is.null(feature_data)) {
+    stop("Feature publication output is unavailable.", call. = FALSE)
+  }
+  .assert_feature_asset_privacy(feature_data, authorized,
+    context = "published imaging feature asset")
+  invisible(collection_seal)
+}
+
+#' Validate a runner's exact per-sample output map and artifact confinement.
+#' @keywords internal
+.assert_mapped_imaging_output <- function(output_dir, asset_type, roster) {
+  if (!is.character(output_dir) || length(output_dir) != 1L ||
+      is.na(output_dir) || !dir.exists(output_dir)) {
+    stop("Imaging publication output is unavailable.", call. = FALSE)
+  }
+  root <- tryCatch(normalizePath(output_dir, winslash = "/", mustWork = TRUE),
+                   error = function(e) NULL)
+  path <- file.path(output_dir, "dsimaging_output_manifest.json")
+  manifest <- tryCatch(
+    jsonlite::fromJSON(path, simplifyVector = FALSE),
+    error = function(e) NULL)
+  if (is.null(root) || !is.list(manifest) ||
+      !identical(as.integer(manifest$schema_version), 1L) ||
+      !identical(manifest$artifact_type, asset_type) ||
+      !is.list(manifest$samples)) {
+    stop("Imaging publication has no exact sample mapping.", call. = FALSE)
+  }
+  samples <- manifest$samples
+  ids <- vapply(samples, function(sample) {
+    if (!is.list(sample) || !is.character(sample$sample_id) ||
+        length(sample$sample_id) != 1L || is.na(sample$sample_id)) {
+      return(NA_character_)
+    }
+    sample$sample_id
+  }, character(1))
+  .assert_exact_imaging_roster(ids, roster,
+    context = "Published imaging asset")
+
+  mapped <- character(0)
+  allowed <- "[.](nii([.]gz)?|nrrd|mha|mhd|dcm|png|jpe?g)$"
+  for (sample in samples) {
+    files <- unlist(sample$files, use.names = FALSE)
+    primary <- sample$primary %||% NULL
+    integrity <- sample$file_integrity %||% NULL
+    if (!is.character(files) || length(files) == 0L || anyNA(files) ||
+        anyDuplicated(files) || !is.character(primary) ||
+        length(primary) != 1L || is.na(primary) || !primary %in% files ||
+        !is.list(integrity) || length(integrity) != length(files)) {
+      stop("Imaging publication sample mapping is invalid.", call. = FALSE)
+    }
+    integrity_paths <- vapply(integrity, function(record) {
+      if (!is.list(record) || !is.character(record$path) ||
+          length(record$path) != 1L || is.na(record$path)) {
+        return(NA_character_)
+      }
+      record$path
+    }, character(1))
+    if (anyNA(integrity_paths) || anyDuplicated(integrity_paths) ||
+        !setequal(files, integrity_paths)) {
+      stop("Imaging publication sample mapping is invalid.", call. = FALSE)
+    }
+    for (relative in files) {
+      relative <- tryCatch(.snapshot_safe_relative_path(relative),
+                           error = function(e) NULL)
+      if (is.null(relative) || !grepl(allowed, relative,
+                                      ignore.case = TRUE)) {
+        stop("Imaging publication sample mapping is invalid.", call. = FALSE)
+      }
+      candidate <- tryCatch(
+        normalizePath(file.path(root, relative), winslash = "/",
+                      mustWork = TRUE), error = function(e) NULL)
+      info <- if (is.null(candidate)) NULL else file.info(candidate)
+      if (is.null(candidate) ||
+          !startsWith(candidate, paste0(sub("/+$", "", root), "/")) ||
+          nrow(info) != 1L || is.na(info$isdir) || isTRUE(info$isdir)) {
+        stop("Imaging publication artifact is unavailable.", call. = FALSE)
+      }
+      integrity_record <- integrity[[match(relative, integrity_paths)]]
+      expected_size <- suppressWarnings(as.numeric(integrity_record$size))
+      expected_hash <- tolower(as.character(integrity_record$sha256))
+      actual_hash <- tryCatch(digest::digest(
+        file = candidate, algo = "sha256"), error = function(e) NA_character_)
+      if (length(expected_size) != 1L || is.na(expected_size) ||
+          !is.finite(expected_size) || expected_size < 0 ||
+          expected_size %% 1 != 0 || as.numeric(info$size) != expected_size ||
+          length(expected_hash) != 1L || is.na(expected_hash) ||
+          !grepl("^[0-9a-f]{64}$", expected_hash) ||
+          !identical(actual_hash, expected_hash)) {
+        stop("Imaging publication artifact failed integrity verification.",
+             call. = FALSE)
+      }
+      mapped <- c(mapped, candidate)
+    }
+  }
+  if (anyDuplicated(mapped)) {
+    stop("Imaging publication attributes an artifact more than once.",
+         call. = FALSE)
+  }
+  payload <- list.files(root, pattern = allowed, recursive = TRUE,
+                        full.names = TRUE, ignore.case = TRUE)
+  payload <- vapply(payload, normalizePath, character(1), winslash = "/",
+                    mustWork = TRUE)
+  if (!setequal(mapped, payload)) {
+    stop("Imaging publication contains unmapped sample artifacts.",
+         call. = FALSE)
+  }
+  if (identical(asset_type, "qc_visual_asset")) {
+    table <- tryCatch(utils::read.csv(
+      file.path(root, "qc_visual_manifest.csv"),
+      stringsAsFactors = FALSE, check.names = FALSE),
+      error = function(e) NULL)
+    if (!is.data.frame(table) || !"sample_id" %in% names(table)) {
+      stop("QC publication has no exact sample table.", call. = FALSE)
+    }
+    .assert_exact_imaging_roster(table$sample_id, roster,
+      context = "Published QC visual table")
+  }
+  invisible(TRUE)
 }
 
 #' Per-image result publisher (dsHPC plugin)
@@ -99,7 +286,7 @@
 #' Four responsibilities:
 #'   1. Record item as completed in the generation
 #'   2. Atomically increment completed_n counter
-#'   3. Register per-image result as individual asset (cross-user dedup)
+#'   3. Keep the per-image artifact private to its generation
 #'   4. Auto-submit next batch of pending images (server-side drip feed)
 #'
 #' Step 4 is what makes the system "fire and forget": the user kicks off
@@ -111,7 +298,6 @@
   generation_id <- config$generation_id
   sample_id <- config$sample_id
   dataset_id <- config$dataset_id
-  spec_hash <- config$spec_hash
 
   if (!requireNamespace("dsImaging", quietly = TRUE)) {
     warning("dsImaging required for per-image publishing.", call. = FALSE)
@@ -134,29 +320,11 @@
       artifact_relpath <- file.path(output_dir, artifact_relpath)
   }
 
-  # Single atomic transaction: item status + counter + asset registration
-  asset_reg <- NULL
-  if (!is.null(spec_hash) && !is.null(artifact_relpath)) {
-    asset_reg <- list(
-      dataset_id = dataset_id,
-      kind = "per_image_result",
-      path_or_root = artifact_relpath,
-      derivation_hash = spec_hash,
-      provenance = list(type = "per_image", job_id = job_id,
-                         generation_id = generation_id, sample_id = sample_id,
-                         runner = step$runner,
-                         config = config,
-                         output = .imaging_output_metadata(output_dir)),
-      created_by_job = job_id
-    )
-  }
-
   complete_item_atomic(
     generation_id = generation_id,
     sample_id = sample_id,
     status = "completed",
-    artifact_relpath = artifact_relpath,
-    register_asset = asset_reg
+    artifact_relpath = artifact_relpath
   )
 
   # 4. Server-side drip feed: auto-submit next batch of pending images
@@ -169,8 +337,23 @@
     }
   )
 
-  list(status = "published", generation_id = generation_id,
-       sample_id = sample_id, job_id = job_id)
+  list(status = "published")
+}
+
+#' Resolve immutable publication scope from the dsHPC job row
+#' @keywords internal
+.imaging_publisher_scope <- function(db, job_id) {
+  row <- tryCatch(
+    DBI::dbGetQuery(db,
+      "SELECT owner_id, visibility FROM jobs WHERE job_id = ?",
+      params = list(job_id)),
+    error = function(e) data.frame())
+  if (nrow(row) != 1L ||
+      !as.character(row$visibility[1]) %in% c("private", "global")) {
+    return(list(owner_id = NA_character_, visibility = "private"))
+  }
+  list(owner_id = as.character(row$owner_id[1]),
+       visibility = as.character(row$visibility[1]))
 }
 
 #' Extract compact runner output metadata for asset provenance.
@@ -225,6 +408,12 @@
 
   gen <- get_generation(generation_id)
   if (is.null(gen) || !gen$state %in% c("RUNNING", "PENDING")) return(invisible(NULL))
+  if (!is.character(dataset_id) || length(dataset_id) != 1L ||
+      !identical(as.character(gen$dataset_id), as.character(dataset_id))) {
+    stop("Generation does not authorize the requested dataset.",
+         call. = FALSE)
+  }
+  dataset_id <- as.character(gen$dataset_id)
   .sync_active_jobs(generation_id)
   requeue_stale_claimed_items(generation_id)
 
@@ -242,19 +431,18 @@
     error = function(e) NULL)
   if (is.null(spec)) return(invisible(NULL))
 
-  segmenter <- spec$segmenter
+  segmenter <- .imaging_segmenter_spec(spec$segmenter)
   profile <- spec$profile
   if (!is.list(profile)) {
     profile <- list(name = spec$profile_name %||% profile, bin_width = 25L)
   }
+  profile <- .imaging_profile_spec(profile)
   profile_name <- profile$name %||% spec$profile_name
-  processor <- spec$processor
+  processor <- paste0(segmenter$provider, "_", segmenter$task %||% "default")
   profile_signature <- spec$profile_signature %||%
     .radiomics_profile_signature(profile)
 
-  resolved <- .resolve_ds(dataset_id)
-  if (is.null(resolved))
-    resolved <- .resolve_ds_from_generation(generation_id, dataset_id)
+  resolved <- .resolve_ds_from_generation(generation_id, dataset_id)
   if (is.null(resolved))
     stop("Cannot resolve dataset for drip-feed: ", dataset_id, call. = FALSE)
 
@@ -297,7 +485,8 @@
   if (length(batch_ids) == 0) return(invisible(NULL))
 
   # Get content hashes for these samples from dsImaging
-  content_hashes <- get_content_hashes(dataset_id, batch_ids)
+  content_hashes <- get_content_hashes(
+    dataset_id, gen$collection_seal, batch_ids)
 
   for (sid in batch_ids) {
     ch <- content_hashes[[sid]]
@@ -329,14 +518,16 @@
       next
     }
 
-    image_uri <- .resolve_sample_image(image_root, sid,
-      dataset_id = dataset_id, backend = backend)
+    image_uri <- .resolve_sample_image(image_root, sid, backend = backend,
+      snapshot = resolved$collection_snapshot)
     if (is.null(image_uri)) {
       complete_item_atomic(generation_id, sid, "failed",
         error = "Image file not found")
       next
     }
-    image_path <- .stage_image_for_job(image_uri, sid, dataset_id, backend)
+    job_token <- .item_job_token(generation_id, sid)
+    image_path <- .stage_image_for_job(image_uri, sid, dataset_id, backend,
+      image_root = image_root, snapshot = resolved$collection_snapshot)
 
     settings_path <- .resolve_profile_path(profile_name)
 
@@ -356,10 +547,11 @@
         name = "segment_single", config = seg_config)
     }
 
-    extract_config <- c(profile, list(
-      image = image_path, sample_id = sid,
-      generation_id = generation_id,
-      settings_file = settings_path %||% "default"))
+    extract_config <- profile
+    extract_config$image <- image_path
+    extract_config$sample_id <- sid
+    extract_config$generation_id <- generation_id
+    extract_config$settings_file <- settings_path %||% "default"
     extract_config <- .normalise_extract_config(extract_config)
     if (!is.null(mask_root)) {
       mp <- .resolve_sample_mask(mask_root, sid, backend = backend,
@@ -385,14 +577,15 @@
 
     job_spec <- list(
       label = "dsImaging_image",
-      tags = c("per_image", dataset_id, sid, generation_id),
+      tags = .per_image_job_tags(dataset_id, job_token, generation_id),
       visibility = "private", steps = steps,
       .owner = gen$owner_id)
 
     tryCatch({
       spec_enc <- .dsr_encode(job_spec)
-      dsHPC::hpcSubmitDS(spec_enc)
-      record_item_status(generation_id, sid, "running")
+      dsHPC::hpcSubmitInternal(spec_enc)
+      record_item_status(
+        generation_id, sid, "running", job_token = job_token)
     }, error = function(e) {
       msg <- conditionMessage(e)
       if (.is_transient_job_submit_error(msg)) {

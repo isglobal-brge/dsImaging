@@ -5,29 +5,21 @@ Uses site-registered nnU-Net model packs for segmentation.
 """
 import argparse, json, os, sys
 
-from dsimaging_utils import package_versions
+from dsimaging_utils import (
+    IMAGE_EXTS,
+    cfg,
+    mapped_sample_files,
+    package_versions,
+    sample_token,
+    write_collection_output_manifest,
+)
 
 
-def find_images(input_dir):
-    registry_path = "/var/lib/dsimaging/registry.yaml"
-    dataset_id = os.environ.get("DSHPC_CFG_DATASET_ID", "")
-    if os.path.exists(registry_path):
-        try:
-            import yaml
-            registry = yaml.safe_load(open(registry_path))
-            for ds_id, entry in registry.items():
-                if dataset_id and ds_id != dataset_id:
-                    continue
-                manifest = yaml.safe_load(open(entry["manifest"]))
-                root = manifest.get("assets", {}).get("images", {}).get("root")
-                if root and os.path.isdir(root):
-                    return [(os.path.join(root, f), os.path.splitext(f)[0])
-                            for f in sorted(os.listdir(root)) if not f.startswith(".")]
-        except Exception:
-            pass
-    return [(os.path.join(input_dir, f), os.path.splitext(f)[0])
-            for f in sorted(os.listdir(input_dir))
-            if not f.startswith(".") and os.path.isfile(os.path.join(input_dir, f))]
+def find_images():
+    return mapped_sample_files(
+        cfg("image_asset", "images"), "images",
+        artifact_types=("image_root",), extensions=IMAGE_EXTS,
+    )
 
 
 def main():
@@ -57,12 +49,20 @@ def main():
     image = args.image or os.environ.get("DSHPC_CFG_IMAGE")
     sample_id = getattr(args, "sample_id", None) or os.environ.get("DSHPC_CFG_SAMPLE_ID")
 
+    collection_mode = not bool(image)
     if image:
-        sid = sample_id or os.path.splitext(os.path.basename(image))[0]
+        if not sample_id:
+            print("ERROR: Single-image mode requires sample_id", file=sys.stderr)
+            sys.exit(1)
+        sid = sample_id
         images = [(image, sid)]
-        print(f"  Single-image mode: {sid}")
+        print("  Single-image mode")
     else:
-        images = find_images(args.input)
+        try:
+            images = find_images()
+        except RuntimeError:
+            print("ERROR: Admitted imaging inputs are unavailable", file=sys.stderr)
+            sys.exit(1)
 
     print(f"  Found {len(images)} images")
     os.makedirs(args.output, exist_ok=True)
@@ -76,9 +76,13 @@ def main():
     # nnU-Net expects a specific input format -- create temp folder
     import shutil, tempfile
     tmpdir = tempfile.mkdtemp()
+    tokens = {sid: sample_token(sid) for _, sid in images}
     try:
         for img_path, sample_id in images:
-            shutil.copy(img_path, os.path.join(tmpdir, f"{sample_id}_0000.nii.gz"))
+            shutil.copy(
+                img_path,
+                os.path.join(tmpdir, f"{tokens[sample_id]}_0000.nii.gz"),
+            )
         predictor.predict_from_files(tmpdir, args.output)
     finally:
         shutil.rmtree(tmpdir)
@@ -90,15 +94,22 @@ def main():
 
     # Write seg_manifest.json
     seg_manifest = {"provider": "nnunetv2", "model": args.model, "samples": {}}
+    output_samples = {}
     for img_path, sid in images:
-        mask_path = os.path.join(args.output, f"{sid}.nii.gz")
-        if os.path.exists(mask_path):
-            seg_manifest["samples"][sid] = {
-                "sample_id": sid, "primary_mask": mask_path,
-                "mask_files": [mask_path], "status": "done"
-            }
+        mask_path = os.path.join(args.output, f"{tokens[sid]}.nii.gz")
+        if not os.path.isfile(mask_path):
+            print("ERROR: Segmentation output is incomplete", file=sys.stderr)
+            sys.exit(1)
+        seg_manifest["samples"][sid] = {
+            "sample_id": sid, "primary_mask": mask_path,
+            "mask_files": [mask_path], "status": "done"
+        }
+        output_samples[sid] = {"primary": mask_path, "files": [mask_path]}
     with open(os.path.join(args.output, "seg_manifest.json"), "w") as f:
         json.dump(seg_manifest, f, indent=2)
+
+    if collection_mode:
+        write_collection_output_manifest(args.output, "mask_root", output_samples)
 
     print(f"  Done: {len(images)} images processed")
 

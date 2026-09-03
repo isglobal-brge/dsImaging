@@ -123,9 +123,9 @@ def main():
             rows["version_id"].append(None)
             rows["etag"].append(None)
             new_count += 1
-            print(f"  Hashed: {filename} ({content_hash[:16]}...)")
-        except Exception as e:
-            print(f"  Warning: skipping {filename}: {e}", file=sys.stderr)
+            print("  Hashed admitted image")
+        except Exception:
+            print("  Warning: skipped one admitted image", file=sys.stderr)
 
     # Write Parquet
     try:

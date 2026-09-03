@@ -5,5 +5,5 @@ framework: seg_nnunetv2
 command: python
 args_template: ["-m", "dsimaging_seg_nnunet", "--input", "{input_dir}", "--output", "{output_dir}", "--model", "{model_name}"]
 timeout_secs: 7200
-allowed_params: [model_name, fold, checkpoint, step_size]
+allowed_params: [model_name, fold, checkpoint, step_size, dataset_id, worker_context, image_asset, provider]
 python_deps: ["nnunetv2>=2.0.0", "torch>=2.0.0"]

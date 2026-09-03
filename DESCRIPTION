@@ -1,7 +1,7 @@
 Package: dsImaging
 Type: Package
 Title: DataSHIELD Clinical Imaging Platform
-Version: 0.3.4
+Version: 0.3.5
 Authors@R:
     c(person("David", "Sarrat González", , "david.sarrat@isglobal.org", role = c("aut", "cre")),
       person("Xavier", "Escribà-Montagut", , "xavier.escriba@isglobal.org", role = c("aut")),
@@ -27,46 +27,40 @@ Imports:
     DBI,
     RSQLite,
     digest,
-    dsHPC,
+    dsHPC (>= 0.2.3),
     yaml,
     jsonlite,
     processx,
     utils,
+    uuid,
     resourcer,
     R6
 Suggests:
+    DSI,
+    DSLite,
     httpuv,
     testthat (>= 3.0.0),
     withr
 AggregateMethods:
-    contentHashDS,
-    imagingListDatasetsDS,
     imagingMetadataDS,
     imagingValidateDS,
     imagingAssetsDS,
     imagingAssetCatalogDS,
-    imagingAssetDetailDS,
-    imagingAliasesDS,
-    imagingLineageDS,
-    imagingDeduplicateDS,
     imagingCapabilitiesDS,
     imagingInstallModelDS,
     imagingListModelsDS,
-    imagingRadiomicsScanCollectionDS,
-    imagingRadiomicsSubmitBatchDS,
-    imagingRadiomicsCollectionStatusDS,
-    imagingRadiomicsRecoverCollectionDS,
     imagingRadiomicsCancelCollectionDS,
-    imagingRadiomicsPublishCollectionDS,
-    imagingSegmentationValidateMasksDS,
     imagingCollectionStatusDS,
     imagingCollectionRecoverDS,
-    imagingListGenerationsDS,
+    imagingCollectionPublishDS,
+    imagingWorkflowStatusDS,
     imagingDescribeProfileDS,
     imagingListProfilesDS,
     imagingLabelDistDS
 AssignMethods:
     imagingInitDS,
+    imagingDestroyDS,
+    imagingWorkflowDestroyDS,
     imagingLoadAssetDS,
     imagingProcessRadiomicsCollectionDS,
     imagingProcessRadiomicsAssetDS,

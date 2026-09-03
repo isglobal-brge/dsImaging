@@ -12,50 +12,115 @@
 #' @return An imaging handle object (assigned server-side).
 #' @export
 imagingInitDS <- function(resource_symbol) {
+  .dsimaging_require_literal_arguments()
   # resource_symbol is a STRING (e.g. "img_res"), not the object itself.
   # The ResourceClient is already in the session env from datashield.assign.resource().
   # Pattern matches dsOMOP: omopInitDS("res") -> get("res", parent.frame())
-  obj <- get(resource_symbol, envir = parent.frame(), inherits = FALSE)
+  owner_env <- parent.frame()
+  if (!is.character(resource_symbol) || length(resource_symbol) != 1L ||
+      is.na(resource_symbol) || !nzchar(resource_symbol) ||
+      !exists(resource_symbol, envir = owner_env, inherits = FALSE)) {
+    stop("Imaging resource could not be initialized.", call. = FALSE)
+  }
+  obj <- get(resource_symbol, envir = owner_env, inherits = FALSE)
 
   # Path 1: Raw Resource from datashield.assign.resource()
   # In Opal, this is a resourcer::Resource object (not yet resolved)
-  if (inherits(obj, "Resource") || (is.list(obj) && !is.null(obj$url))) {
+  if (inherits(obj, c("resource", "Resource"))) {
     url <- obj$url %||% ""
-    if (grepl("^imaging\\+dataset://", url)) {
-      client <- ImagingDatasetResourceClient$new(obj)
-      desc <- client$asImagingDescriptor()
-      return(.make_imaging_handle(desc, resource_symbol,
-        backend = client$getBackend(), manifest_uri = client$getManifestUri()))
+    if (is.character(url) && length(url) == 1L && !is.na(url) &&
+        grepl("^imaging\\+dataset://", url)) {
+      return(tryCatch({
+        client <- ImagingDatasetResourceClient$new(obj)
+        handle <- .imaging_handle_from_resource_client(client, resource_symbol)
+        .register_imaging_handle(handle, owner_env)
+      }, error = function(e) {
+        stop("Imaging resource could not be initialized.", call. = FALSE)
+      }))
     }
   }
 
   # Path 2: Already-resolved ImagingDatasetResourceClient
   if (inherits(obj, "ImagingDatasetResourceClient")) {
-    desc <- obj$asImagingDescriptor()
-    return(.make_imaging_handle(desc, resource_symbol,
-      backend = obj$getBackend(), manifest_uri = obj$getManifestUri()))
+    return(tryCatch({
+      handle <- .imaging_handle_from_resource_client(obj, resource_symbol)
+      .register_imaging_handle(handle, owner_env)
+    }, error = function(e) {
+      stop("Imaging resource could not be initialized.", call. = FALSE)
+    }))
   }
 
-  # Path 3: dsImaging's package-independent descriptor
-  if (inherits(obj, "ImagingDatasetDescriptor")) {
-    return(.make_imaging_handle(obj, resource_symbol))
+  stop("Imaging resource could not be initialized.", call. = FALSE)
+}
+
+#' Destroy an Imaging Handle
+#'
+#' DataSHIELD ASSIGN method. Removes a session-owned imaging handle capability
+#' and its symbol without returning dataset details. A retry is idempotent only
+#' when the same session still contains the well-formed opaque reference after
+#' its private registry entry has already been removed.
+#'
+#' @param handle_symbol Character; symbol of the imaging handle to destroy.
+#' @return The opaque reference as an invisible retry tombstone. DataSHIELD
+#'   assigns it back to the same symbol until the client confirms removal.
+#' @export
+imagingDestroyDS <- function(handle_symbol) {
+  .dsimaging_require_literal_arguments()
+  owner_env <- parent.frame()
+  unavailable <- function() {
+    stop("Unknown or unavailable imaging handle reference.", call. = FALSE)
+  }
+  if (!is.environment(owner_env) ||
+      !is.character(handle_symbol) || length(handle_symbol) != 1L ||
+      is.na(handle_symbol) || !nzchar(handle_symbol) ||
+      !exists(handle_symbol, envir = owner_env, inherits = FALSE)) {
+    unavailable()
+  }
+  reference <- get(handle_symbol, envir = owner_env, inherits = FALSE)
+  if (!.is_imaging_handle_reference(reference)) unavailable()
+  if (bindingIsLocked(handle_symbol, owner_env)) unavailable()
+  entry <- .imaging_handle_registry[[reference$capability]]
+  if (is.null(entry)) {
+    # Idempotent retry after authoritative state was removed but the session
+    # symbol could not be cleared (for example, a lost destroy response).
+    rm(list = handle_symbol, envir = owner_env)
+    return(invisible(reference))
+  }
+  if (!is.list(entry$handle) || !identical(entry$owner_env, owner_env)) {
+    unavailable()
   }
 
-  # Path 4: dataset_id string (convenience for server-side scripting)
-  if (is.character(obj) && length(obj) == 1L && grepl("^[a-z0-9]", obj)) {
-    tryCatch({
-      resolved <- resolve_dataset(obj)
-      manifest <- parse_manifest(resolved$manifest_uri, resolved$backend)
-      desc <- imaging_dataset_descriptor(manifest)
-      return(.make_imaging_handle(desc, resource_symbol,
-        backend = resolved$backend, manifest_uri = resolved$manifest_uri))
-    }, error = function(e) NULL)
-  }
+  rm(list = reference$capability, envir = .imaging_handle_registry)
+  rm(list = handle_symbol, envir = owner_env)
+  invisible(reference)
+}
 
-  stop("Symbol '", resource_symbol, "' is not a recognized imaging resource. ",
-       "Supported: Resource (imaging+dataset://), ImagingDatasetResourceClient, ",
-       "ImagingDatasetDescriptor, or dataset_id string.",
-       call. = FALSE)
+#' Build a handle only from a ResourceClient bound to its Resource URL
+#' @keywords internal
+.imaging_handle_from_resource_client <- function(client, symbol) {
+  resource <- client$getResource()
+  .validate_imaging_resource_object(resource)
+  parsed <- .validate_imaging_resource_location(
+    .parse_imaging_url(resource$url))
+  dataset_id <- client$getDatasetId()
+  if (!is.character(dataset_id) || length(dataset_id) != 1L ||
+      !identical(dataset_id, parsed$dataset_id)) {
+    stop("Imaging resource does not match its dataset.", call. = FALSE)
+  }
+  manifest <- client$getManifest()
+  .assert_imaging_resource_dataset(manifest, dataset_id)
+  backend <- client$getBackend()
+  manifest_uri <- client$getManifestUri()
+  .assert_imaging_manifest_scope(manifest, manifest_uri, backend)
+  desc <- client$asImagingDescriptor()
+  if (!inherits(desc, "ImagingDatasetDescriptor") ||
+      !identical(as.character(desc$dataset_id), dataset_id)) {
+    stop("Imaging resource does not match its dataset.", call. = FALSE)
+  }
+  .assert_imaging_resource_dataset(desc$manifest, dataset_id)
+  .assert_imaging_manifest_scope(desc$manifest, manifest_uri, backend)
+  .make_imaging_handle(desc, symbol, backend = backend,
+    manifest_uri = manifest_uri, require_snapshot = TRUE)
 }
 
 #' Create an imaging handle from a descriptor
@@ -65,10 +130,47 @@ imagingInitDS <- function(resource_symbol) {
 #'
 #' @keywords internal
 .make_imaging_handle <- function(desc, symbol, backend = NULL,
-                                 manifest_uri = NULL) {
-  # Count samples from metadata (may need S3 download)
-  n_samples <- .count_samples_from_manifest(desc$manifest, backend)
-  .assert_min_samples(n_samples, context = paste0("dataset '", desc$dataset_id, "'"))
+                                 manifest_uri = NULL,
+                                 require_snapshot = FALSE) {
+  backend <- .sanitize_imaging_backend(backend, desc$dataset_id)
+  collection_snapshot <- NULL
+  if (isTRUE(require_snapshot)) {
+    if (is.null(manifest_uri)) {
+      stop("Imaging collection integrity could not be verified.", call. = FALSE)
+    }
+    read_snapshot <- function() {
+      manifest <- parse_manifest(manifest_uri, backend)
+      .assert_imaging_resource_dataset(manifest, desc$dataset_id)
+      .assert_imaging_manifest_scope(manifest, manifest_uri, backend)
+      # Resolve the metadata location before admission so `file` and `uri`
+      # cannot name two different tables with the same roster.
+      .snapshot_artifact_uri(manifest$metadata, backend)
+      current_admission <- .imaging_privacy_admission(manifest, backend)
+      list(
+        desc = imaging_dataset_descriptor(manifest),
+        admission = current_admission,
+        snapshot = .new_imaging_collection_snapshot(
+          manifest, backend, current_admission))
+    }
+    .assert_dataset_not_publishing(list(
+      backend = backend, manifest_uri = manifest_uri))
+    first <- read_snapshot()
+    .assert_dataset_not_publishing(list(
+      backend = backend, manifest_uri = manifest_uri))
+    second <- read_snapshot()
+    .assert_dataset_not_publishing(list(
+      backend = backend, manifest_uri = manifest_uri))
+    if (!identical(first$snapshot$seal, second$snapshot$seal)) {
+      stop("Imaging collection changed during admission.", call. = FALSE)
+    }
+    desc <- second$desc
+    admission <- second$admission
+    collection_snapshot <- second$snapshot
+  } else {
+    .assert_dataset_not_publishing(list(
+      backend = backend, manifest_uri = manifest_uri))
+    admission <- .imaging_privacy_admission(desc$manifest, backend)
+  }
 
   handle <- list(
     source      = "imaging_resource",
@@ -77,15 +179,16 @@ imagingInitDS <- function(resource_symbol) {
     manifest    = desc$manifest,
     backend     = backend,
     manifest_uri = manifest_uri,
-    n_samples   = n_samples,
+    privacy     = admission$contract,
+    n_privacy_units = admission$n_privacy_units,
+    privacy_roster = admission$roster,
+    collection_seal = if (is.null(collection_snapshot)) {
+      digest::digest(list(manifest = desc$manifest,
+        privacy_roster = admission$roster), algo = "sha256", serialize = TRUE)
+    } else collection_snapshot$seal,
+    collection_snapshot = collection_snapshot,
     created_at  = Sys.time()
   )
-  if (!is.null(backend) && !is.null(manifest_uri) && nzchar(manifest_uri)) {
-    tryCatch(register_dataset(desc$dataset_id, manifest_uri, backend),
-      error = function(e) NULL)
-  }
-  key <- paste0("imaging_", symbol)
-  assign(key, handle, envir = .dsimaging_env)
   handle
 }
 
@@ -98,15 +201,7 @@ imagingInitDS <- function(resource_symbol) {
 #' @return A dsimaging_backend object, or NULL if no backend.
 #' @export
 imagingGetBackendDS <- function(handle_symbol) {
-  key <- paste0("imaging_", handle_symbol)
-  handle <- get0(key, envir = .dsimaging_env)
-  if (is.null(handle)) {
-    # Try to get from the calling environment
-    handle <- tryCatch(get(handle_symbol, envir = parent.frame()),
-                        error = function(e) NULL)
-  }
-  if (is.null(handle)) return(NULL)
-  handle$backend
+  .legacy_imaging_ds_disabled("imagingGetBackendDS")
 }
 
 #' Get the manifest from an imaging handle
@@ -115,99 +210,81 @@ imagingGetBackendDS <- function(handle_symbol) {
 #' @return Parsed manifest list, or NULL.
 #' @export
 imagingGetManifestDS <- function(handle_symbol) {
-  for (sym in c(handle_symbol, "img", "img_res", "imaging", "res")) {
-    key <- paste0("imaging_", sym)
-    handle <- get0(key, envir = .dsimaging_env)
-    if (!is.null(handle) && !is.null(handle$manifest))
-      return(handle$manifest)
-  }
-  NULL
+  .legacy_imaging_ds_disabled("imagingGetManifestDS")
 }
 
 #' Get an imaging handle by symbol
 #' @keywords internal
 .get_imaging_handle <- function(symbol) {
-  for (sym in c(symbol, "img", "img_res", "imaging", "res")) {
-    key <- paste0("imaging_", sym)
-    handle <- get0(key, envir = .dsimaging_env)
-    if (!is.null(handle)) return(handle)
-  }
-  NULL
+  tryCatch(.getImagingHandle(symbol), error = function(e) NULL)
 }
 
 #' Disclosure-controlled label distribution for an imaging dataset
 #'
 #' DataSHIELD AGGREGATE method. Reads the dataset's sample-metadata table on the
-#' node, tabulates the requested label column, and returns the per-class counts
-#' with small classes suppressed. Suppression reuses the standard DataSHIELD
-#' \code{nfilter.subset} threshold (via \code{.nfilter_threshold()}), so a class
-#' with fewer than the threshold samples is dropped and only counted in
-#' \code{suppressed_classes}. The pixels never leave the node; only aggregate,
-#' disclosure-safe counts are returned.
+#' node and tabulates only the manifest-declared label at patient level. The
+#' complete distribution is withheld if any cell is below the DataSHIELD
+#' \code{nfilter.tab} threshold; admitted counts are then hidden, bucketed, or
+#' released according to the configured privacy profile. The pixels never
+#' leave the node.
 #'
 #' @param handle_symbol Character; the imaging handle symbol.
-#' @param column Character or NULL; the label column to tabulate. Defaults to the
-#'   manifest's \code{label_col}, then to \code{"label"}.
-#' @return A data.frame with columns \code{label} and \code{n} for the classes
-#'   that pass the threshold, plus attributes \code{nfilter} and
-#'   \code{suppressed_classes}.
+#' @param column Character or NULL; must be the manifest's declared
+#'   \code{metadata.label_col}; NULL selects that declared column.
+#' @return A data.frame with columns \code{label} and \code{n}, or an empty
+#'   data.frame when the complete distribution is not releasable.
 #' @export
 imagingLabelDistDS <- function(handle_symbol, column = NULL) {
-  handle <- .getImagingHandle(handle_symbol)
-  manifest <- handle$manifest
-  meta <- manifest$metadata
-  col <- column %||% meta$label_col %||% "label"
-
-  # Read the sample-metadata table as VALUES (imagingMetadataDS only reads the
-  # schema); mirror its local-file-then-S3 resolution exactly.
-  df <- NULL
-  if (!is.null(meta)) {
-    if (!is.null(meta$file) && file.exists(meta$file)) {
-      fmt <- meta$format %||% .guess_format(meta$file)
-      if (identical(fmt, "parquet") && requireNamespace("arrow", quietly = TRUE)) {
-        df <- as.data.frame(arrow::read_parquet(meta$file))
-      } else if (identical(fmt, "csv")) {
-        df <- utils::read.csv(meta$file)
-      }
-    } else if (!is.null(meta$uri) && grepl("^s3://", meta$uri) &&
-               !is.null(handle$backend)) {
-      tryCatch({
-        fmt <- meta$format %||% .guess_format(meta$uri)
-        tmp <- tempfile(fileext = paste0(".", fmt))
-        on.exit(unlink(tmp), add = TRUE)
-        backend_get_file(handle$backend, meta$uri, tmp)
-        if (identical(fmt, "parquet") && requireNamespace("arrow", quietly = TRUE)) {
-          df <- as.data.frame(arrow::read_parquet(tmp))
-        } else if (identical(fmt, "csv")) {
-          df <- utils::read.csv(tmp)
-        }
-      }, error = function(e) NULL)
-    }
+  .dsimaging_require_literal_arguments()
+  authorized <- .authorized_imaging_dataset(
+    handle_symbol, owner_env = parent.frame())
+  contract <- authorized$privacy
+  declared <- contract$label_col
+  if (is.null(declared) ||
+      (!is.null(column) && !identical(as.character(column), declared))) {
+    stop("Only the manifest-declared label column may be tabulated.",
+         call. = FALSE)
   }
 
-  if (is.null(df) || !nrow(df))
-    stop("No metadata table available to compute a label distribution.",
+  df <- .read_imaging_metadata_table(
+    authorized$manifest, authorized$backend)
+  ids <- .validate_imaging_privacy_metadata(
+    df, contract, require_label = TRUE)
+  .assert_min_privacy_units(length(unique(ids$privacy_ids)),
+    context = "imaging dataset")
+
+  labels <- as.character(df[[declared]])
+  per_patient <- split(labels, ids$privacy_ids)
+  conflicting <- vapply(per_patient, function(x) length(unique(x)) != 1L,
+                        logical(1))
+  if (any(conflicting)) {
+    stop("Imaging metadata does not satisfy its privacy contract.",
          call. = FALSE)
-  if (!col %in% names(df))
-    stop("Column '", col, "' not found in the dataset metadata (have: ",
-         paste(names(df), collapse = ", "), ").", call. = FALSE)
-
-  # Whole-dataset disclosure gate before revealing any per-class structure.
-  .assert_min_samples(nrow(df),
-                      context = paste0("dataset '", manifest$dataset_id %||% "?", "'"))
-
-  # Per-class counts, then drop classes below the DataSHIELD threshold so no small
-  # cell is disclosed; report only HOW MANY classes were hidden, not which.
-  tab <- table(df[[col]])
-  threshold <- .nfilter_threshold()
-  keep <- as.integer(tab) >= threshold
-  out <- data.frame(label = names(tab)[keep],
-                    n     = as.integer(tab)[keep],
-                    stringsAsFactors = FALSE)
-  attr(out, "column") <- col
-  attr(out, "nfilter") <- threshold
-  attr(out, "suppressed_classes") <- as.integer(sum(!keep))
-  out
+  }
+  patient_labels <- vapply(per_patient, `[[`, character(1), 1L)
+  approved_levels <- contract$label_levels %||% character(0)
+  observed_levels <- unique(patient_labels)
+  identifiers <- unique(c(ids$sample_ids, ids$privacy_ids))
+  if (length(approved_levels) == 0L ||
+      any(approved_levels %in% identifiers) ||
+      !all(observed_levels %in% approved_levels)) {
+    return(data.frame(label = character(0), n = integer(0),
+                      stringsAsFactors = FALSE))
+  }
+  counts <- table(patient_labels)
+  safe <- safe_metadata_distribution(counts)
+  if (is.null(safe)) {
+    return(data.frame(label = character(0), n = integer(0),
+                      stringsAsFactors = FALSE))
+  }
+  safe_levels <- safe_metadata_levels(names(safe), length(patient_labels))
+  if (is.null(safe_levels)) {
+    return(data.frame(label = character(0), n = integer(0),
+                      stringsAsFactors = FALSE))
+  }
+  keep <- !is.na(safe) & names(safe) %in% safe_levels
+  data.frame(label = names(safe)[keep], n = as.integer(safe[keep]),
+             stringsAsFactors = FALSE)
 }
 
 #' List available label sets for an imaging dataset
@@ -220,28 +297,7 @@ imagingLabelDistDS <- function(handle_symbol, column = NULL) {
 #' @return A data.frame with columns: name, type, columns, description.
 #' @export
 imagingLabelsDS <- function(handle_symbol) {
-  handle <- .get_imaging_handle(handle_symbol)
-  if (is.null(handle) || is.null(handle$manifest))
-    return(data.frame(name = character(0), type = character(0),
-                      columns = character(0), description = character(0),
-                      stringsAsFactors = FALSE))
-
-  labels <- handle$manifest$labels
-  if (is.null(labels) || length(labels) == 0)
-    return(data.frame(name = character(0), type = character(0),
-                      columns = character(0), description = character(0),
-                      stringsAsFactors = FALSE))
-
-  rows <- lapply(labels, function(lbl) {
-    data.frame(
-      name        = lbl$name %||% NA_character_,
-      type        = lbl$type %||% NA_character_,
-      columns     = paste(lbl$columns %||% character(0), collapse = ", "),
-      description = lbl$description %||% NA_character_,
-      stringsAsFactors = FALSE
-    )
-  })
-  do.call(rbind, rows)
+  .legacy_imaging_ds_disabled("imagingLabelsDS")
 }
 
 #' Get a specific label set's URI from the manifest
@@ -264,47 +320,7 @@ imagingLabelsDS <- function(handle_symbol) {
 #' @return A data.frame with columns: alias, provider, status, n_valid, created_at.
 #' @export
 imagingMasksDS <- function(handle_symbol) {
-  handle <- .get_imaging_handle(handle_symbol)
-  if (is.null(handle))
-    return(data.frame(alias = character(0), provider = character(0),
-                      status = character(0), n_valid = integer(0),
-                      created_at = character(0), stringsAsFactors = FALSE))
-
-  dataset_id <- handle$dataset_id
-
-  # Query asset_generations for segmentation generations on this dataset
-  tryCatch({
-    db <- .get_asset_db()
-    if (is.null(db)) return(.empty_masks_df())
-
-    gens <- DBI::dbGetQuery(db, paste0(
-      "SELECT generation_id, kind, state, spec_json, expected_n, completed_n, ",
-      "created_at FROM asset_generations WHERE dataset_id = ? AND ",
-      "kind LIKE '%seg%' AND state = 'PUBLISHED'"),
-      params = list(dataset_id))
-
-    if (nrow(gens) == 0) return(.empty_masks_df())
-
-    profile <- .get_active_profile()
-    rows <- lapply(seq_len(nrow(gens)), function(i) {
-      spec <- tryCatch(
-        jsonlite::fromJSON(gens$spec_json[i], simplifyVector = FALSE),
-        error = function(e) list())
-      provider <- spec$processor %||% spec$segmenter %||% "unknown"
-      n_valid_raw <- as.integer(gens$completed_n[i] %||% 0)
-      data.frame(
-        alias       = gens$generation_id[i],
-        provider    = provider,
-        status      = if (n_valid_raw >= gens$expected_n[i]) "ready" else "partial",
-        n_valid     = safe_metadata_count(n_valid_raw, profile = profile),
-        created_at  = as.character(gens$created_at[i]),
-        stringsAsFactors = FALSE
-      )
-    })
-    result <- do.call(rbind, rows)
-    # Only return ready (non-partial) by default
-    result[result$status == "ready", , drop = FALSE]
-  }, error = function(e) .empty_masks_df())
+  .legacy_imaging_ds_disabled("imagingMasksDS")
 }
 
 #' @keywords internal
@@ -385,11 +401,7 @@ imagingMasksDS <- function(handle_symbol) {
 #' @return Integer; the minimum number of samples to avoid disclosure.
 #' @keywords internal
 .nfilter_threshold <- function() {
-  nfilter <- as.numeric(getOption("dsimaging.nfilter.subset",
-    getOption("default.dsimaging.nfilter.subset",
-      getOption("nfilter.subset", getOption("default.nfilter.subset", 3)))))
-
-  as.integer(nfilter)
+  .get_nfilter_subset()
 }
 
 #' Bucket a count to avoid exact disclosure
@@ -432,8 +444,8 @@ imagingMasksDS <- function(handle_symbol) {
 #' all enabled datasets in the server's registry.
 #'
 #' @return Data.frame with columns: dataset_id, title, modality, enabled.
-#' @export
-imagingListDatasetsDS <- function() {
+#' @keywords internal
+.list_imaging_datasets_admin <- function() {
   datasets <- tryCatch(list_datasets(), error = function(e) list())
 
   if (length(datasets) == 0) {
@@ -473,6 +485,15 @@ imagingListDatasetsDS <- function() {
   do.call(rbind, rows)
 }
 
+#' Legacy Dataset Registry Listing Method
+#'
+#' Retained so stale Opal allowlists fail closed. Dataset discovery is an
+#' administrator operation; analyst APIs start from an assigned resource.
+#' @export
+imagingListDatasetsDS <- function() {
+  .legacy_imaging_ds_disabled("imagingListDatasetsDS")
+}
+
 #' Resolve a manifest for registry listing
 #'
 #' @keywords internal
@@ -505,64 +526,33 @@ imagingListDatasetsDS <- function() {
 #' @return Named list with metadata summary.
 #' @export
 imagingMetadataDS <- function(handle_symbol) {
-  handle <- .getImagingHandle(handle_symbol)
-  manifest <- handle$manifest
-
+  .dsimaging_require_literal_arguments()
+  authorized <- .authorized_imaging_dataset(
+    handle_symbol, owner_env = parent.frame())
+  handle <- authorized$handle
+  manifest <- authorized$manifest
   meta <- manifest$metadata
-  n_samples <- NA_integer_
-  columns <- NULL
-
-  if (!is.null(meta)) {
-    # Local file path takes precedence
-    if (!is.null(meta$file) && file.exists(meta$file)) {
-      fmt <- meta$format %||% .guess_format(meta$file)
-      if (identical(fmt, "parquet") && requireNamespace("arrow", quietly = TRUE)) {
-        schema <- arrow::read_parquet(meta$file, as_data_frame = FALSE)
-        n_samples <- nrow(schema)
-        columns <- names(schema)
-      } else if (identical(fmt, "csv")) {
-        hdr <- utils::read.csv(meta$file, nrows = 1)
-        columns <- names(hdr)
-        n_samples <- length(readLines(meta$file)) - 1L
-      }
-    } else if (!is.null(meta$uri) && grepl("^s3://", meta$uri) &&
-               !is.null(handle$backend)) {
-      # S3 metadata: fetch via backend and inspect
-      tryCatch({
-        fmt <- meta$format %||% .guess_format(meta$uri)
-        tmp <- tempfile(fileext = paste0(".", fmt))
-        on.exit(unlink(tmp), add = TRUE)
-        backend_get_file(handle$backend, meta$uri, tmp)
-        if (identical(fmt, "parquet") && requireNamespace("arrow", quietly = TRUE)) {
-          schema <- arrow::read_parquet(tmp, as_data_frame = FALSE)
-          n_samples <- nrow(schema)
-          columns <- names(schema)
-        } else if (identical(fmt, "csv")) {
-          hdr <- utils::read.csv(tmp, nrows = 1)
-          columns <- names(hdr)
-          n_samples <- length(readLines(tmp)) - 1L
-        }
-      }, error = function(e) NULL)
-    }
-  }
-
-  # Fall back to handle$n_samples if we still don't know
-  if (is.na(n_samples) && !is.null(handle$n_samples))
-    n_samples <- as.integer(handle$n_samples)
-
-  # Disclosure control: apply profile-aware count sanitization
-  safe_n <- if (is.na(n_samples)) NA_integer_ else safe_metadata_count(n_samples)
+  admission <- .imaging_privacy_admission(manifest, authorized$backend)
+  safe_n <- safe_metadata_count(admission$n_privacy_units)
 
   list(
-    dataset_id    = manifest$dataset_id,
-    title         = manifest$title %||% "(untitled)",
-    modality      = manifest$modality %||% "unknown",
-    task_types    = manifest$task_types %||% character(0),
-    templates     = manifest$compatible_templates %||% character(0),
+    dataset_id    = .safe_public_identifier(manifest$dataset_id, "unknown"),
+    title         = .safe_public_identifier(manifest$title, "unknown"),
+    modality      = .safe_public_identifier(manifest$modality, "unknown"),
+    task_types    = .safe_public_identifiers(manifest$task_types),
+    templates     = .safe_public_identifiers(manifest$compatible_templates),
+    # Compatibility: n_samples now means protected privacy units, never rows.
     n_samples     = safe_n,
-    columns       = columns,
-    id_col        = meta$id_col %||% NULL,
-    label_col     = meta$label_col %||% NULL,
+    n_privacy_units = safe_n,
+    columns       = .safe_public_identifiers(names(admission$data)),
+    id_col        = .safe_public_identifier(admission$contract$id_col),
+    label_col     = .safe_public_identifier(admission$contract$label_col),
+    privacy_unit  = .safe_public_identifier(
+      admission$contract$privacy_unit, "unknown"),
+    privacy_unit_col = .safe_public_identifier(
+      admission$contract$privacy_unit_col),
+    privacy_unit_canonicalization = .safe_public_identifier(
+      admission$contract$privacy_unit_canonicalization, "unknown"),
     n_assets      = length(manifest$assets %||% list()),
     n_samples_sufficient = !is.na(safe_n) && safe_n > 0L
   )
@@ -577,8 +567,36 @@ imagingMetadataDS <- function(handle_symbol) {
 #' @return Named list with validation results.
 #' @export
 imagingValidateDS <- function(handle_symbol) {
-  handle <- .getImagingHandle(handle_symbol)
-  validate_imaging_dataset(handle$manifest, backend = handle$backend)
+  .dsimaging_require_literal_arguments()
+  authorized <- .authorized_imaging_dataset(
+    handle_symbol, owner_env = parent.frame())
+  result <- validate_imaging_dataset(
+    authorized$manifest, backend = authorized$backend)
+  status <- result$asset_status %||% list()
+  status_names <- if (length(status) == 0L) character(0) else
+    vapply(names(status), .safe_public_identifier, character(1))
+  keep_status <- !is.na(status_names)
+  status <- status[keep_status]
+  status_names <- status_names[keep_status]
+  asset_status <- if (length(status) == 0L) {
+    data.frame(name = character(0), type = character(0), valid = logical(0),
+               stringsAsFactors = FALSE)
+  } else {
+    data.frame(
+      name = status_names,
+      type = vapply(status, function(x) .safe_public_identifier(
+        x$type, "unknown"), character(1)),
+      valid = vapply(status, function(x) isTRUE(x$valid), logical(1)),
+      stringsAsFactors = FALSE
+    )
+  }
+  list(
+    valid = isTRUE(result$valid),
+    errors = if (isTRUE(result$valid)) character(0) else "validation_failed",
+    warnings = if (length(result$warnings %||% character(0)) > 0L)
+      "validation_warning" else character(0),
+    asset_status = asset_status
+  )
 }
 
 #' List Dataset Assets
@@ -590,8 +608,15 @@ imagingValidateDS <- function(handle_symbol) {
 #' @return Data.frame with columns: name, type.
 #' @export
 imagingAssetsDS <- function(handle_symbol) {
-  handle <- .getImagingHandle(handle_symbol)
+  .dsimaging_require_literal_arguments()
+  handle <- .authorized_imaging_dataset(
+    handle_symbol, owner_env = parent.frame())$handle
   assets <- handle$manifest$assets %||% list()
+  asset_names <- if (length(assets) == 0L) character(0) else
+    vapply(names(assets), .safe_public_identifier, character(1))
+  keep_assets <- !is.na(asset_names)
+  assets <- assets[keep_assets]
+  asset_names <- asset_names[keep_assets]
 
   if (length(assets) == 0) {
     return(data.frame(
@@ -601,9 +626,9 @@ imagingAssetsDS <- function(handle_symbol) {
   }
 
   data.frame(
-    name = names(assets),
-    type = vapply(assets, function(a) a$kind %||% a$type %||% "unknown",
-                  character(1)),
+    name = asset_names,
+    type = vapply(assets, function(a) .safe_public_identifier(
+      a$kind %||% a$type, "unknown"), character(1)),
     stringsAsFactors = FALSE
   )
 }
@@ -614,31 +639,5 @@ imagingAssetsDS <- function(handle_symbol) {
 #' @return The imaging handle.
 #' @keywords internal
 .getImagingHandle <- function(symbol) {
-  # Try caller environments (DSLite)
-  for (depth in 1:3) {
-    env <- tryCatch(sys.frame(-(depth)), error = function(e) NULL)
-    if (!is.null(env) && exists(symbol, envir = env, inherits = FALSE)) {
-      obj <- get(symbol, envir = env, inherits = FALSE)
-      if (is.list(obj) && "descriptor" %in% names(obj)) {
-        return(obj)
-      }
-    }
-  }
-
-  # Global environment (Opal/Rock)
-  if (exists(symbol, envir = .GlobalEnv, inherits = FALSE)) {
-    obj <- get(symbol, envir = .GlobalEnv, inherits = FALSE)
-    if (is.list(obj) && "descriptor" %in% names(obj)) {
-      return(obj)
-    }
-  }
-
-  # Package environment
-  key <- paste0("imaging_", symbol)
-  if (exists(key, envir = .dsimaging_env)) {
-    return(get(key, envir = .dsimaging_env))
-  }
-
-  stop("No imaging handle for symbol '", symbol,
-       "'. Call imagingInitDS first.", call. = FALSE)
+  .resolve_imaging_handle(symbol)$handle
 }

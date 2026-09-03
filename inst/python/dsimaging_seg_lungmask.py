@@ -6,29 +6,21 @@ Models: R231, LTRCLobes, LTRCLobes_R231, R231CovidWeb
 """
 import argparse, json, os, sys
 
-from dsimaging_utils import package_versions
+from dsimaging_utils import (
+    IMAGE_EXTS,
+    cfg,
+    mapped_sample_files,
+    package_versions,
+    sample_token,
+    write_collection_output_manifest,
+)
 
 
-def find_images(input_dir):
-    registry_path = "/var/lib/dsimaging/registry.yaml"
-    dataset_id = os.environ.get("DSHPC_CFG_DATASET_ID", "")
-    if os.path.exists(registry_path):
-        try:
-            import yaml
-            registry = yaml.safe_load(open(registry_path))
-            for ds_id, entry in registry.items():
-                if dataset_id and ds_id != dataset_id:
-                    continue
-                manifest = yaml.safe_load(open(entry["manifest"]))
-                root = manifest.get("assets", {}).get("images", {}).get("root")
-                if root and os.path.isdir(root):
-                    return [(os.path.join(root, f), os.path.splitext(f)[0])
-                            for f in sorted(os.listdir(root)) if not f.startswith(".")]
-        except Exception:
-            pass
-    return [(os.path.join(input_dir, f), os.path.splitext(f)[0])
-            for f in sorted(os.listdir(input_dir))
-            if not f.startswith(".") and os.path.isfile(os.path.join(input_dir, f))]
+def find_images():
+    return mapped_sample_files(
+        cfg("image_asset", "images"), "images",
+        artifact_types=("image_root",), extensions=IMAGE_EXTS,
+    )
 
 
 def main():
@@ -49,12 +41,20 @@ def main():
     image = args.image or os.environ.get("DSHPC_CFG_IMAGE")
     sample_id = getattr(args, "sample_id", None) or os.environ.get("DSHPC_CFG_SAMPLE_ID")
 
+    collection_mode = not bool(image)
     if image:
-        sid = sample_id or os.path.splitext(os.path.basename(image))[0]
+        if not sample_id:
+            print("ERROR: Single-image mode requires sample_id", file=sys.stderr)
+            sys.exit(1)
+        sid = sample_id
         images = [(image, sid)]
-        print(f"  Single-image mode: {sid}")
+        print("  Single-image mode")
     else:
-        images = find_images(args.input)
+        try:
+            images = find_images()
+        except RuntimeError:
+            print("ERROR: Admitted imaging inputs are unavailable", file=sys.stderr)
+            sys.exit(1)
 
     print(f"  Found {len(images)} images")
     os.makedirs(args.output, exist_ok=True)
@@ -64,19 +64,28 @@ def main():
 
     inferer = LMInferer(modelname=args.model)
     results = []
+    output_samples = {}
     for img_path, sample_id in images:
         try:
-            print(f"  Segmenting: {sample_id}")
+            print("  Segmenting admitted image")
             image = sitk.ReadImage(img_path)
             mask = inferer.apply(image)
             # Save mask as NIfTI
             mask_sitk = sitk.GetImageFromArray(mask)
             mask_sitk.CopyInformation(image)
-            out_path = os.path.join(args.output, f"{sample_id}_lungmask.nii.gz")
+            out_path = os.path.join(
+                args.output, f"{sample_token(sample_id)}_lungmask.nii.gz"
+            )
             sitk.WriteImage(mask_sitk, out_path)
-            results.append({"sample_id": sample_id, "status": "done"})
+            results.append({
+                "sample_id": sample_id, "status": "done",
+                "primary_mask": out_path,
+            })
+            output_samples[sample_id] = {
+                "primary": out_path, "files": [out_path]
+            }
         except Exception as e:
-            print(f"  FAILED {sample_id}: {e}", file=sys.stderr)
+            print("  FAILED: admitted image segmentation failed", file=sys.stderr)
             results.append({"sample_id": sample_id, "status": "failed", "error": str(e)})
 
     summary = {"n_total": len(images), "n_done": sum(1 for r in results if r["status"] == "done"),
@@ -90,7 +99,7 @@ def main():
     for r in results:
         sid = r["sample_id"]
         if r["status"] == "done":
-            mask_path = os.path.join(args.output, f"{sid}_lungmask.nii.gz")
+            mask_path = r["primary_mask"]
             seg_manifest["samples"][sid] = {
                 "sample_id": sid,
                 "primary_mask": mask_path,
@@ -101,6 +110,10 @@ def main():
         json.dump(seg_manifest, f, indent=2)
 
     print(f"  Done: {summary['n_done']}/{summary['n_total']}")
+    if summary["n_failed"]:
+        sys.exit(1)
+    if collection_mode:
+        write_collection_output_manifest(args.output, "mask_root", output_samples)
 
 
 if __name__ == "__main__":

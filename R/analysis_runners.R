@@ -14,8 +14,13 @@
   dshpc_home <- getOption("dshpc.home",
     getOption("default.dshpc.home", "/srv/dshpc"))
   runners_dir <- file.path(dshpc_home, "runners")
+  if (.imaging_runner_path_is_symlink(runners_dir)) {
+    stop("dsHPC runners directory must not be a symbolic link.",
+         call. = FALSE)
+  }
   if (!dir.exists(runners_dir)) {
-    dir.create(runners_dir, recursive = TRUE, showWarnings = FALSE)
+    dir.create(runners_dir, recursive = TRUE, showWarnings = FALSE,
+               mode = "0770")
   }
   if (!dir.exists(runners_dir))
     stop("Cannot create dsHPC runners directory: ", runners_dir,
@@ -23,7 +28,11 @@
   if (file.access(runners_dir, mode = 2) != 0)
     stop("dsHPC runners directory is not writable: ", runners_dir,
          call. = FALSE)
-  tryCatch(Sys.chmod(runners_dir, "0777"), error = function(e) NULL)
+  suppressWarnings(tryCatch(
+    Sys.chmod(runners_dir, "0770", use_umask = FALSE),
+    error = function(e) FALSE))
+  .assert_imaging_runner_permissions(
+    runners_dir, "0770", "dsHPC runners directory", directory = TRUE)
 
   venv_root <- .imaging_analysis_option("venv_root", "/var/lib/dsimaging/venvs")
   scripts_dir <- .stable_imaging_package_dir("python")
@@ -35,12 +44,13 @@
   rosetta_mkl_env <- list(
     MKL_SERVICE_FORCE_INTEL = "0",
     MKL_THREADING_LAYER = "GNU",
-    DSIMAGING_ASSET_DB = getOption("dsimaging.asset_db",
-      getOption("default.dsimaging.asset_db",
-        "/var/lib/dsimaging/imaging_assets.sqlite")),
-    DSIMAGING_REGISTRY_PATH = getOption("dsimaging.registry_path",
-      getOption("default.dsimaging.registry_path",
-        "/var/lib/dsimaging/registry.yaml"))
+    DSIMAGING_WORKER_CONTEXT_DIR = .imaging_worker_context_dir(),
+    DSIMAGING_CREDENTIALS_PATH = getOption(
+      "dsimaging.credentials_path",
+      getOption("default.dsimaging.credentials_path",
+        file.path(getOption("dsimaging.data_dir",
+          getOption("default.dsimaging.data_dir", "/var/lib/dsimaging")),
+          "credentials.yaml")))
   )
 
   # PyRadiomics extraction runner
@@ -66,7 +76,7 @@
     timeout_secs = 3600L,
     env = rosetta_mkl_env,
     allowed_params = c("settings_file", "mask_asset", "image_asset",
-                        "dataset_id", "label_channel", "force2D", "voxel_based",
+                        "dataset_id", "worker_context", "label_channel", "force2D", "voxel_based",
                         "profile_name", "bin_width", "feature_classes",
                         "name", "normalize", "resampled_spacing", "image_types",
                         "selected_features", "image", "mask", "sample_id",
@@ -101,7 +111,7 @@
     timeout_secs = 7200L,
     env = rosetta_mkl_env,
     allowed_params = c("task", "fast", "roi_subset", "statistics",
-                        "image_asset", "provider",
+                        "dataset_id", "worker_context", "image_asset", "provider",
                         "image", "sample_id", "generation_id")
   ), "totalsegmentator_infer", list(
     "-m", "dsimaging_seg_totalseg",
@@ -134,7 +144,7 @@
     timeout_secs = 3600L,
     env = rosetta_mkl_env,
     allowed_params = c("model_name", "image_asset", "provider",
-                        "image", "sample_id", "generation_id")
+                        "dataset_id", "worker_context", "image", "sample_id", "generation_id")
   ), "lungmask_infer", list(
     "-m", "dsimaging_seg_lungmask",
     "--input", "{input_dir}",
@@ -167,7 +177,7 @@
     timeout_secs = 900L,
     env = rosetta_mkl_env,
     allowed_params = c("threshold", "max_components", "min_voxels",
-                        "image_asset", "provider",
+                        "dataset_id", "worker_context", "image_asset", "provider",
                         "image", "sample_id", "generation_id")
   ), "ct_lung_threshold", list(
     "-m", "dsimaging_seg_ct_threshold",
@@ -201,7 +211,7 @@
     timeout_secs = 7200L,
     env = rosetta_mkl_env,
     allowed_params = c("model_name", "fold", "checkpoint", "step_size",
-                        "image_asset", "provider",
+                        "dataset_id", "worker_context", "image_asset", "provider",
                         "image", "sample_id", "generation_id")
   ), "nnunetv2_predict", list(
     "-m", "dsimaging_seg_nnunet",
@@ -233,7 +243,7 @@
     timeout_secs = 7200L,
     env = rosetta_mkl_env,
     allowed_params = c("bundle_name", "bundle_path", "device",
-                        "image_asset", "provider",
+                        "dataset_id", "worker_context", "image_asset", "provider",
                         "image", "sample_id", "generation_id")
   ), "monai_bundle_infer", list(
     "-m", "dsimaging_seg_monai",
@@ -242,8 +252,8 @@
     "--bundle", "{bundle_name}"
   )))
 
-  # DICOM series conversion. Uses dcm2niix when available and SimpleITK as
-  # a portable fallback.
+  # Exact single-file DICOM conversion. Multi-file series remain fail-closed
+  # until their complete slice roster can be preserved by the worker contract.
   .write_runner_yaml(runners_dir, "dicom_convert", .with_container(list(
     name = "dicom_convert",
     plane = "artifact",
@@ -263,7 +273,7 @@
     ),
     timeout_secs = 3600L,
     env = rosetta_mkl_env,
-    allowed_params = c("dataset_id", "dicom_asset", "dicom_root",
+    allowed_params = c("dataset_id", "worker_context", "dicom_asset", "dicom_root",
                         "image_asset", "converter")
   ), "dicom_convert", list(
     "-m", "dsimaging_dicom_convert",
@@ -273,8 +283,8 @@
 
   # General image preprocessing: resampling, normalization, intensity clamping,
   # and numeric pixel type conversion. Reuses the SimpleITK radiomics env.
-  .write_runner_yaml(runners_dir, "image_preprocess", .with_container(list(
-    name = "image_preprocess",
+  .write_runner_yaml(runners_dir, "dsimaging_image_preprocess", .with_container(list(
+    name = "dsimaging_image_preprocess",
     plane = "artifact",
     resource_class = "cpu",
     resources = list(
@@ -293,10 +303,10 @@
     ),
     timeout_secs = 3600L,
     env = rosetta_mkl_env,
-    allowed_params = c("dataset_id", "image_asset", "image_root",
+    allowed_params = c("dataset_id", "worker_context", "image_asset", "image_root",
                         "operations", "spacing", "resampled_spacing",
                         "lower", "upper")
-  ), "image_preprocess", list(
+  ), "dsimaging_image_preprocess", list(
     "-m", "dsimaging_preprocess",
     "--input", "{input_dir}",
     "--output", "{output_dir}",
@@ -325,7 +335,7 @@
     ),
     timeout_secs = 1800L,
     env = rosetta_mkl_env,
-    allowed_params = c("dataset_id", "mask_asset", "mask", "mask_b_asset",
+    allowed_params = c("dataset_id", "worker_context", "mask_asset", "mask", "mask_b_asset",
                         "mask_b", "reference_asset", "reference_image",
                         "operation", "threshold", "threshold_b", "label",
                         "labels", "mode", "radius", "min_voxels",
@@ -357,7 +367,7 @@
     ),
     timeout_secs = 1800L,
     env = rosetta_mkl_env,
-    allowed_params = c("dataset_id", "image_asset", "image_root",
+    allowed_params = c("dataset_id", "worker_context", "image_asset", "image_root",
                         "mask_asset", "mask_root")
   ), "imaging_qc_metrics", list(
     "-m", "dsimaging_qc_metrics",
@@ -385,7 +395,7 @@
     ),
     timeout_secs = 3600L,
     env = rosetta_mkl_env,
-    allowed_params = c("dataset_id", "rt_asset", "rt_struct_asset",
+    allowed_params = c("dataset_id", "worker_context", "rt_asset", "rt_struct_asset",
                         "rt_root", "rt_file", "dicom_asset", "dicom_root",
                         "reference_asset", "reference_image", "image_asset",
                         "rois")
@@ -415,7 +425,7 @@
     ),
     timeout_secs = 3600L,
     env = rosetta_mkl_env,
-    allowed_params = c("dataset_id", "dose_asset", "dose_file",
+    allowed_params = c("dataset_id", "worker_context", "dose_asset", "dose_file",
                         "dose_root", "plan_asset", "plan_file",
                         "plan_root", "mask_asset", "mask_root")
   ), "rt_dose_plan", list(
@@ -444,9 +454,8 @@
     ),
     timeout_secs = 1800L,
     env = rosetta_mkl_env,
-    allowed_params = c("dataset_id", "image_asset", "image_root",
-                        "mask_asset", "mask_root", "max_size",
-                        "max_images", "anonymize_names")
+    allowed_params = c("dataset_id", "worker_context", "image_asset", "image_root",
+                        "mask_asset", "mask_root", "max_size")
   ), "imaging_qc_visuals", list(
     "-m", "dsimaging_qc_visuals",
     "--input", "{input_dir}",
@@ -474,7 +483,7 @@
     ),
     timeout_secs = 7200L,
     env = rosetta_mkl_env,
-    allowed_params = c("dataset_id", "image_asset", "image_root",
+    allowed_params = c("dataset_id", "worker_context", "image_asset", "image_root",
                         "mask_asset", "mask_root", "reference_asset",
                         "reference_image", "operations", "spacing",
                         "crop_size")
@@ -505,7 +514,7 @@
     ),
     timeout_secs = 7200L,
     env = rosetta_mkl_env,
-    allowed_params = c("dataset_id", "wsi_asset", "wsi_root",
+    allowed_params = c("dataset_id", "worker_context", "wsi_asset", "wsi_root",
                         "tile_size", "stride", "max_tiles",
                         "tissue_threshold", "write_tiles")
   ), "wsi_tile", list(
@@ -535,7 +544,7 @@
     ),
     timeout_secs = 3600L,
     env = rosetta_mkl_env,
-    allowed_params = c("dataset_id", "image_asset", "image_root",
+    allowed_params = c("dataset_id", "worker_context", "image_asset", "image_root",
                         "model", "bins")
   ), "image_embeddings", list(
     "-m", "dsimaging_embeddings",
@@ -572,7 +581,18 @@
 
   root <- file.path(.imaging_analysis_home(), "runtime", kind, signature)
   marker <- file.path(root, ".complete")
-  if (file.exists(marker)) return(root)
+  if (.imaging_runner_path_is_symlink(root)) {
+    stop("dsImaging runtime directory must not be a symbolic link.",
+         call. = FALSE)
+  }
+  if (file.exists(marker)) {
+    suppressWarnings(tryCatch(
+      Sys.chmod(root, "0770", use_umask = FALSE),
+      error = function(e) FALSE))
+    .assert_imaging_runner_permissions(
+      root, "0770", "dsImaging runtime directory", directory = TRUE)
+    return(root)
+  }
 
   tmp <- paste0(root, ".tmp.", Sys.getpid())
   unlink(tmp, recursive = TRUE, force = TRUE)
@@ -602,7 +622,11 @@
   }
   writeLines(format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC"),
     marker)
-  tryCatch(Sys.chmod(root, "0777", use_umask = FALSE), error = function(e) NULL)
+  suppressWarnings(tryCatch(
+    Sys.chmod(root, "0770", use_umask = FALSE),
+    error = function(e) FALSE))
+  .assert_imaging_runner_permissions(
+    root, "0770", "dsImaging runtime directory", directory = TRUE)
   root
 }
 
@@ -635,6 +659,10 @@
   image <- candidates[nzchar(candidates)]
   image <- if (length(image) > 0) image[1] else ""
   if (!nzchar(image)) return(NULL)
+  if (!grepl("@sha256:[0-9a-fA-F]{64}$", image)) {
+    stop("Clinical imaging runner containers require an immutable sha256 ",
+         "image reference.", call. = FALSE)
+  }
   list(
     image = image,
     runtime = .imaging_analysis_option("container_runtime", "auto"),
@@ -658,14 +686,65 @@
 #' Write a runner YAML to DSHPC_HOME/runners/
 #' @keywords internal
 .write_runner_yaml <- function(runners_dir, name, config) {
+  .assert_imaging_runner_permissions(
+    runners_dir, "0770", "dsHPC runners directory", directory = TRUE)
   path <- file.path(runners_dir, paste0(name, ".yml"))
-  if (requireNamespace("yaml", quietly = TRUE)) {
-    writeLines(yaml::as.yaml(config), path)
-  } else {
-    writeLines(jsonlite::toJSON(config, auto_unbox = TRUE, pretty = TRUE), path)
+  if (.imaging_runner_path_is_symlink(path)) {
+    stop("Runner configuration must not be a symbolic link.", call. = FALSE)
   }
-  if (!file.exists(path))
+  tmp <- tempfile(pattern = paste0(".", name, "-"), tmpdir = runners_dir,
+                  fileext = ".yml")
+  on.exit(unlink(tmp, force = TRUE), add = TRUE)
+  if (requireNamespace("yaml", quietly = TRUE)) {
+    writeLines(yaml::as.yaml(config), tmp)
+  } else {
+    writeLines(jsonlite::toJSON(config, auto_unbox = TRUE, pretty = TRUE), tmp)
+  }
+  suppressWarnings(tryCatch(
+    Sys.chmod(tmp, "0660", use_umask = FALSE),
+    error = function(e) FALSE))
+  .assert_imaging_runner_permissions(
+    tmp, "0660", "Temporary runner configuration")
+  if (.imaging_runner_path_is_symlink(path)) {
+    stop("Runner configuration must not be a symbolic link.", call. = FALSE)
+  }
+  if (!file.rename(tmp, path) || !file.exists(path)) {
     stop("Failed to write runner YAML: ", path, call. = FALSE)
-  tryCatch(Sys.chmod(path, "0666"), error = function(e) NULL)
+  }
+  if (.imaging_runner_path_is_symlink(path)) {
+    stop("Runner configuration must not be a symbolic link.", call. = FALSE)
+  }
+  .assert_imaging_runner_permissions(
+    path, "0660", "Runner configuration")
   invisible(path)
+}
+
+#' @keywords internal
+.imaging_runner_path_is_symlink <- function(path) {
+  target <- suppressWarnings(Sys.readlink(path))
+  length(target) == 1L && !is.na(target) && nzchar(target)
+}
+
+#' Require a shared owner/group mode without world-writable runner state
+#' @keywords internal
+.assert_imaging_runner_permissions <- function(path, expected, label,
+                                               directory = FALSE) {
+  if (.imaging_runner_path_is_symlink(path)) {
+    stop(label, " must not be a symbolic link.", call. = FALSE)
+  }
+  info <- tryCatch(file.info(path), error = function(e) NULL)
+  if (is.null(info) || nrow(info) != 1L || is.na(info$isdir) ||
+      !identical(isTRUE(info$isdir), isTRUE(directory)) ||
+      is.na(info$mode)) {
+    stop(label, " is unavailable.", call. = FALSE)
+  }
+  expected_bits <- strtoi(expected, base = 8L)
+  mode_bits <- bitwAnd(as.integer(info$mode), strtoi("0777", base = 8L))
+  if (bitwAnd(mode_bits, strtoi("0002", base = 8L)) != 0L) {
+    stop(label, " must not be world-writable.", call. = FALSE)
+  }
+  if (!identical(mode_bits, expected_bits)) {
+    stop(label, " must have mode ", expected, ".", call. = FALSE)
+  }
+  invisible(TRUE)
 }

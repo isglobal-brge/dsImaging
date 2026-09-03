@@ -57,7 +57,8 @@ test_that("validate_imaging_dataset passes for structurally valid manifest", {
   tmp_images <- tempdir()
   on.exit(unlink(tmp_meta))
 
-  writeLines("sample_id,label,image_relpath\n1,0,img1.png", tmp_meta)
+  writeLines("sample_id,patient_id,label,image_relpath\n1,p1,0,img1.png",
+    tmp_meta)
 
   manifest <- list(
     schema_version = 1,
@@ -65,7 +66,9 @@ test_that("validate_imaging_dataset passes for structurally valid manifest", {
     modality = "image",
     task_types = list("classification"),
     compatible_templates = list("pytorch_resnet18"),
-    metadata = list(uri = tmp_meta, format = "csv"),
+    metadata = list(uri = tmp_meta, format = "csv", id_col = "sample_id",
+      privacy_unit = "patient", privacy_unit_col = "patient_id",
+      privacy_unit_canonicalization = "trim-utf8-v2"),
     assets = list(
       images = list(kind = "image_root", uri = tmp_images,
                      path_col = "image_relpath")
@@ -85,7 +88,9 @@ test_that("validate_imaging_dataset validates S3 assets through backend", {
     modality = "ct",
     metadata = list(
       uri = "s3://imaging-data/datasets/test/metadata/samples.parquet",
-      format = "parquet"
+      format = "parquet", id_col = "sample_id",
+      privacy_unit = "patient", privacy_unit_col = "patient_id",
+      privacy_unit_canonicalization = "trim-utf8-v2"
     ),
     assets = list(
       images = list(

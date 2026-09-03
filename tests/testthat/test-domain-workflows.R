@@ -1,39 +1,196 @@
 test_that("radiomics domain method composes a labelled dsHPC job", {
   submitted <- NULL
   testthat::local_mocked_bindings(
-    find_asset_by_hash = function(dataset_id, derivation_hash) NULL,
-    contentHashDS = function(resource_name) {
+    .authorized_imaging_dataset = function(handle_symbol, dataset_id = NULL,
+                                           owner_env = NULL) {
+      list(dataset_id = "lung1", handle = list(collection_snapshot = list(
+        version = 1L, seal = strrep("a", 64), artifacts = list(),
+        records = list())), manifest = list(),
+        backend = NULL, privacy = list(), n_privacy_units = 3L)
+    },
+    .register_imaging_worker_context = function(authorized,
+                                                asset_names = NULL) {
+      paste0("dsctx_", strrep("a", 64))
+    },
+    find_asset_by_hash = function(dataset_id, derivation_hash,
+                                  collection_seal) NULL,
+    .content_hash_for_resource = function(resource_name) {
       list(resource_name = resource_name, content_hash = NA_character_,
         updated_at = NA_character_, source = "unsupported")
     },
+    .imaging_submit_job = function(job, ...) {
+      submitted <<- job
+      structure(list(capability = paste0("imgw_", strrep("1", 64))),
+        class = "dsimaging_workflow_ref")
+    },
     .package = "dsImaging"
   )
-  testthat::local_mocked_bindings(
-    hpcSubmitDS = function(spec_encoded) {
-      submitted <<- dsImaging:::.dsr_decode(spec_encoded)
-      list(job_id = submitted$job_id, state = "PENDING",
-        name = submitted$name, submitted_at = "2026-05-25T10:00:00Z")
-    },
-    .package = "dsHPC"
-  )
 
-  req <- list(dataset_id = "lung1", image_asset = "images",
+  req <- list(handle = "img", dataset_id = "lung1", image_asset = "images",
     mask_asset = "gtv", profile = list(name = "demo_ct_firstorder_v1",
-      bin_width = 25, force2D = FALSE, feature_classes = "firstorder"),
-    job_id = "job_domain_test")
-  out <- imagingProcessRadiomicsAssetDS(dsImaging:::.dsr_encode(req))
+      bin_width = 25, force2D = FALSE, feature_classes = "firstorder"))
+  encoded <- dsImaging:::.dsr_encode(req)
+  out <- imagingProcessRadiomicsAssetDS(encoded)
 
-  expect_equal(out$job_id, "job_domain_test")
+  expect_s3_class(out, "dsimaging_workflow_ref")
+  expect_false("job_id" %in% names(out))
+  expect_null(submitted$job_id)
   expect_equal(submitted$label, "dsImaging")
+  expect_identical(submitted$visibility, "private")
   expect_equal(submitted$steps[[2]]$runner, "pyradiomics_extract")
   expect_equal(submitted$steps[[3]]$publish_kind, "imaging_radiomics_asset")
+  expect_match(submitted$steps[[2]]$config$dataset_id,
+               "^dsctx_[0-9a-f]{64}$")
+  expect_identical(anyDuplicated(names(submitted$steps[[2]]$config)), 0L)
+})
+
+test_that("workflow configs reject analyst paths and orchestration controls", {
+  testthat::local_mocked_bindings(
+    .authorized_imaging_dataset = function(handle_symbol, dataset_id = NULL,
+                                           owner_env = NULL) {
+      list(dataset_id = "lung1", handle = list(), manifest = list(),
+        backend = NULL, privacy = list(), n_privacy_units = 3L)
+    },
+    .package = "dsImaging"
+  )
+
+  base <- list(handle = "img", dataset_id = "lung1",
+    runner = "image_preprocess", config = list(image_asset = "images"),
+    output_asset = "preprocessed")
+  for (field in c("image_root", "worker_context", "sample_id",
+                  "generation_id", "dataset_id")) {
+    request <- base
+    request$config[[field]] <- "/private/other-collection"
+    encoded <- dsImaging:::.dsr_encode(request)
+    expect_error(
+      imagingProcessAssetWorkflowDS(encoded),
+      "unsupported field", fixed = TRUE)
+  }
+
+  request <- base
+  request$config$image_asset <- "../../other-collection"
+  encoded <- dsImaging:::.dsr_encode(request)
+  expect_error(
+    imagingProcessAssetWorkflowDS(encoded),
+    "logical server-side name", fixed = TRUE)
+
+  request <- base
+  request$publish_kind <- "raw_file"
+  encoded <- dsImaging:::.dsr_encode(request)
+  expect_error(
+    imagingProcessAssetWorkflowDS(encoded),
+    "unsupported field", fixed = TRUE)
+})
+
+test_that("workflows without exact patient association fail closed", {
+  for (runner in c("rt_convert", "rt_dose_plan", "wsi_tile")) {
+    expect_error(
+      dsImaging:::.imaging_runner_contract(runner),
+      "exact admitted sample mapping", fixed = TRUE)
+  }
+  expect_error(
+    dsImaging:::.imaging_segmenter_spec(list(
+      provider = "monai", bundle_name = "example")),
+    "exact per-sample contract", fixed = TRUE)
+  expect_error(
+    dsImaging:::.imaging_runner_config(
+      "imaging_qc_visuals",
+      list(image_asset = "images", max_images = 2L)),
+    "unsupported field", fixed = TRUE)
+  expect_identical(
+    dsImaging:::.imaging_runner_contract("dicom_convert")$asset_type,
+    "image_root")
+  expect_identical(
+    dsImaging:::.imaging_runner_config("dicom_convert", list())$converter,
+    "simpleitk")
+  expect_error(dsImaging:::.imaging_runner_config(
+    "dicom_convert", list(converter = "dcm2niix")))
+})
+
+test_that("segmenter and profile specifications cannot select server paths", {
+  expect_error(
+    dsImaging:::.imaging_segmenter_spec(list(
+      provider = "nnunetv2", model_name = "/srv/private/model", fold = "all")),
+    "logical server-side name", fixed = TRUE)
+  expect_error(
+    dsImaging:::.imaging_segmenter_spec(list(
+      provider = "totalsegmentator", task = "total",
+      worker_context = "/srv/private/context.yaml")),
+    "unsupported field", fixed = TRUE)
+  expect_error(
+    dsImaging:::.imaging_profile_spec(list(
+      name = "demo_ct_firstorder_v1", settings_file = "/tmp/custom.yaml")),
+    "unsupported field", fixed = TRUE)
+  expect_error(
+    dsImaging:::.imaging_profile_spec(list(name = "/tmp/custom.yaml")),
+    "logical server-side name", fixed = TRUE)
+})
+
+test_that("generic workflows build publication fields server-side", {
+  submitted <- NULL
+  context_id <- paste0("dsctx_", strrep("b", 64))
+  testthat::local_mocked_bindings(
+    .authorized_imaging_dataset = function(handle_symbol, dataset_id = NULL,
+                                           owner_env = NULL) {
+      list(dataset_id = "lung1", handle = list(), manifest = list(),
+        backend = NULL, privacy = list(), n_privacy_units = 3L)
+    },
+    .register_imaging_worker_context = function(authorized,
+                                                asset_names = NULL) context_id,
+    .content_hash_for_resource = function(resource_name) NULL,
+    .imaging_submit_job = function(job, ...) {
+      submitted <<- job
+      structure(list(capability = paste0("imgw_", strrep("2", 64))),
+        class = "dsimaging_workflow_ref")
+    },
+    .package = "dsImaging"
+  )
+
+  request <- list(handle = "img", dataset_id = "lung1",
+    runner = "image_preprocess",
+    config = list(image_asset = "images", operations = "normalize"),
+    output_asset = "preprocessed", alias = "normalized")
+  encoded <- dsImaging:::.dsr_encode(request)
+  imagingProcessAssetWorkflowDS(encoded)
+
+  run <- submitted$steps[[2]]
+  publish <- submitted$steps[[3]]
+  expect_identical(run$runner, "dsimaging_image_preprocess")
+  expect_identical(publish$runner, "dsimaging_image_preprocess")
+  expect_identical(run$config$dataset_id, context_id)
+  expect_identical(run$config$worker_context,
+    dsImaging:::.imaging_worker_context_file(context_id))
+  expect_identical(anyDuplicated(names(run$config)), 0L)
+  expect_identical(publish$asset_type, "image_root")
+  expect_identical(publish$publish_kind, "imaging_asset")
+  expect_identical(submitted$visibility, "private")
+  expect_false(any(c("sample_id", "generation_id") %in% names(run$config)))
+})
+
+test_that("analytical workflow requests cannot select global visibility", {
+  encoded <- dsImaging:::.dsr_encode(list(visibility = "global"))
+  methods <- list(
+    imagingProcessRadiomicsCollectionDS,
+    imagingProcessRadiomicsAssetDS,
+    imagingProcessSegmentationCollectionDS,
+    imagingProcessSegmentAndExtractDS,
+    imagingProcessAssetWorkflowDS,
+    imagingProcessQcCollectionDS
+  )
+
+  for (method in methods) {
+    expect_error(method(encoded), "unsupported field", fixed = TRUE)
+  }
+  expect_error(imagingConvertCollectionDS(encoded),
+               "unsupported field", fixed = TRUE)
 })
 
 test_that("profile aggregate methods expose safe profile metadata", {
   profiles <- imagingListProfilesDS()
   expect_s3_class(profiles, "data.frame")
   if (nrow(profiles) > 0L) {
-    desc <- imagingDescribeProfileDS(profiles$profile_name[[1]])
+    profile_name <- profiles$profile_name[[1]]
+    desc <- imagingDescribeProfileDS(profile_name)
     expect_true(is.list(desc))
     expect_true(nzchar(desc$name))
   }
@@ -47,4 +204,152 @@ test_that("domain submissions reject missing labels before dsHPC submit", {
     )),
     "non-empty label"
   )
+})
+
+test_that("job workflows expose only coarse status and their exact private asset", {
+  db_path <- tempfile(fileext = ".sqlite")
+  withr::local_options(list(dsimaging.asset_db = db_path))
+  job_id <- "job_11111111-2222-4333-8444-555555555555"
+  db <- dsImaging:::.asset_db_connect()
+  asset_id <- dsImaging:::.asset_register(
+    db, "lung1", "feature_table", tempfile("features-"),
+    derivation_hash = "expected-hash", created_by_job = job_id,
+    visibility = "private")
+  dsImaging:::.asset_db_close(db)
+
+  session <- new.env(parent = globalenv())
+  ref <- dsImaging:::.register_imaging_workflow(list(
+    action = "job", dataset_id = "lung1",
+    worker_context_id = paste0("dsctx_", strrep("a", 64)),
+    output_asset_kind = "feature_table", derivation_hash = "expected-hash",
+    job = list(job_id = job_id, .dshpc_capability = "secret")), session)
+  assign("workflow", ref, envir = session)
+  assign("imagingWorkflowStatusDS", dsImaging::imagingWorkflowStatusDS,
+         envir = session)
+  cleaned <- character()
+  testthat::local_mocked_bindings(
+    hpcStatusDS = function(job) list(state = "FINISHED", is_done = TRUE),
+    .package = "dsHPC"
+  )
+  testthat::local_mocked_bindings(
+    .unregister_imaging_worker_context = function(context_id) {
+      cleaned <<- c(cleaned, context_id)
+      invisible(TRUE)
+    },
+    .package = "dsImaging"
+  )
+
+  status <- eval(quote(imagingWorkflowStatusDS("workflow")), envir = session)
+  expect_named(status, c("state", "is_done", "asset_id"))
+  expect_identical(status$asset_id, asset_id)
+  expect_length(cleaned, 1L)
+  # Resolve explicitly in the owning environment, as DataSHIELD does.
+  stored <- eval(quote(dsImaging:::.resolve_imaging_workflow("workflow")),
+                 envir = session)
+  expect_identical(stored$action, "terminal")
+  expect_null(stored$job)
+  expect_null(stored$worker_context_id)
+})
+
+test_that("a successful job without its exact published asset fails closed", {
+  db_path <- tempfile(fileext = ".sqlite")
+  withr::local_options(list(dsimaging.asset_db = db_path))
+  session <- new.env(parent = globalenv())
+  ref <- dsImaging:::.register_imaging_workflow(list(
+    action = "job", dataset_id = "lung1",
+    worker_context_id = paste0("dsctx_", strrep("d", 64)),
+    output_asset_kind = "feature_table",
+    job = list(
+      job_id = "job_11111111-2222-4333-8444-666666666666",
+      .dshpc_capability = "secret")), session)
+  assign("workflow", ref, envir = session)
+  assign("imagingWorkflowStatusDS", dsImaging::imagingWorkflowStatusDS,
+         envir = session)
+  testthat::local_mocked_bindings(
+    hpcStatusDS = function(job) list(state = "FINISHED", is_done = TRUE),
+    .package = "dsHPC"
+  )
+  testthat::local_mocked_bindings(
+    .unregister_imaging_worker_context = function(context_id) invisible(TRUE),
+    .package = "dsImaging"
+  )
+
+  expect_error(
+    eval(quote(imagingWorkflowStatusDS("workflow")), envir = session),
+    "Workflow result is unavailable", fixed = TRUE)
+  status <- eval(quote(imagingWorkflowStatusDS("workflow")), envir = session)
+  expect_identical(status, list(state = "FAILED", is_done = TRUE))
+})
+
+test_that("active workflows cannot be destroyed and terminal cleanup is exact", {
+  session <- new.env(parent = globalenv())
+  ref <- dsImaging:::.register_imaging_workflow(list(
+    action = "job", dataset_id = "lung1",
+    worker_context_id = paste0("dsctx_", strrep("b", 64)),
+    output_asset_kind = "mask_root",
+    job = list(
+      job_id = "job_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      .dshpc_capability = "secret")), session)
+  assign("workflow", ref, envir = session)
+  assign("imagingWorkflowDestroyDS", dsImaging::imagingWorkflowDestroyDS,
+         envir = session)
+  testthat::local_mocked_bindings(
+    hpcStatusDS = function(job) list(state = "RUNNING", is_done = FALSE),
+    .package = "dsHPC"
+  )
+  expect_error(
+    eval(quote(imagingWorkflowDestroyDS("workflow")), envir = session),
+    "active imaging workflow")
+  expect_true(exists("workflow", envir = session, inherits = FALSE))
+  expect_true(exists(ref$capability,
+    envir = dsImaging:::.imaging_workflow_registry, inherits = FALSE))
+})
+
+test_that("workflow destroy returns an idempotent transport tombstone", {
+  session <- new.env(parent = globalenv())
+  reference <- dsImaging:::.register_imaging_workflow(
+    list(action = "reuse_asset", dataset_id = "lung1"), session)
+  assign("workflow", reference, envir = session)
+  assign("imagingWorkflowDestroyDS", dsImaging::imagingWorkflowDestroyDS,
+         envir = session)
+
+  tombstone <- eval(
+    quote(imagingWorkflowDestroyDS("workflow")), envir = session)
+  expect_identical(tombstone, reference)
+  expect_false(exists("workflow", envir = session, inherits = FALSE))
+  expect_false(exists(reference$capability,
+    envir = dsImaging:::.imaging_workflow_registry, inherits = FALSE))
+
+  assign("workflow", tombstone, envir = session)
+  retry <- eval(quote(imagingWorkflowDestroyDS("workflow")), envir = session)
+  expect_identical(retry, reference)
+  expect_false(exists("workflow", envir = session, inherits = FALSE))
+})
+
+test_that("worker context cleanup removes only its exact registry entry", {
+  root <- withr::local_tempdir()
+  registry_path <- file.path(root, "registry.yaml")
+  context_root <- file.path(root, "contexts")
+  dir.create(context_root)
+  context_id <- paste0("dsctx_", strrep("c", 64))
+  manifest_path <- file.path(context_root, paste0(context_id,
+    ".manifest.yaml"))
+  context_path <- file.path(context_root, paste0(context_id,
+    ".context.yaml"))
+  yaml::write_yaml(list(schema_version = 1L), manifest_path)
+  yaml::write_yaml(list(schema_version = 1L), context_path)
+  withr::local_options(list(
+    dsimaging.registry_backend = "file",
+    dsimaging.registry_path = registry_path,
+    dsimaging.worker_context_dir = context_root
+  ))
+  dsImaging:::register_dataset(
+    context_id, manifest_path, dsImaging::storage_backend("file"))
+  expect_true(dsImaging:::.unregister_imaging_worker_context(context_id))
+  expect_false(file.exists(manifest_path))
+  expect_false(file.exists(context_path))
+  expect_false(context_id %in% names(dsImaging:::.load_registry()))
+  expect_error(
+    dsImaging:::.unregister_imaging_worker_context("../other"),
+    "Invalid imaging worker context")
 })

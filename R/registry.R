@@ -48,7 +48,8 @@
 #'
 #' @keywords internal
 register_dataset <- function(dataset_id, manifest_uri, backend,
-                             publish = NULL, enabled = TRUE) {
+                             publish = NULL, enabled = TRUE,
+                             source_dataset_id = NULL) {
   if (is.null(dataset_id) || !nzchar(dataset_id))
     stop("dataset_id is required.", call. = FALSE)
   if (is.null(manifest_uri) || !nzchar(manifest_uri))
@@ -64,30 +65,44 @@ register_dataset <- function(dataset_id, manifest_uri, backend,
     return(invisible(FALSE))
   }
 
-  registry <- tryCatch(.load_registry(), error = function(e) list())
+  dir.create(dirname(registry_path), recursive = TRUE, showWarnings = FALSE,
+             mode = "0770")
+  tryCatch(Sys.chmod(dirname(registry_path), "0770", use_umask = FALSE),
+           error = function(e) NULL)
+  lock_path <- paste0(registry_path, ".lock")
+  deadline <- Sys.time() + 5
+  repeat {
+    if (isTRUE(dir.create(lock_path, showWarnings = FALSE, mode = "0700"))) {
+      break
+    }
+    if (Sys.time() >= deadline) {
+      stop("Dataset registry is busy.", call. = FALSE)
+    }
+    Sys.sleep(0.02)
+  }
+  on.exit(unlink(lock_path, recursive = TRUE, force = TRUE), add = TRUE)
+
+  registry <- if (file.exists(registry_path)) .load_registry() else list()
   cfg <- backend$config %||% list()
   entry <- list(
     enabled = isTRUE(enabled),
     backend = backend$type,
+    manifest = manifest_uri,
     manifest_uri = manifest_uri,
     endpoint = cfg$endpoint %||% NULL,
     credentials_ref = cfg$credentials_ref %||% NULL,
     region = cfg$region %||% NULL
   )
+  if (!is.null(source_dataset_id)) {
+    entry$dataset_id <- as.character(source_dataset_id)
+  }
 
-  if (identical(backend$type, "s3")) {
-    creds <- tryCatch(.resolve_s3_credentials(cfg$credentials_ref),
-      error = function(e) NULL)
-    if (!is.null(creds)) {
-      entry$endpoint <- cfg$endpoint %||% creds$endpoint
-      entry$region <- cfg$region %||% creds$region
-      entry$credentials_ref <- cfg$credentials_ref %||%
-        paste0("resource_", dataset_id)
-      store <- getOption("dsimaging.credentials", list())
-      store[[entry$credentials_ref]] <- creds
-      options(dsimaging.credentials = store)
-      .persist_s3_credential(entry$credentials_ref, creds)
-    }
+  if (identical(backend$type, "s3") &&
+      (!is.null(cfg$resource) ||
+       any(c("access_key", "secret_key", "identity", "secret", "password") %in%
+           names(cfg)))) {
+    stop("Dataset registry requires administrator-managed storage credentials.",
+         call. = FALSE)
   }
 
   if (!is.null(publish)) {
@@ -103,9 +118,15 @@ register_dataset <- function(dataset_id, manifest_uri, backend,
 
   registry[[dataset_id]] <- entry
   raw <- c(list(schema_version = 1L), registry)
-  dir.create(dirname(registry_path), recursive = TRUE, showWarnings = FALSE)
-  yaml::write_yaml(raw, registry_path)
-  tryCatch(Sys.chmod(registry_path, "0660"), error = function(e) NULL)
+  tmp <- tempfile(pattern = ".registry-", tmpdir = dirname(registry_path),
+                  fileext = ".yaml")
+  on.exit(unlink(tmp, force = TRUE), add = TRUE)
+  yaml::write_yaml(raw, tmp)
+  tryCatch(Sys.chmod(tmp, "0660", use_umask = FALSE),
+           error = function(e) NULL)
+  if (!file.rename(tmp, registry_path)) {
+    stop("Could not atomically update the dataset registry.", call. = FALSE)
+  }
   invisible(TRUE)
 }
 

@@ -6,7 +6,7 @@ import csv
 import os
 import sys
 
-from dsimaging_utils import cfg, cfg_int, image_files, package_versions, resolve_asset_path, strip_extensions, write_json
+from dsimaging_utils import IMAGE_EXTS, cfg, cfg_int, mapped_sample_files, package_versions, write_json
 
 
 def torch_device():
@@ -65,17 +65,23 @@ def main():
     args = parser.parse_args()
     os.makedirs(args.output, exist_ok=True)
 
-    image_root = resolve_asset_path(cfg("image_asset", "images"), "images", cfg("image_root"))
+    image_asset = cfg("image_asset", "images")
     bins = cfg_int("bins", 32)
     model = cfg("model", "intensity_histogram")
-    images = image_files(image_root)
+    try:
+        images = mapped_sample_files(
+            image_asset, "images", artifact_types=("image_root",),
+            extensions=IMAGE_EXTS,
+        )
+    except RuntimeError:
+        print("ERROR: Admitted imaging inputs are unavailable", file=sys.stderr)
+        sys.exit(1)
     if not images:
         print("ERROR: No images found for embeddings", file=sys.stderr)
         sys.exit(1)
 
     rows = []
-    for path in images:
-        sid = strip_extensions(os.path.basename(path))
+    for path, sid in images:
         vec = image_vector(path, bins)
         row = {"sample_id": sid, "model": model}
         for i, value in enumerate(vec):

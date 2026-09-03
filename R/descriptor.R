@@ -14,6 +14,7 @@ imaging_dataset_descriptor <- function(manifest) {
   if (is.null(manifest$dataset_id)) {
     stop("Manifest must include dataset_id.", call. = FALSE)
   }
+  .imaging_privacy_contract(manifest)
 
   desc <- list(
     dataset_id  = manifest$dataset_id,

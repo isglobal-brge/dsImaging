@@ -13,28 +13,32 @@
 
 #' Scan a Collection for Radiomics Processing
 #'
-#' DataSHIELD aggregate method. Computes or reads image fingerprints, claims or
-#' resumes a dsImaging generation, and returns the sample ids that should be
-#' submitted as dsHPC work.
+#' Server-internal orchestration helper. Computes or reads image fingerprints,
+#' claims or resumes a dsImaging generation, and returns the exact sample ids
+#' that should be submitted as dsHPC work. Registered methods keep this payload
+#' behind a session-bound workflow capability.
 #'
-#' @param dataset_id_enc Encoded dataset id or dataset handle.
-#' @param segmenter_enc Encoded segmenter specification.
-#' @param profile_enc Encoded radiomics profile specification.
-#' @param visibility_enc Encoded visibility setting for the derived asset.
+#' @param dataset_id Dataset id from a session-authorized handle.
+#' @param segmenter Validated segmenter specification.
+#' @param profile Validated radiomics profile.
+#' @param visibility Derived-asset visibility.
+#' @param resolved_override Optional session-authorized dataset context.
 #' @return Named list describing whether an existing asset/generation was
 #'   reused or a new generation was created, plus pending sample metadata.
-#' @export
-imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
-                                      profile_enc, visibility_enc) {
-  dataset_id <- .dsr_decode(dataset_id_enc)
-  segmenter  <- .dsr_decode(segmenter_enc)
-  profile    <- .dsr_decode(profile_enc)
-  visibility <- .dsr_decode(visibility_enc)
+#' @keywords internal
+.imaging_radiomics_scan_collection <- function(dataset_id, segmenter, profile,
+                                               visibility,
+                                               resolved_override = NULL) {
+  dataset_id <- .required_scalar(dataset_id, "dataset_id")
+  segmenter <- .imaging_segmenter_spec(segmenter)
+  profile <- .imaging_profile_spec(profile)
+  visibility <- .imaging_visibility(visibility)
 
   # dsImaging is in Imports, always available
 
-  # Resolve dataset (returns backend + manifest from handle or registry)
-  resolved <- .resolve_ds(dataset_id)
+  # Public workflows pass a session-authorized handle context. Registry
+  # resolution is retained only for trusted server-side recovery paths.
+  resolved <- resolved_override %||% .resolve_ds(dataset_id)
   if (is.null(resolved))
     stop("Cannot resolve dataset: ", dataset_id, call. = FALSE)
 
@@ -44,32 +48,53 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
     manifest <- parse_manifest(resolved$manifest_uri, resolved$backend)
   if (is.null(manifest))
     stop("Cannot load manifest for dataset: ", dataset_id, call. = FALSE)
-  dataset_id <- dataset_id %||% manifest$dataset_id
+  if (!identical(as.character(dataset_id), manifest$dataset_id)) {
+    stop("Dataset context does not match the requested collection.",
+         call. = FALSE)
+  }
+  admission <- .imaging_privacy_admission(manifest, resolved$backend)
+  pinned_snapshot <- resolved$collection_snapshot %||%
+    (resolved$handle %||% list())$collection_snapshot
+  current_snapshot <- .new_imaging_collection_snapshot(
+    manifest, resolved$backend, admission)
+  if (!is.null(pinned_snapshot) &&
+      !identical(.validate_imaging_collection_snapshot(pinned_snapshot)$seal,
+                 current_snapshot$seal)) {
+    stop("Imaging dataset no longer matches its admitted collection snapshot.",
+         call. = FALSE)
+  }
+  resolved$collection_snapshot <- current_snapshot
 
   image_root <- manifest$assets$images$uri
   mask_hashes <- .existing_mask_hashes(resolved, manifest, segmenter)
+  if (identical(segmenter$provider, "existing_mask_asset")) {
+    .assert_exact_imaging_roster(names(mask_hashes), admission$roster,
+      context = "Existing mask asset")
+  }
 
-  # Fingerprint: for S3, use hash index. For file, use Python script.
-  if (resolved$backend$type == "s3") {
-    hash_index_uri <- manifest$content_hash_index$uri
-    if (is.null(hash_index_uri))
-      stop("S3 dataset requires content_hash_index in manifest.", call. = FALSE)
-    idx <- read_hash_index(resolved$backend, hash_index_uri)
-    fp_result <- diff_hash_index(idx, dataset_id)
-    # Store new hashes in local SQLite for future diffs
-    new_changed <- c(fp_result$new, fp_result$changed)
-    if (length(new_changed) > 0) {
-      hashes <- vapply(new_changed, function(sid)
-        fp_result$content_hashes[[sid]] %||% "", character(1))
-      valid <- nzchar(hashes)
-      if (any(valid))
-        store_content_hashes(dataset_id, new_changed[valid], hashes[valid])
+  # Diff only the exact sample-to-object mapping already validated and pinned
+  # in the admitted snapshot. Re-scanning a directory and deriving patient
+  # identifiers from filenames would create a second, weaker roster.
+  snapshot_records <- resolved$collection_snapshot$records
+  snapshot_index <- data.frame(
+    sample_id = vapply(snapshot_records, `[[`, character(1), "sample_id"),
+    content_hash = vapply(snapshot_records, `[[`, character(1),
+                          "content_hash"),
+    stringsAsFactors = FALSE)
+  collection_seal <- (resolved$collection_snapshot %||%
+    (resolved$handle %||% list())$collection_snapshot)$seal %||% NULL
+  collection_seal <- .asset_collection_seal(collection_seal, required = TRUE)
+  fp_result <- diff_hash_index(snapshot_index, dataset_id, collection_seal)
+  fp_result$fingerprints <- list()
+  new_changed <- c(fp_result$new, fp_result$changed)
+  if (length(new_changed) > 0L) {
+    hashes <- vapply(new_changed, function(sid)
+      fp_result$content_hashes[[sid]] %||% "", character(1))
+    valid <- nzchar(hashes)
+    if (any(valid)) {
+      store_content_hashes(
+        dataset_id, collection_seal, new_changed[valid], hashes[valid])
     }
-  } else {
-    if (!dir.exists(image_root))
-      stop("Image root not found: ", image_root, call. = FALSE)
-    fp_result <- compute_collection_fingerprints(dataset_id, image_root,
-      compute_content_hash = TRUE)
   }
 
   # Build processor identity for derivation hashing
@@ -85,14 +110,17 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
     }, character(1))
     hash_source <- as.list(stats::setNames(paired_hashes, names(hash_source)))
   }
+  hash_source <- .ordered_sample_hashes(hash_source)
   collection_hash <- compute_derivation_hash(
     dataset_id = dataset_id,
+    collection_seal = collection_seal,
+    privacy_roster_hash = admission$roster$roster_hash,
     processor = processor,
     segmenter = segmenter,
     profile = profile,
     profile_signature = profile_signature,
     mask_asset = segmenter$mask_asset %||% NULL,
-    image_hashes = sort(unlist(hash_source))
+    image_hashes = hash_source
   )
 
   # Claim or reuse generation
@@ -101,7 +129,13 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
   # at submit time via derivation hash check in imagingRadiomicsSubmitBatchDS.
   all_sample_ids <- names(fp_result$content_hashes)
   if (length(all_sample_ids) == 0) all_sample_ids <- names(fp_result$fingerprints)
-  total_n <- fp_result$total
+  if (anyDuplicated(all_sample_ids) ||
+      !setequal(all_sample_ids, admission$sample_ids)) {
+    stop("Image collection does not match the admitted dataset metadata.",
+         call. = FALSE)
+  }
+  all_sample_ids <- admission$sample_ids
+  total_n <- length(all_sample_ids)
 
   generation_spec <- list(
     processor = processor,
@@ -109,26 +143,25 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
     profile_signature = profile_signature,
     profile_name = profile$name,
     segmenter = segmenter,
-    mask_hash_index = mask_hashes,
-    dataset_context = .dataset_context_from_resolved(resolved, manifest)
+    privacy_roster = admission$roster,
+    dataset_context = .dataset_context_from_resolved(
+      resolved, manifest, admission$roster)
   )
 
   gen_result <- claim_or_reuse_generation(
     dataset_id = dataset_id,
     kind = "radiomics_collection",
     derivation_hash = collection_hash,
+    collection_seal = collection_seal,
     visibility = visibility,
     owner_id = .dsr_owner_id(),
     expected_n = total_n,
     spec = generation_spec
   )
 
-  # Collection workflow counts are exact operational telemetry: the same
-  # API surface already returns per-sample identifiers (pending_ids,
-  # failed_samples) to the caller, so power-of-2 bucketing here disclosed
-  # nothing extra while corrupting the displayed accounting (e.g. a 6-image
-  # collection reported as "8/8"). Dataset metadata endpoints keep
-  # safe_metadata_count().
+  # Internal scheduling and publication require exact full-roster accounting.
+  # Registered analyst methods project this structure to coarse state and never
+  # return these counts or identifiers.
   if (gen_result$action == "reuse_asset") {
     return(list(
       action = "reuse_asset",
@@ -143,7 +176,8 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
   generation_id <- gen_result$generation_id
 
   if (gen_result$action == "reuse_generation") {
-    .ensure_generation_dataset_context(generation_id, resolved, manifest)
+    .ensure_generation_dataset_context(
+      generation_id, resolved, manifest, admission$roster)
 
     # Resume: reconcile finished/failed jobs first, then check pending items.
     .sync_generation_jobs(generation_id)
@@ -202,6 +236,20 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
   )
 }
 
+#' Preserve the exact sample-to-content association in derivation hashes
+#' @keywords internal
+.ordered_sample_hashes <- function(hashes) {
+  hashes <- unlist(hashes, use.names = TRUE)
+  ids <- names(hashes)
+  if (!is.character(ids) || length(ids) == 0L || anyNA(ids) ||
+      any(!nzchar(ids)) || anyDuplicated(ids) || anyNA(hashes) ||
+      any(!nzchar(as.character(hashes)))) {
+    stop("Collection content mapping is invalid.", call. = FALSE)
+  }
+  order <- order(ids, method = "radix")
+  as.list(stats::setNames(as.character(hashes[order]), ids[order]))
+}
+
 # ---------------------------------------------------------------------------
 # 2. Submit batch: create per-image dsHPC jobs for pending samples
 # ---------------------------------------------------------------------------
@@ -211,34 +259,38 @@ imagingRadiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
 #' DataSHIELD aggregate method. Creates per-image dsHPC job specs for pending
 #' samples in a generation, respecting dsImaging/dsHPC backpressure limits.
 #'
-#' @param generation_id_enc Encoded generation id.
-#' @param sample_ids_enc Encoded character vector of sample ids.
-#' @param segmenter_enc Encoded segmenter specification.
-#' @param profile_enc Encoded radiomics profile specification.
-#' @param dataset_id_enc Encoded dataset id or dataset handle.
-#' @param fingerprints_enc Encoded named list of image fingerprints.
-#' @param content_hashes_enc Optional encoded named list of content hashes.
+#' @param generation_id Server-created generation id.
+#' @param sample_ids Character vector selected from the admitted roster.
+#' @param dataset_id Dataset id sealed into the generation.
+#' @param fingerprints Named list of server-derived image fingerprints.
+#' @param content_hashes Optional named list of server-derived content hashes.
 #' @return Named list with generation id, submitted count, optional deferred
 #'   count, and per-sample submission results.
-#' @export
-imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
-                                    segmenter_enc, profile_enc,
-                                    dataset_id_enc, fingerprints_enc,
-                                    content_hashes_enc = NULL) {
-  generation_id  <- .dsr_decode(generation_id_enc)
-  sample_ids     <- .dsr_decode(sample_ids_enc)
-  segmenter      <- .dsr_decode(segmenter_enc)
-  profile        <- .dsr_decode(profile_enc)
-  dataset_id     <- .dsr_decode(dataset_id_enc)
-  fingerprints   <- .dsr_decode(fingerprints_enc)
-  content_hashes <- if (!is.null(content_hashes_enc))
-    .dsr_decode(content_hashes_enc) else list()
+#' @keywords internal
+.imaging_radiomics_submit_batch <- function(generation_id, sample_ids,
+                                            dataset_id, fingerprints,
+                                            content_hashes = list()) {
 
   # dsHPC is in Imports, always available
-
-  resolved <- .resolve_ds(dataset_id)
-  if (is.null(resolved))
-    resolved <- .resolve_ds_from_generation(generation_id, dataset_id)
+  if (!is.character(generation_id) || length(generation_id) != 1L ||
+      !grepl("^gen_[0-9a-f]{32}$", generation_id)) {
+    stop("Invalid generation reference.", call. = FALSE)
+  }
+  gen <- get_generation(generation_id)
+  if (is.null(gen) || !identical(gen$dataset_id, as.character(dataset_id))) {
+    stop("Generation does not authorize the requested dataset.",
+         call. = FALSE)
+  }
+  gen_spec <- tryCatch(
+    jsonlite::fromJSON(gen$spec_json, simplifyVector = FALSE),
+    error = function(e) NULL)
+  if (is.null(gen_spec) || !is.list(gen_spec$segmenter) ||
+      !is.list(gen_spec$profile)) {
+    stop("Generation processing contract is unavailable.", call. = FALSE)
+  }
+  segmenter <- .imaging_segmenter_spec(gen_spec$segmenter)
+  profile <- .imaging_profile_spec(gen_spec$profile)
+  resolved <- .resolve_ds_from_generation(generation_id, dataset_id)
   if (is.null(resolved))
     stop("Cannot resolve dataset for generation: ", dataset_id, call. = FALSE)
 
@@ -249,10 +301,36 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
       parse_manifest(resolved$manifest_uri, resolved$backend),
       error = function(e) NULL)
   }
-  dataset_id <- dataset_id %||% manifest$dataset_id
+  if (is.null(manifest) ||
+      !identical(as.character(dataset_id), manifest$dataset_id)) {
+    stop("Generation dataset context is invalid.", call. = FALSE)
+  }
+  admission <- .imaging_privacy_admission(manifest, resolved$backend)
+  generation_roster <- .generation_privacy_roster(gen)
+  if (!.same_imaging_privacy_roster(generation_roster,
+                                    admission$roster)) {
+    stop("Generation no longer matches its admitted privacy roster.",
+         call. = FALSE)
+  }
+  sample_ids <- as.character(unlist(sample_ids, use.names = FALSE))
+  if (length(sample_ids) == 0L || anyNA(sample_ids) ||
+      anyDuplicated(sample_ids) ||
+      any(!sample_ids %in% admission$sample_ids)) {
+    stop("Requested batch is not part of the admitted collection.",
+         call. = FALSE)
+  }
+  items <- get_generation_items(generation_id)
+  eligible <- items$sample_id[items$status %in% c("pending", "claimed", "failed")]
+  if (any(!sample_ids %in% eligible)) {
+    stop("Requested batch is not eligible for processing.", call. = FALSE)
+  }
   image_root <- if (!is.null(manifest)) manifest$assets$images$uri else NULL
   mask_root <- .resolve_mask_root(dataset_id, segmenter, resolved = resolved)
   mask_hashes <- .existing_mask_hashes(resolved, manifest, segmenter)
+  if (identical(segmenter$provider, "existing_mask_asset")) {
+    .assert_exact_imaging_roster(names(mask_hashes), generation_roster,
+      context = "Existing mask asset")
+  }
   backend <- resolved$backend
   processor <- paste0(segmenter$provider, "_", segmenter$task %||% "default")
   profile_signature <- .radiomics_profile_signature(profile)
@@ -310,30 +388,20 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
       )
     )
 
-    # Check if this exact image+params was already done (cross-user). Reuse
-    # only if the stored artifact path still exists and matches this profile.
-    existing <- .existing_per_image_asset(dataset_id, spec_hash,
-      selected_features = profile$selected_features)
-
-    if (!is.null(existing)) {
-      complete_item_atomic(generation_id, sid, "completed",
-        artifact_relpath = existing$path)
-      submitted[[sid]] <- list(status = "reused", asset_id = existing$asset_id)
-      next
-    }
-
     # Resolve image path
-    image_uri <- .resolve_sample_image(image_root, sid,
-      dataset_id = dataset_id, backend = backend)
+    image_uri <- .resolve_sample_image(image_root, sid, backend = backend,
+      snapshot = resolved$collection_snapshot)
     if (is.null(image_uri)) {
       complete_item_atomic(generation_id, sid, "failed",
         error = "Image file not found")
       submitted[[sid]] <- list(status = "failed", error = "Image not found")
       next
     }
+    job_token <- .item_job_token(generation_id, sid)
 
     # For S3 images: stage to local filesystem for the Python runner
-    image_path <- .stage_image_for_job(image_uri, sid, dataset_id, backend)
+    image_path <- .stage_image_for_job(image_uri, sid, dataset_id, backend,
+      image_root = image_root, snapshot = resolved$collection_snapshot)
 
     # Build per-image job steps (using dsHPC step format)
     steps <- list()
@@ -369,12 +437,11 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
     # otherwise the script finds it in the input dir (seg output)
     # Resolve profile name to actual YAML file path
     settings_path <- .resolve_profile_path(profile$name)
-    extract_config <- c(profile, list(
-      image = image_path,
-      sample_id = sid,
-      generation_id = generation_id,
-      settings_file = settings_path %||% "default"
-    ))
+    extract_config <- profile
+    extract_config$image <- image_path
+    extract_config$sample_id <- sid
+    extract_config$generation_id <- generation_id
+    extract_config$settings_file <- settings_path %||% "default"
     extract_config <- .normalise_extract_config(extract_config)
     if (!is.null(mask_root)) {
       mask_uri <- .resolve_sample_mask(mask_root, sid, backend = backend,
@@ -387,6 +454,17 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
       }
       extract_config$mask <- .stage_backend_file_for_job(mask_uri, sid,
         dataset_id, backend, role = "masks")
+      actual_mask_hash <- tryCatch(digest::digest(
+        file = extract_config$mask, algo = "sha256"),
+        error = function(e) NULL)
+      if (is.null(actual_mask_hash) ||
+          !identical(actual_mask_hash, mask_hashes[[sid]])) {
+        complete_item_atomic(generation_id, sid, "failed",
+          error = "Mask integrity verification failed")
+        submitted[[sid]] <- list(
+          status = "failed", error = "Mask integrity verification failed")
+        next
+      }
     }
     steps[[length(steps) + 1]] <- list(
       type = "extract",
@@ -408,10 +486,10 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
       )
     )
 
-    # Submit via hpcSubmitDS (the proper dsHPC API)
+    # Submit through dsHPC's server-to-server API.
     job_spec <- list(
       label = "dsImaging_image",
-      tags = c("per_image", dataset_id, sid, generation_id),
+      tags = .per_image_job_tags(dataset_id, job_token, generation_id),
       visibility = "private",
       steps = steps,
       .owner = .dsr_owner_id()
@@ -419,8 +497,9 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
 
     tryCatch({
       spec_enc <- .dsr_encode(job_spec)
-      result <- dsHPC::hpcSubmitDS(spec_enc)
-      record_item_status(generation_id, sid, "running")
+      result <- dsHPC::hpcSubmitInternal(spec_enc)
+      record_item_status(
+        generation_id, sid, "running", job_token = job_token)
       submitted[[sid]] <- list(status = "submitted", job_id = result$job_id)
     }, error = function(e) {
       msg <- conditionMessage(e)
@@ -449,17 +528,19 @@ imagingRadiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
 
 #' Get Radiomics Collection Status
 #'
-#' DataSHIELD aggregate method. Reconciles finished/failed dsHPC state back
-#' into dsImaging generation items and returns exact operational progress
-#' counts (the workflow already exposes per-sample identifiers to the same
-#' caller, so counts are not additionally disclosive).
+#' Server-internal orchestration helper. Reconciles finished/failed dsHPC state
+#' into dsImaging generation items and returns exact operational progress for
+#' scheduling. Registered analyst status methods return only coarse state.
 #'
-#' @param generation_id_enc Encoded generation id.
+#' @param generation_id Server-created generation id.
 #' @return Named list with generation state, exact item counts, and
 #'   `is_done`.
-#' @export
-imagingRadiomicsCollectionStatusDS <- function(generation_id_enc) {
-  generation_id <- .dsr_decode(generation_id_enc)
+#' @keywords internal
+.imaging_radiomics_collection_status <- function(generation_id) {
+  if (!is.character(generation_id) || length(generation_id) != 1L ||
+      !grepl("^gen_[0-9a-f]{32}$", generation_id)) {
+    stop("Invalid generation reference.", call. = FALSE)
+  }
 
   # Sync dsHPC terminal states -> mark asset_items as completed/failed.
   .sync_generation_jobs(generation_id)
@@ -523,11 +604,8 @@ imagingRadiomicsCollectionStatusDS <- function(generation_id_enc) {
   # Guard against empty items table (generation exists but scan hasn't populated items yet)
   all_resolved <- not_done == 0L && total_items > 0 && total_items >= expected
 
-  # Exact operational counts: this workflow already exposes per-sample
-  # identifiers to the same caller (scan pending_ids, publish
-  # failed_samples), so bucketing progress counts disclosed nothing extra
-  # and made the displayed accounting wrong (6-image collections shown as
-  # "8/8"). Dataset metadata endpoints keep safe_metadata_count().
+  # Keep exact server-internal accounting for scheduling and complete-roster
+  # publication. The registered status boundary strips every counter and id.
   list(
     generation_id = generation_id,
     state = gen$state,
@@ -545,15 +623,18 @@ imagingRadiomicsCollectionStatusDS <- function(generation_id_enc) {
 
 #' Recover a Radiomics Collection Generation
 #'
-#' DataSHIELD aggregate method. Reconciles dsHPC state, requeues stale claimed
-#' items left by interrupted submitters, and triggers the next drip-feed batch
-#' if capacity is available.
+#' Server-internal helper. Reconciles dsHPC state, requeues stale claimed items
+#' left by interrupted submitters, and triggers the next drip-feed batch if
+#' capacity is available.
 #'
-#' @param generation_id_enc Encoded generation id.
+#' @param generation_id Server-created generation id.
 #' @return Same payload as `imagingRadiomicsCollectionStatusDS`.
-#' @export
-imagingRadiomicsRecoverCollectionDS <- function(generation_id_enc) {
-  generation_id <- .dsr_decode(generation_id_enc)
+#' @keywords internal
+.imaging_radiomics_recover_collection <- function(generation_id) {
+  if (!is.character(generation_id) || length(generation_id) != 1L ||
+      !grepl("^gen_[0-9a-f]{32}$", generation_id)) {
+    stop("Invalid generation reference.", call. = FALSE)
+  }
   .sync_generation_jobs(generation_id)
   .requeue_orphan_running_items(generation_id)
   requeue_stale_claimed_items(generation_id)
@@ -570,7 +651,7 @@ imagingRadiomicsRecoverCollectionDS <- function(generation_id_enc) {
         error = paste("Recovery drip-feed failed:", conditionMessage(e))))
   }
 
-  imagingRadiomicsCollectionStatusDS(.dsr_encode(generation_id))
+  .imaging_radiomics_collection_status(generation_id)
 }
 
 #' Cancel a Radiomics Collection Generation
@@ -580,21 +661,12 @@ imagingRadiomicsRecoverCollectionDS <- function(generation_id_enc) {
 #' Cancels dsHPC jobs belonging to the generation and marks unfinished items as
 #' skipped, without exposing sample identifiers to the client.
 #'
-#' @param generation_id_enc Encoded generation id.
+#' @param generation_id Generation id resolved from a session workflow.
 #' @param admin_key_enc Encoded admin key payload.
-#' @param reason_enc Encoded cancellation reason.
+#' @param reason Validated cancellation reason.
 #' @return Named list with cancellation counts.
-#' @export
-imagingRadiomicsCancelCollectionDS <- function(generation_id_enc,
-                                               admin_key_enc,
-                                               reason_enc = NULL) {
-  generation_id <- .dsr_decode(generation_id_enc)
-  reason <- if (is.null(reason_enc)) {
-    "Cancelled by admin"
-  } else {
-    .dsr_decode(reason_enc)
-  }
-  if (is.null(reason) || !nzchar(reason)) reason <- "Cancelled by admin"
+#' @keywords internal
+.imaging_cancel_generation <- function(generation_id, admin_key_enc, reason) {
   .verify_radiomics_admin(admin_key_enc)
 
   gen <- get_generation(generation_id)
@@ -634,26 +706,58 @@ imagingRadiomicsCancelCollectionDS <- function(generation_id_enc,
   )
 }
 
+#' Cancel a handle-bound Radiomics Collection Workflow
+#'
+#' @param reference_symbol Session symbol holding the opaque workflow handle.
+#' @param admin_key_enc Encoded admin key payload.
+#' @param reason_enc Encoded cancellation reason.
+#' @return Client-safe cancellation state.
+#' @export
+imagingRadiomicsCancelCollectionDS <- function(reference_symbol,
+                                               admin_key_enc,
+                                               reason_enc = NULL) {
+  .dsimaging_require_literal_arguments()
+  owner_env <- parent.frame()
+  .verify_radiomics_admin(admin_key_enc)
+  context <- .resolve_imaging_workflow_context(
+    reference_symbol, owner_env = owner_env)
+  workflow <- context$workflow
+  if (is.null(workflow$generation_id) ||
+      workflow$action %in% c("reuse_asset", "published", "cancelled")) {
+    stop("Collection workflow cannot be cancelled.", call. = FALSE)
+  }
+  reason <- if (is.null(reason_enc)) "Cancelled by admin" else
+    .dsr_decode(reason_enc)
+  if (!is.character(reason) || length(reason) != 1L || is.na(reason) ||
+      !nzchar(trimws(reason)) || nchar(reason, type = "bytes") > 256L ||
+      grepl("[\r\n]", reason)) {
+    stop("Invalid cancellation reason.", call. = FALSE)
+  }
+  .imaging_cancel_generation(workflow$generation_id, admin_key_enc, reason)
+  workflow$action <- "cancelled"
+  .update_imaging_workflow(reference_symbol, workflow,
+                           owner_env = owner_env)
+  list(state = "CANCELLED")
+}
+
 # ---------------------------------------------------------------------------
 # 4. Publish: aggregate per-image outputs into collection asset
 # ---------------------------------------------------------------------------
 
 #' Publish a Completed Radiomics Collection
 #'
-#' DataSHIELD aggregate method. Aggregates completed per-image outputs into a
+#' Server-internal helper. Aggregates completed per-image outputs into a
 #' collection-level radiomics feature table and publishes the derived asset.
 #'
-#' @param generation_id_enc Encoded generation id.
-#' @param dataset_id_enc Encoded dataset id.
-#' @param allow_partial_enc Encoded logical indicating whether limited failures
-#'   may be tolerated.
+#' @param generation_id Server-created generation id.
+#' @param dataset_id Dataset id sealed into the generation.
 #' @return Named list with publication status and derived asset metadata.
-#' @export
-imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_enc,
-                                          allow_partial_enc) {
-  generation_id  <- .dsr_decode(generation_id_enc)
-  dataset_id     <- .dsr_decode(dataset_id_enc)
-  allow_partial  <- .dsr_decode(allow_partial_enc)
+#' @keywords internal
+.imaging_radiomics_publish_collection <- function(generation_id, dataset_id) {
+  if (!is.character(generation_id) || length(generation_id) != 1L ||
+      !grepl("^gen_[0-9a-f]{32}$", generation_id)) {
+    stop("Invalid generation reference.", call. = FALSE)
+  }
 
   # Final sync to catch any late completions/failures
   .sync_generation_jobs(generation_id)
@@ -665,6 +769,11 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
   gen <- get_generation(generation_id)
   if (is.null(gen))
     stop("Generation not found: ", generation_id, call. = FALSE)
+  if (!is.character(dataset_id) || length(dataset_id) != 1L ||
+      !identical(as.character(gen$dataset_id), dataset_id)) {
+    stop("Generation does not authorize the requested dataset.",
+         call. = FALSE)
+  }
   if (gen$state %in% c("CANCELLED"))
     stop("Generation was cancelled and cannot be published.", call. = FALSE)
   if (requeued_invalid > 0) {
@@ -690,15 +799,29 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
     stop(n_not_done, " items still pending/running. Wait for completion.",
          call. = FALSE)
 
-  if (n_completed == 0)
-    stop("No completed items to publish.", call. = FALSE)
-
-  if (n_failed > 0 && !isTRUE(allow_partial)) {
-    fail_pct <- n_failed / total
-    if (fail_pct > 0.05)
-      stop("Too many failures (", n_failed, "/", total,
-           ", ", round(fail_pct * 100, 1), "%). ",
-           "Use allow_partial=TRUE to publish anyway.", call. = FALSE)
+  resolved <- .resolve_ds_from_generation(generation_id, dataset_id)
+  if (is.null(resolved) || is.null(resolved$manifest)) {
+    stop("Generation dataset context is unavailable.", call. = FALSE)
+  }
+  admission <- .imaging_privacy_admission(resolved$manifest, resolved$backend)
+  generation_roster <- .generation_privacy_roster(gen)
+  if (!.same_imaging_privacy_roster(generation_roster,
+                                    admission$roster)) {
+    stop("Only a complete admitted collection may be published.",
+         call. = FALSE)
+  }
+  roster_ok <- tryCatch({
+    .assert_exact_imaging_roster(
+      completed$sample_id, generation_roster,
+      context = "Published imaging collection")
+    TRUE
+  }, error = function(e) FALSE)
+  if (n_failed > 0L || !isTRUE(roster_ok) ||
+      total != generation_roster$sample_count ||
+      !identical(as.integer(gen$expected_n),
+                 generation_roster$sample_count)) {
+    stop("Only a complete admitted collection may be published.",
+         call. = FALSE)
   }
 
   # Build collection-level output directory
@@ -710,7 +833,7 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
 
   selected_features <- .generation_selected_features(gen)
   feature_table <- .write_collection_feature_table(completed, output_root,
-    selected_features = selected_features)
+    selected_features = selected_features, roster = generation_roster)
 
   # Write collection manifest
   manifest <- list(
@@ -728,12 +851,6 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
   writeLines(
     jsonlite::toJSON(manifest, auto_unbox = TRUE, pretty = TRUE),
     file.path(output_root, "collection_manifest.json"))
-
-  # Adjust expected_n before publish to account for failures
-  # publish_generation checks completed_n == expected_n
-  if (n_failed > 0) {
-    update_generation(generation_id, expected_n = n_completed)
-  }
 
   provenance <- list(
     type = "per_image_collection",
@@ -756,24 +873,18 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
          call. = FALSE)
   }
 
-  # Exact counts: failed_samples already carries per-sample identifiers, so
-  # bucketing these totals disclosed nothing and misreported the collection
-  # size (e.g. "8/8 images" for a 6-image collection).
   list(
     asset_id = asset_id,
     generation_id = generation_id,
-    feature_table = feature_table,
-    total = as.integer(total),
-    completed = as.integer(n_completed),
-    failed = as.integer(n_failed),
-    failed_samples = if (n_failed > 0) failed$sample_id else character(0)
+    state = "ACTIVE"
   )
 }
 
 #' Combine per-image radiomics outputs into one collection feature table
 #' @keywords internal
 .write_collection_feature_table <- function(completed, output_root,
-                                            selected_features = character(0)) {
+                                            selected_features = character(0),
+                                            roster = NULL) {
   if (nrow(completed) == 0) return(NULL)
   if (!requireNamespace("arrow", quietly = TRUE))
     stop("arrow package required to publish radiomics feature tables.",
@@ -798,8 +909,23 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
     } else {
       stop("Unsupported radiomics artifact format: ", path, call. = FALSE)
     }
-    if (!"sample_id" %in% names(df))
-      df$sample_id <- completed$sample_id[i]
+    expected_sample <- .canonical_imaging_privacy_ids(
+      completed$sample_id[i])
+    if (nrow(df) != 1L) {
+      stop("Each radiomics artifact must contain exactly one admitted sample.",
+           call. = FALSE)
+    }
+    if (!"sample_id" %in% names(df)) {
+      df$sample_id <- expected_sample
+    } else {
+      actual_sample <- .canonical_imaging_privacy_ids(df$sample_id)
+      if (length(actual_sample) != 1L || is.na(actual_sample) ||
+          !identical(actual_sample, expected_sample)) {
+        stop("Radiomics artifact sample does not match its admitted sample.",
+             call. = FALSE)
+      }
+      df$sample_id <- actual_sample
+    }
     if (length(required_cols) > 0) {
       missing <- setdiff(required_cols, names(df))
       if (length(missing) > 0) {
@@ -823,6 +949,10 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
     df[, all_cols, drop = FALSE]
   })
   features <- do.call(rbind, rows)
+  if (!is.null(roster)) {
+    .assert_exact_imaging_roster(features$sample_id, roster,
+      context = "Published imaging feature table")
+  }
   out <- file.path(output_root, "radiomics_features.parquet")
   arrow::write_parquet(features, out)
   out
@@ -840,6 +970,22 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
   if (is.null(selected)) return(character(0))
   selected <- as.character(unlist(selected, use.names = FALSE))
   selected[nzchar(selected)]
+}
+
+#' Immutable privacy roster pinned to a collection generation.
+#' @keywords internal
+.generation_privacy_roster <- function(gen) {
+  spec_json <- gen$spec_json %||% NULL
+  if (is.null(spec_json) || is.na(spec_json) || !nzchar(spec_json)) {
+    stop("Generation has no admitted privacy roster.", call. = FALSE)
+  }
+  spec <- tryCatch(
+    jsonlite::fromJSON(spec_json, simplifyVector = FALSE),
+    error = function(e) NULL)
+  if (is.null(spec$privacy_roster)) {
+    stop("Generation has no admitted privacy roster.", call. = FALSE)
+  }
+  .validate_imaging_privacy_roster(spec$privacy_roster)
 }
 
 #' Requeue completed items whose artifacts no longer match the generation spec
@@ -897,7 +1043,7 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
   if (nrow(active_jobs) > 0) {
     for (i in seq_len(nrow(active_jobs))) {
       tags <- strsplit(active_jobs$tags[i], ",", fixed = TRUE)[[1]]
-      sid <- .sample_id_from_tags(tags, running$sample_id)
+      sid <- .sample_id_from_tags(tags, running)
       if (!is.null(sid)) active_sids <- c(active_sids, sid)
     }
   }
@@ -915,28 +1061,15 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
   length(orphan)
 }
 
-#' Reusable per-image asset path if it still satisfies the current profile
+#' Per-image artifacts are never shared or deduplicated across workflows.
+#'
+#' A per-image cache is itself a membership oracle. Collection-level global
+#' assets may be reused, but row-level artifacts remain private to their
+#' generation.
 #' @keywords internal
 .existing_per_image_asset <- function(dataset_id, derivation_hash,
                                       selected_features = character(0)) {
-  asset_id <- find_asset_by_hash(dataset_id, derivation_hash)
-  if (is.null(asset_id)) return(NULL)
-
-  db <- .asset_db_connect()
-  on.exit(.asset_db_close(db))
-  asset <- .asset_get(db, asset_id)
-  if (is.null(asset)) return(NULL)
-
-  path <- asset$path_or_root %||% ""
-  if (!nzchar(path) || !file.exists(path)) return(NULL)
-
-  required_cols <- c("sample_id", as.character(unlist(selected_features,
-    use.names = FALSE)))
-  required_cols <- required_cols[nzchar(required_cols)]
-  missing <- .missing_artifact_features(path, required_cols)
-  if (length(missing) > 0) return(NULL)
-
-  list(asset_id = asset_id, path = path)
+  NULL
 }
 
 #' Missing required columns in a radiomics artifact
@@ -976,13 +1109,16 @@ imagingRadiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_en
 #' If masks are missing (expired dsHPC artifacts), returns which samples
 #' need regeneration. Does NOT auto-regenerate.
 #'
-#' @param generation_id_enc Encoded generation_id.
+#' @param generation_id Server-created generation id.
 #' @param dataset_id Character; the imaging dataset being validated against.
 #' @return List with valid (logical), n_valid, n_missing, n_failed,
 #'   and a mask_manifest (sample_id -> mask_path mapping) for valid masks.
-#' @export
-imagingSegmentationValidateMasksDS <- function(generation_id_enc, dataset_id) {
-  generation_id <- .dsr_decode(generation_id_enc)
+#' @keywords internal
+.imaging_segmentation_validate_masks <- function(generation_id, dataset_id) {
+  if (!is.character(generation_id) || length(generation_id) != 1L ||
+      !grepl("^gen_[0-9a-f]{32}$", generation_id)) {
+    stop("Invalid generation reference.", call. = FALSE)
+  }
 
   # Sync any pending terminal states from dsHPC
   .sync_generation_jobs(generation_id)
@@ -990,17 +1126,17 @@ imagingSegmentationValidateMasksDS <- function(generation_id_enc, dataset_id) {
   gen <- get_generation(generation_id)
   if (is.null(gen))
     stop("Generation not found: ", generation_id, call. = FALSE)
+  if (!is.character(dataset_id) || length(dataset_id) != 1L ||
+      !identical(as.character(gen$dataset_id), dataset_id)) {
+    stop("Generation does not authorize the requested dataset.",
+         call. = FALSE)
+  }
 
   # Verify generation matches the requested dataset
   gen_spec <- tryCatch(
     jsonlite::fromJSON(gen$spec_json, simplifyVector = FALSE),
     error = function(e) list()
   )
-  if (!is.null(gen_spec$dataset_id) && gen_spec$dataset_id != dataset_id) {
-    stop("Generation '", generation_id, "' belongs to dataset '",
-         gen_spec$dataset_id, "', not '", dataset_id, "'.", call. = FALSE)
-  }
-
   items <- get_generation_items(generation_id)
 
   n_valid <- 0L
@@ -1072,80 +1208,87 @@ imagingSegmentationValidateMasksDS <- function(generation_id_enc, dataset_id) {
     n_missing = safe_metadata_count(n_missing),
     n_failed = safe_metadata_count(n_failed),
     needs_regeneration = length(missing_samples) > 0,
-    # mask_paths stays server-side (disclosure: no sample IDs to client).
-    # Downstream packages read it via imagingSegmentationGetMaskPaths().
     ready_for_training = all_valid
   )
 }
 
-#' Get the mask manifest for a validated generation
+#' Retired raw segmentation-generation path accessor
 #'
-#' DataSHIELD server-side function (NOT aggregate -- called internally
-#' by downstream server-side training consumers for segmentation tasks).
-#' Returns the sample_id -> mask_path mapping.
-#'
-#' @param generation_id Character; the generation to query.
-#' @return Named list mapping sample_id to absolute mask file path.
+#' This compatibility wrapper deliberately fails closed. A generation id and
+#' dataset id are not session-bound capabilities and must not grant access to
+#' server paths or sample rosters.
+#' @param generation_id Ignored legacy generation identifier.
+#' @param dataset_id Ignored legacy dataset identifier.
+#' @return Never returns; always raises an error.
 #' @export
-imagingSegmentationGetMaskPaths <- function(generation_id) {
-  items <- get_generation_items(generation_id,
-                                            status = "completed")
-  paths <- list()
-  for (i in seq_len(nrow(items))) {
-    sid <- items$sample_id[i]
-    artifact_path <- items$artifact_relpath[i]
-    if (is.na(artifact_path)) next
-
-    if (!file.exists(artifact_path)) {
-      dshpc_home <- getOption("dshpc.home", "/srv/dshpc")
-      artifact_path <- file.path(dshpc_home, "artifacts", artifact_path)
-    }
-
-    mask_file <- .find_mask_in_artifact(artifact_path, sid)
-    if (!is.null(mask_file)) paths[[sid]] <- mask_file
-  }
-  paths
+imagingSegmentationGetMaskPaths <- function(generation_id, dataset_id) {
+  .legacy_imaging_ds_disabled("imagingSegmentationGetMaskPaths")
 }
 
 #' Find a mask file within a dsHPC artifact directory
 #' @keywords internal
 .find_mask_in_artifact <- function(artifact_path, sample_id) {
-  # artifact_path might be a file or a directory
-  if (file.exists(artifact_path) && !dir.exists(artifact_path)) {
-    # It's a file -- check if it's a NIfTI/NRRD mask
-    if (grepl("\\.(nii\\.gz|nii|nrrd|mha|png)$", artifact_path, ignore.case = TRUE))
-      return(artifact_path)
+  stems <- .mask_candidate_stems(sample_id)
+  mask_pattern <- "\\.(nii\\.gz|nii|nrrd|mha|mhd|dcm|png)$"
+  exact_mask <- function(path) {
+    base <- basename(path)
+    grepl(mask_pattern, base, ignore.case = TRUE) &&
+      sub(mask_pattern, "", base, ignore.case = TRUE) %in% stems
+  }
+  if (!is.character(artifact_path) || length(artifact_path) != 1L ||
+      is.na(artifact_path) || !nzchar(artifact_path) ||
+      !file.exists(artifact_path)) return(NULL)
+
+  if (!dir.exists(artifact_path)) {
+    if (nzchar(Sys.readlink(artifact_path)) || !exact_mask(artifact_path)) {
+      return(NULL)
+    }
+    return(normalizePath(artifact_path, winslash = "/", mustWork = TRUE))
   }
 
-  # It's a directory -- search for mask files
-  if (dir.exists(artifact_path)) {
-    # Look for seg_manifest.json first (written by segmentation runners)
-    seg_manifest <- file.path(artifact_path, "seg_manifest.json")
-    if (file.exists(seg_manifest)) {
-      manifest <- tryCatch(
-        jsonlite::fromJSON(seg_manifest, simplifyVector = FALSE),
-        error = function(e) NULL)
-      if (!is.null(manifest) && !is.null(manifest$samples[[sample_id]])) {
-        primary <- manifest$samples[[sample_id]]$primary_mask
-        if (!is.null(primary) && file.exists(primary)) return(primary)
-      }
-    }
-
-    # Fallback: scan for NIfTI files containing sample_id or "mask"
-    files <- list.files(artifact_path, recursive = TRUE, full.names = TRUE)
-    mask_files <- files[grepl("\\.(nii\\.gz|nii|nrrd|png)$", files,
-                              ignore.case = TRUE)]
-
-    # Prefer files with "mask" or "seg" in name
-    for (f in mask_files) {
-      bn <- basename(f)
-      if (grepl("mask|seg|label", bn, ignore.case = TRUE)) return(f)
-    }
-    # Otherwise first NIfTI
-    if (length(mask_files) > 0) return(mask_files[1])
+  lexical_root <- sub("[/\\\\]+$", "", artifact_path)
+  if (!nzchar(lexical_root)) lexical_root <- artifact_path
+  if (nzchar(Sys.readlink(lexical_root))) return(NULL)
+  artifact_root <- tryCatch(
+    normalizePath(lexical_root, winslash = "/", mustWork = TRUE),
+    error = function(e) NULL)
+  if (is.null(artifact_root)) return(NULL)
+  root_prefix <- paste0(sub("/+$", "", artifact_root), "/")
+  contained_mask <- function(path) {
+    if (!is.character(path) || length(path) != 1L || is.na(path) ||
+        !nzchar(path)) return(NULL)
+    candidate <- if (grepl("^(/|[A-Za-z]:[/\\\\])", path)) path else
+      file.path(artifact_root, path)
+    if (!file.exists(candidate) || dir.exists(candidate) ||
+        !exact_mask(candidate) ||
+        .mask_path_has_symlink(candidate, artifact_root)) return(NULL)
+    resolved <- tryCatch(
+      normalizePath(candidate, winslash = "/", mustWork = TRUE),
+      error = function(e) NULL)
+    if (is.null(resolved) || !startsWith(resolved, root_prefix)) return(NULL)
+    resolved
   }
 
-  NULL
+  seg_manifest <- file.path(artifact_root, "seg_manifest.json")
+  if (file.exists(seg_manifest)) {
+    if (dir.exists(seg_manifest) || nzchar(Sys.readlink(seg_manifest))) {
+      return(NULL)
+    }
+    manifest <- tryCatch(
+      jsonlite::fromJSON(seg_manifest, simplifyVector = FALSE),
+      error = function(e) NULL)
+    if (!is.list(manifest) || !is.list(manifest$samples) ||
+        is.null(manifest$samples[[sample_id]]) ||
+        !is.list(manifest$samples[[sample_id]])) {
+      return(NULL)
+    }
+    return(contained_mask(manifest$samples[[sample_id]]$primary_mask))
+  }
+
+  candidates <- vapply(
+    list.files(artifact_root, recursive = TRUE, full.names = TRUE),
+    function(path) contained_mask(path) %||% NA_character_, character(1))
+  .select_single_mask_candidate(candidates)
 }
 
 # ---------------------------------------------------------------------------
@@ -1185,7 +1328,7 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 
   for (i in seq_len(nrow(done_jobs))) {
     tags <- strsplit(done_jobs$tags[i], ",", fixed = TRUE)[[1]]
-    sid <- .sample_id_from_tags(tags, pending_items$sample_id)
+    sid <- .sample_id_from_tags(tags, pending_items)
     if (is.null(sid)) next
     if (sid %in% synced_sids) next
 
@@ -1200,28 +1343,11 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
       if (length(missing) > 0) next
     }
 
-    dataset_id <- .dataset_id_from_tags(tags, generation_id, sid)
-    register_asset <- NULL
-    spec_hash <- done_jobs$spec_hash[i]
-    if (!is.na(spec_hash) && nzchar(spec_hash) &&
-        !is.null(dataset_id) && nzchar(dataset_id)) {
-      register_asset <- list(
-        dataset_id = dataset_id,
-        kind = "per_image_result",
-        path_or_root = output_ref$path,
-        derivation_hash = spec_hash,
-        provenance = list(type = "per_image", job_id = done_jobs$job_id[i],
-                          generation_id = generation_id, sample_id = sid),
-        created_by_job = done_jobs$job_id[i]
-      )
-    }
-
     complete_item_atomic(
       generation_id = generation_id,
       sample_id = sid,
       status = "completed",
-      artifact_relpath = output_ref$path,
-      register_asset = register_asset
+      artifact_relpath = output_ref$path
     )
     synced_sids <- c(synced_sids, sid)
   }
@@ -1238,22 +1364,39 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
     if (!is.null(ref)) return(ref)
   }
 
-  outs <- tryCatch(dsHPC::hpcOutputsDS(job_id), error = function(e) NULL)
-  if (is.null(outs) || nrow(outs) == 0) return(NULL)
-  tabular <- outs$name[grepl("\\.(parquet|csv)$", outs$name, ignore.case = TRUE)]
-  for (nm in tabular) {
-    ref <- tryCatch(dsHPC::get_job_output_ref(job_id, nm,
-      required_label = "dsImaging_image"), error = function(e) NULL)
-    if (!is.null(ref)) return(ref)
-  }
   NULL
 }
 
 #' @keywords internal
-.sample_id_from_tags <- function(tags, candidate_ids) {
-  hit <- intersect(candidate_ids, tags)
-  if (length(hit) == 0) return(NULL)
-  hit[1]
+.sample_id_from_tags <- function(tags, candidate_items) {
+  tags <- as.character(tags)
+  if (length(tags) < 4L || !identical(tags[[1L]], "per_image")) return(NULL)
+  if (is.data.frame(candidate_items) &&
+      all(c("sample_id", "job_token") %in% names(candidate_items))) {
+    tokens <- as.character(candidate_items$job_token)
+    hit <- which(!is.na(tokens) & nzchar(tokens) & tokens == tags[[3L]])
+    if (length(hit) == 1L) {
+      return(as.character(candidate_items$sample_id[[hit]]))
+    }
+    # Jobs created before opaque correlation tokens were introduced remain
+    # recoverable during a rolling upgrade, but all new specs use tokens.
+    candidate_ids <- as.character(candidate_items$sample_id)
+  } else {
+    candidate_ids <- as.character(candidate_items)
+  }
+  hit <- which(candidate_ids == tags[[3L]])
+  if (length(hit) != 1L) return(NULL)
+  candidate_ids[[hit]]
+}
+
+#' Build non-identifying dsHPC tags for one private generation item
+#' @keywords internal
+.per_image_job_tags <- function(dataset_id, job_token, generation_id) {
+  if (!is.character(job_token) || length(job_token) != 1L ||
+      is.na(job_token) || !grepl("^[0-9a-f]{32}$", job_token)) {
+    stop("Invalid private job correlation token.", call. = FALSE)
+  }
+  c("per_image", dataset_id, job_token, generation_id)
 }
 
 #' @keywords internal
@@ -1287,7 +1430,7 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
   # Extract sample_ids from tags and mark items as failed
   for (i in seq_len(nrow(failed_jobs))) {
     tags <- strsplit(failed_jobs$tags[i], ",", fixed = TRUE)[[1]]
-    sid <- .sample_id_from_tags(tags, pending_items$sample_id)
+    sid <- .sample_id_from_tags(tags, pending_items)
     if (is.null(sid)) next
     err_msg <- failed_jobs$error_message[i] %||% "dsHPC job failed"
     complete_item_atomic(generation_id, sid, "failed",
@@ -1314,7 +1457,7 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 
   for (i in seq_len(nrow(cancelled_jobs))) {
     tags <- strsplit(cancelled_jobs$tags[i], ",", fixed = TRUE)[[1]]
-    sid <- .sample_id_from_tags(tags, pending_items$sample_id)
+    sid <- .sample_id_from_tags(tags, pending_items)
     if (is.null(sid)) next
     err_msg <- cancelled_jobs$error_message[i] %||% "dsHPC job cancelled"
     complete_item_atomic(generation_id, sid, "skipped", error = err_msg)
@@ -1324,7 +1467,7 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 
 #' Sync dsHPC active states back to asset_items
 #'
-#' This closes the crash window where `hpcSubmitDS()` succeeds but the caller
+#' This closes the crash window where `hpcSubmitInternal()` succeeds but the caller
 #' dies before the generation item is moved from `claimed` to `running`.
 #'
 #' @keywords internal
@@ -1341,7 +1484,7 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
   changed <- FALSE
   for (i in seq_len(nrow(active_jobs))) {
     tags <- strsplit(active_jobs$tags[i], ",", fixed = TRUE)[[1]]
-    sid <- .sample_id_from_tags(tags, pending_items$sample_id)
+    sid <- .sample_id_from_tags(tags, pending_items)
     if (is.null(sid)) next
     record_item_status(generation_id, sid, "running")
     changed <- TRUE
@@ -1433,41 +1576,14 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 
 #' Resolve dataset and return full resolved context
 #'
-#' Tries three paths:
-#'   1. Imaging handle (has backend from resource credentials)
-#'   2. Registry (server has pre-configured registry)
-#'   3. NULL (can't resolve)
+#' This server-internal path resolves only administrator-configured registry
+#' entries. Analyst workflows must instead pass a session-authorized handle
+#' into their domain entry point.
 #'
 #' @keywords internal
 .resolve_ds <- function(dataset_id = NULL) {
-  # 1. Try imaging handle (created by imagingInitDS with backend from resource)
-  backend <- tryCatch(
-    imagingGetBackendDS("img"),
-    error = function(e) NULL)
-  if (is.null(backend)) {
-    # Try common handle symbols
-    for (sym in c("img_res", "imaging", "res")) {
-      backend <- tryCatch(
-        imagingGetBackendDS(sym),
-        error = function(e) NULL)
-      if (!is.null(backend)) break
-    }
-  }
-
-  if (!is.null(backend)) {
-    manifest <- imagingGetManifestDS(dataset_id %||% "img")
-    if (!is.null(manifest)) {
-      return(list(
-        dataset_id = dataset_id %||% manifest$dataset_id,
-        backend = backend,
-        manifest = manifest,
-        manifest_uri = NULL,
-        publish = backend
-      ))
-    }
-  }
-
-  # 2. Try registry
+  if (!is.character(dataset_id) || length(dataset_id) != 1L ||
+      is.na(dataset_id) || !nzchar(dataset_id)) return(NULL)
   tryCatch(resolve_dataset(dataset_id), error = function(e) NULL)
 }
 
@@ -1479,48 +1595,93 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 #' staged without a connected analyst session.
 #'
 #' @keywords internal
-.dataset_context_from_resolved <- function(resolved, manifest) {
+.dataset_context_from_resolved <- function(resolved, manifest,
+                                           privacy_roster = NULL) {
   if (is.null(resolved) || is.null(resolved$backend)) return(NULL)
+  if (!is.null(privacy_roster)) {
+    manifest$.dsimaging_privacy_roster <-
+      .validate_imaging_privacy_roster(privacy_roster)
+  }
   list(
     manifest = manifest,
-    backend = .portable_backend_context(resolved$backend)
+    backend = .portable_backend_context(resolved$backend),
+    collection_seal = (resolved$collection_snapshot %||%
+      (resolved$handle %||% list())$collection_snapshot)$seal %||% NULL
   )
 }
 
 #' @keywords internal
 .portable_backend_context <- function(backend) {
-  cfg <- backend$config %||% list()
-  out <- list(type = backend$type, config = cfg)
-
-  if (identical(backend$type, "s3")) {
-    creds <- tryCatch(.resolve_s3_credentials(cfg$credentials_ref),
-      error = function(e) NULL)
-    if (!is.null(creds)) {
-      out$config$endpoint <- cfg$endpoint %||% creds$endpoint
-      out$config$region <- cfg$region %||% creds$region
-      out$credentials <- list(
-        access_key = creds$access_key,
-        secret_key = creds$secret_key,
-        endpoint = creds$endpoint,
-        region = creds$region
-      )
-    }
+  if (is.null(backend)) return(NULL)
+  if (!identical(backend$type, "s3")) {
+    return(list(type = backend$type, config = backend$config %||% list()))
   }
-
-  out
+  cfg <- backend$config %||% list()
+  raw_fields <- c("access_key", "secret_key", "identity", "secret",
+                  "password")
+  if (any(raw_fields %in% names(cfg))) {
+    stop("Worker storage credentials are not configured.", call. = FALSE)
+  }
+  ref <- cfg$credentials_ref %||%
+    getOption("dsimaging.worker_credentials_ref",
+      getOption("default.dsimaging.worker_credentials_ref", NULL))
+  if (!is.null(cfg$resource) &&
+      (is.null(ref) || !is.character(ref) || length(ref) != 1L ||
+       is.na(ref) || !nzchar(ref))) {
+    stop("Worker storage credentials are not configured.", call. = FALSE)
+  }
+  if (!is.null(ref)) {
+    if (!is.character(ref) || length(ref) != 1L || is.na(ref) ||
+        !grepl("^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$", ref)) {
+      stop("Worker storage credentials are not configured.", call. = FALSE)
+    }
+    # Fail before a durable context is written if the named server-side
+    # credential is absent. The resolved secret itself is deliberately dropped.
+    tryCatch(.resolve_s3_credentials(ref), error = function(e) {
+      stop("Worker storage credentials are not configured.", call. = FALSE)
+    })
+  }
+  cfg <- list(
+    endpoint = cfg$endpoint %||% NULL,
+    credentials_ref = ref,
+    region = cfg$region %||% NULL,
+    uri_prefix = cfg$uri_prefix %||% NULL
+  )
+  list(type = "s3", config = cfg)
 }
 
 #' @keywords internal
-.ensure_generation_dataset_context <- function(generation_id, resolved, manifest) {
+.ensure_generation_dataset_context <- function(generation_id, resolved, manifest,
+                                               privacy_roster = NULL) {
   gen <- get_generation(generation_id)
   if (is.null(gen)) return(invisible(FALSE))
 
   spec <- tryCatch(
     jsonlite::fromJSON(gen$spec_json, simplifyVector = FALSE),
     error = function(e) list())
-  if (!is.null(spec$dataset_context)) return(invisible(TRUE))
+  pinned <- tryCatch(.validate_imaging_privacy_roster(
+    spec$privacy_roster), error = function(e) NULL)
+  if (is.null(pinned) || is.null(privacy_roster) ||
+      !.same_imaging_privacy_roster(pinned, privacy_roster)) {
+    stop("Generation has no matching admitted privacy roster.",
+         call. = FALSE)
+  }
+  expected_seal <- (resolved$collection_snapshot %||%
+    (resolved$handle %||% list())$collection_snapshot)$seal %||% NULL
+  if (!is.character(expected_seal) || length(expected_seal) != 1L ||
+      is.na(expected_seal) || !grepl("^[0-9a-f]{64}$", expected_seal)) {
+    stop("Generation has no admitted collection snapshot.", call. = FALSE)
+  }
+  if (!is.null(spec$dataset_context)) {
+    if (!identical(spec$dataset_context$collection_seal, expected_seal)) {
+      stop("Generation has no matching admitted collection snapshot.",
+           call. = FALSE)
+    }
+    return(invisible(TRUE))
+  }
 
-  spec$dataset_context <- .dataset_context_from_resolved(resolved, manifest)
+  spec$dataset_context <- .dataset_context_from_resolved(
+    resolved, manifest, pinned)
   update_generation(generation_id,
     spec_json = as.character(jsonlite::toJSON(spec, auto_unbox = TRUE)))
   invisible(TRUE)
@@ -1530,22 +1691,55 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 .resolve_ds_from_generation <- function(generation_id, dataset_id = NULL) {
   gen <- get_generation(generation_id)
   if (is.null(gen)) return(NULL)
+  if (!is.null(dataset_id) &&
+      !identical(as.character(dataset_id), as.character(gen$dataset_id))) {
+    return(NULL)
+  }
 
   spec <- tryCatch(
     jsonlite::fromJSON(gen$spec_json, simplifyVector = FALSE),
     error = function(e) NULL)
-  ctx <- spec$dataset_context %||% spec$dataset
+  ctx <- spec$dataset_context
   if (is.null(ctx) || is.null(ctx$manifest) || is.null(ctx$backend))
     return(NULL)
+  if (!identical(as.character(ctx$manifest$dataset_id),
+                 as.character(gen$dataset_id))) return(NULL)
+  generation_roster <- tryCatch(
+    .validate_imaging_privacy_roster(spec$privacy_roster),
+    error = function(e) NULL)
+  context_roster <- tryCatch(
+    .validate_imaging_privacy_roster(
+      ctx$manifest$.dsimaging_privacy_roster),
+    error = function(e) NULL)
+  if (is.null(generation_roster) || is.null(context_roster) ||
+      !.same_imaging_privacy_roster(generation_roster, context_roster)) {
+    return(NULL)
+  }
 
   backend <- .backend_from_context(ctx$backend, generation_id)
   if (is.null(backend)) return(NULL)
+  collection_seal <- ctx$collection_seal %||% NULL
+  if (!is.character(collection_seal) || length(collection_seal) != 1L ||
+      is.na(collection_seal) || !grepl("^[0-9a-f]{64}$", collection_seal)) {
+    return(NULL)
+  }
+  manifest <- ctx$manifest
+  manifest$.dsimaging_privacy_roster <- NULL
+  current_snapshot <- tryCatch({
+    admission <- .imaging_privacy_admission(manifest, backend)
+    .new_imaging_collection_snapshot(manifest, backend, admission)
+  }, error = function(e) NULL)
+  if (is.null(current_snapshot) ||
+      !identical(current_snapshot$seal, collection_seal)) {
+    return(NULL)
+  }
   list(
-    dataset_id = dataset_id %||% gen$dataset_id,
+    dataset_id = gen$dataset_id,
     backend = backend,
-    manifest = ctx$manifest,
+    manifest = manifest,
     manifest_uri = NULL,
-    publish = backend
+    publish = backend,
+    collection_snapshot = current_snapshot
   )
 }
 
@@ -1553,21 +1747,6 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 .backend_from_context <- function(ctx, generation_id) {
   if (is.null(ctx$type)) return(NULL)
   cfg <- ctx$config %||% list()
-
-  if (identical(ctx$type, "s3")) {
-    creds <- ctx$credentials
-    if (!is.null(creds)) {
-      ref <- cfg$credentials_ref %||%
-        paste0("generation_", digest::digest(list(generation_id, creds$access_key),
-          algo = "sha256"))
-      store <- getOption("dsimaging.credentials", list())
-      store[[ref]] <- creds
-      options(dsimaging.credentials = store)
-      cfg$credentials_ref <- ref
-      cfg$endpoint <- cfg$endpoint %||% creds$endpoint
-      cfg$region <- cfg$region %||% creds$region
-    }
-  }
 
   tryCatch(storage_backend(ctx$type, cfg), error = function(e) NULL)
 }
@@ -1612,115 +1791,227 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
     asset$hash_index %||% asset$index_uri
   if (is.null(index_uri) || !nzchar(index_uri)) return(list())
 
-  idx <- tryCatch(read_hash_index(resolved$backend, index_uri),
-    error = function(e) data.frame())
-  if (!is.data.frame(idx) || nrow(idx) == 0 ||
-      !"sample_id" %in% names(idx) || !"content_hash" %in% names(idx))
-    return(list())
+  idx <- .validated_mask_hash_index(
+    resolved$backend, manifest, mask_alias, required = TRUE)
+  if (nrow(idx) == 0L) return(list())
   stats::setNames(as.list(idx$content_hash), idx$sample_id)
 }
 
 #' Resolve one sample mask from a local or S3 mask asset
 #' @keywords internal
-.mask_hash_index <- function(backend, manifest, mask_asset) {
+.validated_mask_hash_index <- function(backend, manifest, mask_asset,
+                                       required = FALSE) {
   asset <- manifest$assets[[mask_asset]]
+  if (!is.list(asset) || !is.character(asset$uri) ||
+      length(asset$uri) != 1L || is.na(asset$uri) || !nzchar(asset$uri)) {
+    stop("Mask asset index is invalid.", call. = FALSE)
+  }
   index_uri <- asset$content_hash_index %||%
     asset$hash_index %||% asset$index_uri
-  if (is.null(index_uri) || !nzchar(index_uri)) return(NULL)
-  tryCatch(read_hash_index(backend, index_uri), error = function(e) NULL)
-}
-
-#' Resolve a single sample's image URI or local path
-#'
-#' For S3: constructs URI from image_root + sample_id + known extensions.
-#' For file: scans directory.
-#' @keywords internal
-.resolve_sample_image <- function(image_root, sample_id, dataset_id = NULL,
-                                   backend = NULL) {
-  # 1. Try sample manifest (canonical for multi-file samples)
-  if (!is.null(dataset_id)) {
-    primary <- tryCatch(
-      get_sample_primary_path(dataset_id, sample_id),
-      error = function(e) NULL)
-    if (!is.null(primary)) {
-      if (grepl("^s3://", primary)) return(primary)
-      if (file.exists(primary)) return(primary)
-    }
-  }
-
-  # 2. S3 backend: try known extensions against image_root URI
-  if (!is.null(backend) && backend$type == "s3" && grepl("^s3://", image_root)) {
-    exts <- c(".nii.gz", ".nii", ".nrrd", ".mha", ".dcm")
-    for (ext in exts) {
-      candidate <- paste0(sub("/$", "", image_root), "/", sample_id, ext)
-      head <- backend_head(backend, candidate)
-      if (!is.null(head) && isTRUE(head$exists)) return(candidate)
-    }
+  if (is.null(index_uri) || !nzchar(index_uri)) {
+    if (isTRUE(required)) stop("Mask asset index is invalid.", call. = FALSE)
     return(NULL)
   }
-
-  # 3. File backend: directory scan
-  if (is.null(image_root) || !dir.exists(image_root)) return(NULL)
-  files <- list.files(image_root, full.names = TRUE)
-  for (f in files) {
-    base <- basename(f)
-    name <- sub("\\.(nii\\.gz|nii|nrrd|mha|mhd|dcm)$", "", base,
-                ignore.case = TRUE)
-    if (name == sample_id) return(f)
+  idx <- tryCatch(read_hash_index(backend, index_uri),
+                  error = function(e) NULL)
+  needed <- c("sample_id", "uri", "content_hash")
+  if (!is.data.frame(idx) || !all(needed %in% names(idx))) {
+    stop("Mask asset index is invalid.", call. = FALSE)
   }
-  NULL
+  if (nrow(idx) == 0L) return(idx)
+  ids <- as.character(idx$sample_id)
+  uris <- as.character(idx$uri)
+  hashes <- tolower(as.character(idx$content_hash))
+  valid <- !anyNA(ids) && all(nzchar(ids)) && !anyDuplicated(ids) &&
+    !anyNA(uris) && all(nzchar(uris)) && !anyDuplicated(uris) &&
+    !anyNA(hashes) && all(grepl("^[0-9a-f]{64}$", hashes))
+  if (isTRUE(valid)) {
+    valid <- tryCatch({
+      vapply(uris, .snapshot_relative_object, character(1),
+        root = asset$uri, backend_type = backend$type)
+      TRUE
+    }, error = function(e) FALSE)
+  }
+  if (!isTRUE(valid)) stop("Mask asset index is invalid.", call. = FALSE)
+  idx$sample_id <- ids
+  idx$uri <- uris
+  idx$content_hash <- hashes
+  idx
+}
+
+.mask_hash_index <- function(backend, manifest, mask_asset) {
+  .validated_mask_hash_index(backend, manifest, mask_asset)
+}
+
+#' @keywords internal
+.mask_extensions <- function() {
+  c(".nii.gz", ".nii", ".nrrd", ".mha", ".mhd", ".dcm")
+}
+
+#' @keywords internal
+.mask_candidate_stems <- function(sample_id) {
+  if (!is.character(sample_id) || length(sample_id) != 1L ||
+      is.na(sample_id) || !nzchar(sample_id) ||
+      grepl("[/\\\\]", sample_id) || sample_id %in% c(".", "..")) {
+    stop("Imaging mask selection is invalid.", call. = FALSE)
+  }
+  c(sample_id, paste0(sample_id, "_mask"),
+    paste0(sample_id, "_seg"), paste0(sample_id, "_label"),
+    paste0(sample_id, "_GTV-1"), paste0(sample_id, "_gtv1"))
+}
+
+#' @keywords internal
+.mask_file_stem <- function(path) {
+  base <- basename(path)
+  pattern <- "\\.(nii\\.gz|nii|nrrd|mha|mhd|dcm)$"
+  if (!grepl(pattern, base, ignore.case = TRUE)) return(NA_character_)
+  sub(pattern, "", base, ignore.case = TRUE)
+}
+
+#' @keywords internal
+.is_exact_mask_candidate <- function(path, sample_id) {
+  stem <- .mask_file_stem(path)
+  !is.na(stem) && stem %in% .mask_candidate_stems(sample_id)
+}
+
+#' @keywords internal
+.select_single_mask_candidate <- function(candidates) {
+  candidates <- unique(as.character(candidates))
+  candidates <- candidates[!is.na(candidates) & nzchar(candidates)]
+  if (length(candidates) == 0L) return(NULL)
+  if (length(candidates) > 1L) {
+    stop("Imaging mask selection is ambiguous.", call. = FALSE)
+  }
+  candidates[[1L]]
+}
+
+#' Return TRUE when the configured root or any candidate path component is a
+#' symbolic link. This check uses the lexical path before normalizePath() can
+#' follow a link.
+#' @keywords internal
+.mask_path_has_symlink <- function(path, root) {
+  root <- sub("[/\\\\]+$", "", root)
+  prefix <- paste0(root, .Platform$file.sep)
+  if (!identical(path, root) && !startsWith(path, prefix)) return(TRUE)
+  relative <- if (identical(path, root)) "" else
+    substring(path, nchar(prefix) + 1L)
+  components <- if (nzchar(relative))
+    strsplit(relative, "[/\\\\]")[[1L]] else character(0)
+  current <- root
+  paths <- c(root, vapply(components, function(component) {
+    current <<- file.path(current, component)
+    current
+  }, character(1)))
+  any(nzchar(Sys.readlink(paths)))
+}
+
+#' Resolve a single sample's exact snapshot-pinned image URI or local path
+#' @keywords internal
+.snapshot_image_record <- function(image_root, sample_id, backend, snapshot) {
+  snapshot <- .validate_imaging_collection_snapshot(snapshot)
+  if (!is.character(sample_id) || length(sample_id) != 1L ||
+      is.na(sample_id) || !nzchar(sample_id) || grepl("[/\\\\]", sample_id) ||
+      !inherits(backend, "dsimaging_backend")) {
+    .snapshot_fail()
+  }
+  ids <- vapply(snapshot$records, function(record) {
+    if (!is.list(record) || !.snapshot_scalar(record$sample_id)) {
+      .snapshot_fail()
+    }
+    record$sample_id
+  }, character(1))
+  if (anyDuplicated(ids)) .snapshot_fail()
+  hit <- which(ids == sample_id)
+  if (length(hit) == 0L) return(NULL)
+  if (length(hit) != 1L) .snapshot_fail()
+  record <- snapshot$records[[hit]]
+  if (!identical(record$source_kind, "single_file") ||
+      !.snapshot_scalar(record$uri) ||
+      !.snapshot_scalar(record$relative_path) ||
+      !.snapshot_scalar(record$content_hash, max_bytes = 64L) ||
+      !grepl("^[0-9a-f]{64}$", record$content_hash) ||
+      length(record$size) != 1L || is.na(record$size) ||
+      !is.finite(as.numeric(record$size)) || as.numeric(record$size) < 0) {
+    .snapshot_fail()
+  }
+  relative <- .snapshot_relative_object(record$uri, image_root, backend$type)
+  if (!identical(relative, record$relative_path)) .snapshot_fail()
+  if (identical(backend$type, "file")) {
+    lexical_root <- sub("[/\\\\]+$", "", image_root)
+    if (!nzchar(lexical_root)) lexical_root <- image_root
+    if (nzchar(Sys.readlink(image_root)) ||
+        .mask_path_has_symlink(record$uri, lexical_root)) {
+      .snapshot_fail()
+    }
+  }
+  record
+}
+
+#' @keywords internal
+.resolve_sample_image <- function(image_root, sample_id, backend = NULL,
+                                  snapshot = NULL) {
+  record <- .snapshot_image_record(image_root, sample_id, backend, snapshot)
+  if (is.null(record)) NULL else record$uri
 }
 
 #' Resolve a single sample's mask URI or local path
 #' @keywords internal
 .resolve_sample_mask <- function(mask_root, sample_id, backend = NULL,
                                  manifest = NULL, mask_asset = "masks") {
-  if (is.null(mask_root) || !nzchar(mask_root)) return(NULL)
+  if (!is.character(mask_root) || length(mask_root) != 1L ||
+      is.na(mask_root) || !nzchar(mask_root)) return(NULL)
+  stems <- .mask_candidate_stems(sample_id)
+  exts <- .mask_extensions()
+
+  # A declared hash index is an exact sample-to-object association. Prefer it
+  # for every backend and do not reinterpret that mapping from the filename.
+  if (!is.null(backend) && !is.null(manifest)) {
+    idx <- .mask_hash_index(backend, manifest, mask_asset)
+    if (is.data.frame(idx) && nrow(idx) > 0L && "uri" %in% names(idx)) {
+      hit <- idx[idx$sample_id == sample_id, , drop = FALSE]
+      if (nrow(hit) > 0L) return(.select_single_mask_candidate(hit$uri))
+    }
+  }
 
   if (!is.null(backend) && identical(backend$type, "s3") &&
       grepl("^s3://", mask_root)) {
-    if (!is.null(manifest)) {
-      idx <- .mask_hash_index(backend, manifest, mask_asset)
-      if (is.data.frame(idx) && nrow(idx) > 0 && "uri" %in% names(idx)) {
-        hit <- idx[idx$sample_id == sample_id, , drop = FALSE]
-        if (nrow(hit) > 0 && nzchar(hit$uri[1])) return(hit$uri[1])
-      }
-    }
-
-    exts <- c(".nii.gz", ".nii", ".nrrd", ".mha", ".mhd", ".dcm")
-    stems <- c(sample_id, paste0(sample_id, "_mask"),
-      paste0(sample_id, "_seg"), paste0(sample_id, "_label"),
-      paste0(sample_id, "_GTV-1"), paste0(sample_id, "_gtv1"))
+    candidates <- character(0)
     for (stem in stems) {
       for (ext in exts) {
         candidate <- paste0(sub("/$", "", mask_root), "/", stem, ext)
         head <- backend_head(backend, candidate)
-        if (!is.null(head) && isTRUE(head$exists)) return(candidate)
+        if (!is.null(head) && isTRUE(head$exists)) {
+          candidates <- c(candidates, candidate)
+        }
       }
     }
-
-    keys <- backend_list(backend, mask_root)
-    if (length(keys) == 0) return(NULL)
-    base <- basename(keys)
-    exact <- sub("\\.(nii\\.gz|nii|nrrd|mha|mhd|dcm)$", "", base,
-      ignore.case = TRUE)
-    preferred <- keys[exact == sample_id | exact == paste0(sample_id, "_mask")]
-    if (length(preferred) > 0) return(preferred[1])
-    contains <- keys[grepl(sample_id, base, fixed = TRUE) &
-      grepl("mask|seg|label|gtv", base, ignore.case = TRUE)]
-    if (length(contains) > 0) return(contains[1])
-    return(NULL)
+    return(.select_single_mask_candidate(candidates))
   }
 
   if (!dir.exists(mask_root)) return(NULL)
-  files <- list.files(mask_root, full.names = TRUE, recursive = TRUE)
-  for (f in files) {
-    base <- basename(f)
-    name <- sub("\\.(nii\\.gz|nii|nrrd|mha|mhd|dcm)$", "", base,
-                ignore.case = TRUE)
-    if (grepl(sample_id, name, fixed = TRUE)) return(f)
-  }
-  NULL
+  canonical_root <- tryCatch(
+    normalizePath(mask_root, winslash = "/", mustWork = TRUE),
+    error = function(e) NULL)
+  lexical_root <- sub("[/\\\\]+$", "", mask_root)
+  if (!nzchar(lexical_root)) lexical_root <- mask_root
+  if (is.null(canonical_root) || nzchar(Sys.readlink(lexical_root))) return(NULL)
+  files <- list.files(canonical_root, full.names = TRUE, recursive = TRUE)
+  candidates <- vapply(files, function(path) {
+    if (!file.exists(path) || dir.exists(path) ||
+        .mask_path_has_symlink(path, canonical_root) ||
+        !.is_exact_mask_candidate(path, sample_id)) {
+      return(NA_character_)
+    }
+    canonical <- tryCatch(
+      normalizePath(path, winslash = "/", mustWork = TRUE),
+      error = function(e) NULL)
+    if (is.null(canonical) ||
+        !startsWith(canonical, paste0(sub("/+$", "", canonical_root), "/"))) {
+      return(NA_character_)
+    }
+    canonical
+  }, character(1))
+  .select_single_mask_candidate(candidates)
 }
 
 #' Stage an S3 image to local filesystem for Python runner execution
@@ -1729,9 +2020,21 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 #' this downloads the image to a staging directory.
 #' For file-backed datasets, returns the path as-is.
 #' @keywords internal
-.stage_image_for_job <- function(image_uri, sample_id, dataset_id, backend) {
-  .stage_backend_file_for_job(image_uri, sample_id, dataset_id, backend,
-    role = "images")
+.stage_image_for_job <- function(image_uri, sample_id, dataset_id, backend,
+                                 image_root, snapshot = NULL) {
+  record <- .snapshot_image_record(image_root, sample_id, backend, snapshot)
+  if (is.null(record) || !identical(record$uri, image_uri)) .snapshot_fail()
+  staged <- .stage_backend_file_for_job(
+    image_uri, sample_id, dataset_id, backend, role = "images")
+  info <- tryCatch(file.info(staged), error = function(e) NULL)
+  hash <- tryCatch(digest::digest(file = staged, algo = "sha256"),
+                   error = function(e) NULL)
+  if (is.null(info) || nrow(info) != 1L || isTRUE(info$isdir) ||
+      is.na(info$size) || as.numeric(info$size) != as.numeric(record$size) ||
+      !identical(hash, record$content_hash)) {
+    .snapshot_fail()
+  }
+  staged
 }
 
 #' Stage an S3-backed file to local filesystem for Python runner execution
@@ -1741,16 +2044,32 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
   if (is.null(backend) || backend$type == "file") return(uri)
   if (!grepl("^s3://", uri)) return(uri)
 
-  # Stage to DSHPC_HOME/staging/dataset_id/
+  # Staging names are operational metadata visible to dsHPC. Keep the private
+  # sample id and source basename only in the job config/manifest association,
+  # never in directory entries.
   home <- tryCatch(
     dsHPC:::.dshpc_home(must_exist = FALSE),
     error = function(e) getOption("dshpc.home",
       getOption("default.dshpc.home", "/srv/dshpc"))
   )
-  staging_dir <- file.path(home, "staging", dataset_id, role)
+  collection_token <- digest::digest(
+    jsonlite::toJSON(list(scope = "dsimaging-staging", dataset = dataset_id),
+      auto_unbox = TRUE),
+    algo = "sha256", serialize = FALSE)
+  staging_dir <- file.path(home, "staging", "dsimaging", collection_token, role)
   dir.create(staging_dir, recursive = TRUE, showWarnings = FALSE)
 
-  local_path <- file.path(staging_dir, paste(sample_id, basename(uri), sep = "__"))
+  object_token <- digest::digest(
+    jsonlite::toJSON(list(
+      scope = "dsimaging-staged-object", dataset = dataset_id,
+      role = role, sample = sample_id, uri = uri), auto_unbox = TRUE),
+    algo = "sha256", serialize = FALSE)
+  clean_uri <- sub("[?#].*$", "", tolower(uri))
+  suffixes <- c(".nii.gz", ".nii", ".nrrd", ".mha", ".mhd", ".dcm",
+                ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".svs")
+  suffix <- suffixes[endsWith(clean_uri, suffixes)][1L]
+  if (is.na(suffix)) suffix <- ".bin"
+  local_path <- file.path(staging_dir, paste0(object_token, suffix))
   if (!file.exists(local_path))
     backend_get_file(backend, uri, local_path)
 
@@ -1760,17 +2079,20 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
 #' Resolve a profile name to its YAML file path
 #' @keywords internal
 .resolve_profile_path <- function(profile_name) {
-  if (is.null(profile_name)) return(NULL)
-  # Check inst/profiles/ in dsImaging
+  if (!is.character(profile_name) || length(profile_name) != 1L ||
+      is.na(profile_name) || !grepl("^[A-Za-z0-9_]+$", profile_name)) {
+    return(NULL)
+  }
+  admin_path <- file.path(.imaging_analysis_option("home", "/var/lib/dsimaging"),
+                          "profiles", paste0(profile_name, ".yaml"))
+  if (file.exists(admin_path)) return(admin_path)
+
+  # Check the content-addressed stable copy of bundled profiles.
   profiles_dir <- .stable_imaging_package_dir("profiles")
   if (nzchar(profiles_dir)) {
-    candidates <- list.files(profiles_dir, full.names = TRUE)
-    for (f in candidates) {
-      if (grepl(profile_name, basename(f), fixed = TRUE)) return(f)
-    }
+    candidate <- file.path(profiles_dir, paste0(profile_name, ".yaml"))
+    if (file.exists(candidate)) return(candidate)
   }
-  # If profile_name is already a valid path, use it
-  if (file.exists(profile_name)) return(profile_name)
   NULL
 }
 
@@ -1788,4 +2110,56 @@ imagingSegmentationGetMaskPaths <- function(generation_id) {
     profile_file = basename(profile_path %||% ""),
     profile_file_hash = profile_file_hash
   )
+}
+
+# Legacy low-level orchestration entry points remain exported for package ABI
+# compatibility, but must fail even when an old Opal allowlist still names
+# them. Registered domain methods call the internal helpers above.
+
+#' Disabled legacy collection scan entry point
+#' @param ... Ignored legacy arguments.
+#' @return Never returns; this legacy DataSHIELD surface is disabled.
+#' @export
+imagingRadiomicsScanCollectionDS <- function(...) {
+  .legacy_imaging_ds_disabled("imagingRadiomicsScanCollectionDS")
+}
+
+#' Disabled legacy batch submission entry point
+#' @param ... Ignored legacy arguments.
+#' @return Never returns; this legacy DataSHIELD surface is disabled.
+#' @export
+imagingRadiomicsSubmitBatchDS <- function(...) {
+  .legacy_imaging_ds_disabled("imagingRadiomicsSubmitBatchDS")
+}
+
+#' Disabled legacy raw collection status entry point
+#' @param ... Ignored legacy arguments.
+#' @return Never returns; this legacy DataSHIELD surface is disabled.
+#' @export
+imagingRadiomicsCollectionStatusDS <- function(...) {
+  .legacy_imaging_ds_disabled("imagingRadiomicsCollectionStatusDS")
+}
+
+#' Disabled legacy raw collection recovery entry point
+#' @param ... Ignored legacy arguments.
+#' @return Never returns; this legacy DataSHIELD surface is disabled.
+#' @export
+imagingRadiomicsRecoverCollectionDS <- function(...) {
+  .legacy_imaging_ds_disabled("imagingRadiomicsRecoverCollectionDS")
+}
+
+#' Disabled legacy raw collection publication entry point
+#' @param ... Ignored legacy arguments.
+#' @return Never returns; this legacy DataSHIELD surface is disabled.
+#' @export
+imagingRadiomicsPublishCollectionDS <- function(...) {
+  .legacy_imaging_ds_disabled("imagingRadiomicsPublishCollectionDS")
+}
+
+#' Disabled legacy raw mask-validation entry point
+#' @param ... Ignored legacy arguments.
+#' @return Never returns; this legacy DataSHIELD surface is disabled.
+#' @export
+imagingSegmentationValidateMasksDS <- function(...) {
+  .legacy_imaging_ds_disabled("imagingSegmentationValidateMasksDS")
 }

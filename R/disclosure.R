@@ -2,6 +2,31 @@
 # Shared helpers for safe metadata output across all DS packages.
 # Applies DataSHIELD nfilter rules to count-bearing metadata.
 
+#' Project one manifest/configuration value as a public identifier
+#'
+#' Invalid values are replaced rather than echoed because node-owned free-form
+#' strings can otherwise smuggle storage paths or URIs through fields such as
+#' asset kind, provider, model task, or modality.
+#' @keywords internal
+.safe_public_identifier <- function(value, default = NA_character_) {
+  if (is.null(value) || is.list(value) || length(value) != 1L) return(default)
+  value <- enc2utf8(as.character(value))
+  valid <- !is.na(value) && nzchar(value) &&
+    nchar(value, type = "bytes") <= 128L &&
+    grepl("^[A-Za-z0-9][A-Za-z0-9._:-]*$", value) &&
+    !grepl("..", value, fixed = TRUE) &&
+    !grepl("^[A-Za-z][A-Za-z0-9+.-]*:", value)
+  if (isTRUE(valid)) unname(value) else default
+}
+
+#' @keywords internal
+.safe_public_identifiers <- function(values) {
+  values <- unlist(values, use.names = FALSE)
+  if (length(values) == 0L) return(character(0))
+  projected <- vapply(values, .safe_public_identifier, character(1))
+  unname(unique(projected[!is.na(projected)]))
+}
+
 #' Apply disclosure control to a count value
 #'
 #' Returns the count as-is, bucketed (power-of-2), or NA depending
@@ -15,13 +40,17 @@ safe_metadata_count <- function(n, profile = NULL) {
   if (is.null(profile)) profile <- .get_active_profile()
   nfilter <- .get_nfilter_subset()
 
+  # The DataSHIELD minimum cell-size floor applies to every trust profile.
+  # A profile may choose exact versus bucketed admitted counts, but may not
+  # expose a count below nfilter.
+  if (is.na(n) || n < nfilter) return(NA_integer_)
+
   # Tier A profiles: exact counts OK
   if (profile %in% c("sandbox_open", "trusted_internal"))
     return(as.integer(n))
 
   # Tier D profiles: hide very small counts
   if (profile %in% c("clinical_hardened", "high_sensitivity_dp")) {
-    if (!is.na(n) && n < nfilter) return(NA_integer_)
     return(.bucket_count(n))
   }
 
@@ -39,19 +68,26 @@ safe_metadata_count <- function(n, profile = NULL) {
 #' @export
 safe_metadata_distribution <- function(counts, profile = NULL) {
   if (is.null(profile)) profile <- .get_active_profile()
+  nfilter <- .get_nfilter_tab()
+  admitted <- !is.na(counts) & counts >= nfilter
+
+  # Suppressing only the small cell is insufficient when another Aggregate
+  # releases the exact cohort total: subtraction would reconstruct it. Refuse
+  # the whole distribution whenever any cell is below the invariant floor.
+  if (length(counts) == 0L || any(!admitted)) return(NULL)
 
   # Hidden in hardened/DP profiles
   if (profile %in% c("clinical_hardened", "high_sensitivity_dp"))
     return(NULL)
 
-  # Exact in sandbox/trusted
-  if (profile %in% c("sandbox_open", "trusted_internal"))
+  # Exact counts are available only when every cell is independently admitted.
+  if (profile %in% c("sandbox_open", "trusted_internal")) {
     return(counts)
+  }
 
   # Bucketed in consortium/clinical/update_noise
-  nfilter <- .get_nfilter_tab()
   safe <- vapply(counts, function(x) {
-    if (x < nfilter) NA_integer_ else .bucket_count(x)
+    if (is.na(x) || x < nfilter) NA_integer_ else .bucket_count(x)
   }, integer(1))
   safe
 }
@@ -96,9 +132,10 @@ safe_metadata_string <- function(x) {
 #' Power-of-2 bucketing for counts
 #' @keywords internal
 .bucket_count <- function(n) {
-  if (is.na(n) || n <= 0) return(0L)
-  if (n < 4) return(as.integer(n))
-  as.integer(2^round(log2(n)))
+  if (is.na(n) || n <= 0) return(NA_integer_)
+  # Use upper power-of-two bounds and a minimum bucket of four. In particular,
+  # admitted counts such as 3 are never returned unchanged.
+  as.integer(2^ceiling(log2(max(as.numeric(n), 4))))
 }
 
 #' Get the active trust profile name
@@ -117,13 +154,32 @@ safe_metadata_string <- function(x) {
 #' Get nfilter.subset threshold
 #' @keywords internal
 .get_nfilter_subset <- function() {
-  as.integer(getOption("nfilter.subset",
-    getOption("default.nfilter.subset", 3)))
+  .normalise_nfilter_threshold(getOption("dsimaging.nfilter.subset",
+    getOption("default.dsimaging.nfilter.subset",
+      getOption("nfilter.subset", getOption("default.nfilter.subset", 3)))))
 }
 
 #' Get nfilter.tab threshold
 #' @keywords internal
 .get_nfilter_tab <- function() {
-  as.integer(getOption("nfilter.tab",
-    getOption("default.nfilter.tab", 3)))
+  .normalise_nfilter_threshold(getOption("dsimaging.nfilter.tab",
+    getOption("default.dsimaging.nfilter.tab",
+      getOption("nfilter.tab", getOption("default.nfilter.tab", 3)))))
+}
+
+#' Validate a DataSHIELD count threshold without allowing configuration to
+#' weaken the minimum privacy floor.
+#' @keywords internal
+.normalise_nfilter_threshold <- function(value, fallback = 3L) {
+  numeric_value <- tryCatch(
+    suppressWarnings(as.numeric(value)),
+    error = function(e) numeric(0))
+  if (length(numeric_value) != 1L || is.na(numeric_value) ||
+      !is.finite(numeric_value)) {
+    return(as.integer(fallback))
+  }
+  numeric_value <- ceiling(numeric_value)
+  if (numeric_value < fallback) return(as.integer(fallback))
+  if (numeric_value > .Machine$integer.max) return(.Machine$integer.max)
+  as.integer(numeric_value)
 }

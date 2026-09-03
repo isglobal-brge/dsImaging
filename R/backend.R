@@ -93,8 +93,9 @@ backend_list <- function(backend, prefix) {
 #' @return Parsed YAML as a named list.
 #' @export
 backend_fetch_manifest <- function(backend, uri) {
+  if (!grepl("^s3://", uri)) return(yaml::yaml.load_file(uri))
   switch(backend$type,
-    file = yaml::yaml.load_file(uri),
+    file = stop("A file backend cannot fetch an S3 manifest.", call. = FALSE),
     s3 = {
       tmp <- tempfile(fileext = ".yaml")
       on.exit(unlink(tmp), add = TRUE)

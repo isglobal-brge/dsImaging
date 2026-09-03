@@ -5,7 +5,10 @@ test_that("imaging_dataset_descriptor creates valid object", {
     dataset_id = "test.dataset.v1",
     modality = "image",
     title = "Test Dataset",
-    metadata = list(file = "/tmp/test.csv", format = "csv"),
+    metadata = list(file = "/tmp/test.csv", format = "csv",
+      id_col = "sample_id", privacy_unit = "patient",
+      privacy_unit_col = "patient_id",
+      privacy_unit_canonicalization = "trim-utf8-v2"),
     assets = list(
       images = list(type = "image_root", root = "/tmp/images")
     )
@@ -39,7 +42,9 @@ test_that("print method works for ImagingDatasetDescriptor", {
     modality = "image",
     title = "Test",
     task_types = list("classification"),
-    metadata = list(file = "/tmp/test.csv"),
+    metadata = list(file = "/tmp/test.csv", id_col = "sample_id",
+      privacy_unit = "patient", privacy_unit_col = "patient_id",
+      privacy_unit_canonicalization = "trim-utf8-v2"),
     assets = list(images = list(type = "image_root", root = "/tmp"))
   )
 

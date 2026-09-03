@@ -1,38 +1,27 @@
 #!/usr/bin/env python3
 """TotalSegmentator inference runner for dsImaging.
 
-Reads images from the dsImaging registry and produces mask NIfTI files.
+Reads images from the server-authorized dsImaging worker context and produces
+mask NIfTI files.
 """
-import argparse, json, os, sys, glob
+import argparse, json, os, sys
 
-from dsimaging_utils import package_versions
+from dsimaging_utils import (
+    IMAGE_EXTS,
+    cfg,
+    mapped_sample_files,
+    package_versions,
+    sample_token,
+    write_collection_output_manifest,
+)
 
 
-def find_images(input_dir):
-    """Find images from dsImaging registry or input dir."""
-    registry_path = "/var/lib/dsimaging/registry.yaml"
-    dataset_id = os.environ.get("DSHPC_CFG_DATASET_ID", "")
-
-    if os.path.exists(registry_path):
-        try:
-            import yaml
-            registry = yaml.safe_load(open(registry_path))
-            for ds_id, entry in registry.items():
-                if dataset_id and ds_id != dataset_id:
-                    continue
-                manifest = yaml.safe_load(open(entry["manifest"]))
-                image_root = manifest.get("assets", {}).get("images", {}).get("root")
-                if image_root and os.path.isdir(image_root):
-                    return [(os.path.join(image_root, f), os.path.splitext(f)[0])
-                            for f in sorted(os.listdir(image_root))
-                            if not f.startswith(".")]
-        except Exception as e:
-            print(f"  Registry warning: {e}")
-
-    # Fallback
-    return [(os.path.join(input_dir, f), os.path.splitext(f)[0])
-            for f in sorted(os.listdir(input_dir))
-            if not f.startswith(".") and os.path.isfile(os.path.join(input_dir, f))]
+def find_images():
+    """Find only images present in the admitted collection mapping."""
+    return mapped_sample_files(
+        cfg("image_asset", "images"), "images",
+        artifact_types=("image_root",), extensions=IMAGE_EXTS,
+    )
 
 
 def main():
@@ -58,12 +47,20 @@ def main():
     fast = os.environ.get("DSHPC_CFG_FAST", "").lower() in ("true", "1", "yes")
 
     # Single-image mode
+    collection_mode = not bool(image)
     if image:
-        sid = sample_id or os.path.splitext(os.path.basename(image))[0]
+        if not sample_id:
+            print("ERROR: Single-image mode requires sample_id", file=sys.stderr)
+            sys.exit(1)
+        sid = sample_id
         images = [(image, sid)]
-        print(f"  Single-image mode: {sid}")
+        print("  Single-image mode")
     else:
-        images = find_images(args.input)
+        try:
+            images = find_images()
+        except RuntimeError:
+            print("ERROR: Admitted imaging inputs are unavailable", file=sys.stderr)
+            sys.exit(1)
 
     print(f"  Found {len(images)} images")
     if fast:
@@ -73,17 +70,30 @@ def main():
     from totalsegmentator.python_api import totalsegmentator
 
     results = []
+    output_samples = {}
     for img_path, sample_id in images:
         try:
-            print(f"  Segmenting: {sample_id}")
-            out_dir = os.path.join(args.output, sample_id)
+            print("  Segmenting admitted image")
+            out_dir = os.path.join(args.output, sample_token(sample_id))
             os.makedirs(out_dir, exist_ok=True)
             totalsegmentator(img_path, out_dir, task=args.task, fast=fast)
-            masks = [f for f in os.listdir(out_dir) if f.endswith((".nii.gz", ".nii"))]
+            masks = sorted(
+                os.path.join(out_dir, f) for f in os.listdir(out_dir)
+                if f.endswith((".nii.gz", ".nii"))
+            )
+            if not masks:
+                raise RuntimeError("Segmentation produced no masks")
             print(f"  Done: {len(masks)} masks")
-            results.append({"sample_id": sample_id, "status": "done", "n_masks": len(masks)})
+            results.append({
+                "sample_id": sample_id, "status": "done",
+                "n_masks": len(masks), "mask_files": masks,
+                "primary_mask": masks[0],
+            })
+            output_samples[sample_id] = {
+                "primary": masks[0], "files": masks
+            }
         except Exception as e:
-            print(f"  FAILED {sample_id}: {e}", file=sys.stderr)
+            print("  FAILED: admitted image segmentation failed", file=sys.stderr)
             results.append({"sample_id": sample_id, "status": "failed", "error": str(e)})
 
     summary = {"n_total": len(images), "n_done": sum(1 for r in results if r["status"] == "done"),
@@ -96,15 +106,13 @@ def main():
     seg_manifest = {"provider": "totalsegmentator", "task": args.task, "samples": {}}
     for r in results:
         sid = r["sample_id"]
-        out_dir = os.path.join(args.output, sid)
-        if r["status"] == "done" and os.path.isdir(out_dir):
-            masks = sorted(f for f in os.listdir(out_dir)
-                          if f.endswith((".nii.gz", ".nii")))
+        if r["status"] == "done":
+            masks = r["mask_files"]
             seg_manifest["samples"][sid] = {
                 "sample_id": sid,
-                "mask_dir": out_dir,
-                "mask_files": [os.path.join(out_dir, m) for m in masks],
-                "primary_mask": os.path.join(out_dir, masks[0]) if masks else None,
+                "mask_dir": os.path.dirname(r["primary_mask"]),
+                "mask_files": masks,
+                "primary_mask": r["primary_mask"],
                 "status": "done"
             }
     with open(os.path.join(args.output, "seg_manifest.json"), "w") as f:
@@ -112,9 +120,10 @@ def main():
 
     print(f"  Done: {summary['n_done']}/{summary['n_total']} ({summary['n_failed']} failed)")
 
-    # Exit non-zero if all images failed (so dsHPC marks step as failed)
-    if summary["n_done"] == 0 and summary["n_total"] > 0:
+    if summary["n_failed"]:
         sys.exit(1)
+    if collection_mode:
+        write_collection_output_manifest(args.output, "mask_root", output_samples)
 
 
 if __name__ == "__main__":

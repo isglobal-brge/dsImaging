@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """dsImaging feature extraction runner.
 
-Reads the dsImaging registry to find image/mask roots for the dataset.
-Falls back to matching files in the input directory.
+Resolves collection assets only from the server-created worker context.
 """
 
 import argparse
@@ -10,57 +9,12 @@ import json
 import os
 import sys
 
-from dsimaging_utils import package_versions, resolve_asset_path
-
-
-def _strip_extensions(filename):
-    """Strip known compound extensions (.nii.gz) and simple extensions."""
-    for ext in (".nii.gz", ".nii", ".nrrd", ".mha", ".mhd", ".dcm"):
-        if filename.lower().endswith(ext):
-            return filename[: -len(ext)]
-    return os.path.splitext(filename)[0]
-
-
-def find_pairs_from_roots(image_root, mask_root):
-    """Match image-mask pairs by filename."""
-    if not os.path.isdir(image_root) or not os.path.isdir(mask_root):
-        return []
-    images = {_strip_extensions(f): os.path.join(image_root, f)
-              for f in os.listdir(image_root) if not f.startswith(".")}
-    pairs = []
-    for f in os.listdir(mask_root):
-        if f.startswith("."):
-            continue
-        name = _strip_extensions(f)
-        if name in images:
-            pairs.append((images[name], os.path.join(mask_root, f), name))
-    return sorted(pairs, key=lambda x: x[2])
-
-
-def find_dataset_roots(dataset_id=None):
-    """Read dsImaging registry to find image/mask roots."""
-    registry_path = "/var/lib/dsimaging/registry.yaml"
-    if not os.path.exists(registry_path):
-        return None, None
-
-    try:
-        import yaml
-        registry = yaml.safe_load(open(registry_path))
-        for ds_id, entry in registry.items():
-            if dataset_id and ds_id != dataset_id:
-                continue
-            manifest_path = entry.get("manifest", "")
-            if not os.path.exists(manifest_path):
-                continue
-            manifest = yaml.safe_load(open(manifest_path))
-            assets = manifest.get("assets", {})
-            image_root = assets.get("images", {}).get("root")
-            mask_root = assets.get("masks", {}).get("root")
-            if image_root and mask_root:
-                return image_root, mask_root
-    except Exception as e:
-        print(f"  Warning: registry read failed: {e}")
-    return None, None
+from dsimaging_utils import (
+    IMAGE_EXTS,
+    MASK_EXTS,
+    mapped_sample_files,
+    package_versions,
+)
 
 
 def _find_mask_from_manifest(input_dir, sample_id):
@@ -78,55 +32,12 @@ def _find_mask_from_manifest(input_dir, sample_id):
             manifest = json.load(f)
         sample_entry = manifest.get("samples", {}).get(sample_id)
         if sample_entry and sample_entry.get("primary_mask"):
-            mask = sample_entry["primary_mask"]
-            if os.path.exists(mask):
+            root = os.path.realpath(input_dir)
+            mask = os.path.realpath(sample_entry["primary_mask"])
+            if os.path.commonpath([root, mask]) == root and os.path.isfile(mask):
                 return mask
-    except Exception as e:
-        print(f"  Warning: seg_manifest.json read failed: {e}", file=sys.stderr)
-    return None
-
-
-def _find_mask_for_sample(input_dir, sample_id):
-    """Find mask file for a sample in the input directory.
-
-    Searches with increasing generality:
-    1. Files containing sample_id AND 'mask'/'label' in name
-    2. Files inside a subdirectory named after sample_id (TotalSegmentator output)
-    3. Any NIfTI file containing sample_id in its name
-    4. If only one NIfTI file exists, use it (unambiguous single-image case)
-    """
-    if not os.path.isdir(input_dir):
-        return None
-
-    # Strategy 1: explicit mask/label naming
-    for f in os.listdir(input_dir):
-        fpath = os.path.join(input_dir, f)
-        if os.path.isfile(fpath) and sample_id in f:
-            if "mask" in f.lower() or "label" in f.lower():
-                return fpath
-
-    # Strategy 2: subdirectory matching sample_id (e.g. TotalSegmentator)
-    subdir = os.path.join(input_dir, sample_id)
-    if os.path.isdir(subdir):
-        nifti_files = [f for f in os.listdir(subdir)
-                       if f.endswith((".nii.gz", ".nii"))]
-        if nifti_files:
-            return os.path.join(subdir, sorted(nifti_files)[0])
-
-    # Strategy 3: any NIfTI containing sample_id
-    for f in os.listdir(input_dir):
-        fpath = os.path.join(input_dir, f)
-        if os.path.isfile(fpath) and sample_id in f:
-            if f.endswith((".nii.gz", ".nii", ".nrrd", ".mha")):
-                return fpath
-
-    # Strategy 4: single unambiguous NIfTI file
-    nifti_all = [f for f in os.listdir(input_dir)
-                 if os.path.isfile(os.path.join(input_dir, f))
-                 and f.endswith((".nii.gz", ".nii", ".nrrd", ".mha"))]
-    if len(nifti_all) == 1:
-        return os.path.join(input_dir, nifti_all[0])
-
+    except Exception:
+        print("  Warning: segmentation manifest could not be read", file=sys.stderr)
     return None
 
 
@@ -142,9 +53,7 @@ def _filter_selected_features(features, selected_features, sample_id):
         return features
     missing = [name for name in selected_features if name not in features]
     if missing:
-        raise ValueError(
-            f"Selected feature(s) missing for {sample_id}: {', '.join(missing)}"
-        )
+        raise ValueError(f"Selected feature(s) missing: {', '.join(missing)}")
     return {name: features[name] for name in selected_features}
 
 
@@ -170,46 +79,33 @@ def main():
 
     # Single-image mode
     if image:
-        sid = sample_id or os.path.splitext(os.path.basename(image))[0]
+        if not sample_id:
+            print("ERROR: Single-image mode requires sample_id", file=sys.stderr)
+            sys.exit(1)
+        sid = sample_id
         if not mask:
-            # Canonical path: read seg_manifest.json from segmentation output
             mask = _find_mask_from_manifest(args.input, sid)
         if not mask:
-            # Fallback: heuristic search (backward compat / manual mask setups)
-            print(f"  Note: no seg_manifest.json found, using heuristic mask search",
-                  file=sys.stderr)
-            mask = _find_mask_for_sample(args.input, sid)
-        if not mask:
-            print(f"ERROR: No mask found for {sid}", file=sys.stderr)
+            print("ERROR: No mask found for the admitted image", file=sys.stderr)
             sys.exit(1)
         pairs = [(image, mask, sid)]
-        print(f"  Single-image mode: {sid}")
+        print("  Single-image mode")
     else:
-        # Collection mode (original behavior)
-        dataset_id = os.environ.get("DSHPC_CFG_DATASET_ID", "")
         image_asset = os.environ.get("DSHPC_CFG_IMAGE_ASSET", "images")
         mask_asset = os.environ.get("DSHPC_CFG_MASK_ASSET", "masks")
-        image_root = resolve_asset_path(image_asset, "images",
-                                        os.environ.get("DSHPC_CFG_IMAGE_ROOT"))
-        mask_root = resolve_asset_path(mask_asset, "masks",
-                                       os.environ.get("DSHPC_CFG_MASK_ROOT"))
-        if image_root and not mask_root and os.path.isdir(args.input):
-            mask_root = args.input
-        if not image_root or not mask_root:
-            image_root, mask_root = find_dataset_roots(dataset_id or None)
-
-        if image_root and mask_root:
-            print(f"  Image root: {image_root}")
-            print(f"  Mask root: {mask_root}")
-            pairs = find_pairs_from_roots(image_root, mask_root)
-        else:
-            pairs = []
-            for f in os.listdir(args.input):
-                if "image" in f.lower():
-                    for m in os.listdir(args.input):
-                        if "label" in m.lower() or "mask" in m.lower():
-                            pairs.append((os.path.join(args.input, f), os.path.join(args.input, m), os.path.splitext(f)[0]))
-                            break
+        try:
+            images = mapped_sample_files(
+                image_asset, "images", artifact_types=("image_root",),
+                extensions=IMAGE_EXTS,
+            )
+            masks = dict((sid, path) for path, sid in mapped_sample_files(
+                mask_asset, "masks", artifact_types=("mask_root",),
+                extensions=MASK_EXTS,
+            ))
+        except RuntimeError:
+            print("ERROR: Admitted imaging inputs are unavailable", file=sys.stderr)
+            sys.exit(1)
+        pairs = [(path, masks[sid], sid) for path, sid in images]
 
     print(f"  Found {len(pairs)} image-mask pairs")
     if not pairs:
@@ -229,9 +125,10 @@ def main():
         print(f"  Selected features: {', '.join(selected_features)}")
 
     results = []
+    failures = 0
     for img, mask, sid in pairs:
         try:
-            print(f"  Extracting: {sid}")
+            print("  Extracting admitted image")
             result = extractor.execute(img, mask)
             features = {}
             for k, v in result.items():
@@ -244,11 +141,13 @@ def main():
             features = _filter_selected_features(features, selected_features, sid)
             features["sample_id"] = sid
             results.append(features)
-        except Exception as e:
-            print(f"  FAILED {sid}: {e}", file=sys.stderr)
+        except Exception:
+            print("  FAILED: admitted image extraction failed", file=sys.stderr)
+            failures += 1
 
-    if not results:
-        print("ERROR: No features extracted", file=sys.stderr)
+    if failures or len(results) != len(pairs):
+        print("ERROR: Feature extraction did not complete the admitted roster",
+              file=sys.stderr)
         sys.exit(1)
 
     df = pd.DataFrame(results)

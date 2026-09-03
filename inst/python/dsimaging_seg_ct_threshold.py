@@ -12,21 +12,21 @@ import json
 import os
 import sys
 
-from dsimaging_utils import package_versions
+from dsimaging_utils import (
+    IMAGE_EXTS,
+    cfg,
+    mapped_sample_files,
+    package_versions,
+    sample_token,
+    write_collection_output_manifest,
+)
 
 
-def _strip_extensions(filename):
-    for ext in (".nii.gz", ".nii", ".nrrd", ".mha", ".mhd", ".dcm"):
-        if filename.lower().endswith(ext):
-            return filename[: -len(ext)]
-    return os.path.splitext(filename)[0]
-
-
-def find_images(input_dir):
-    return [(os.path.join(input_dir, f), _strip_extensions(f))
-            for f in sorted(os.listdir(input_dir))
-            if not f.startswith(".")
-            and os.path.isfile(os.path.join(input_dir, f))]
+def find_images():
+    return mapped_sample_files(
+        cfg("image_asset", "images"), "images",
+        artifact_types=("image_root",), extensions=IMAGE_EXTS,
+    )
 
 
 def _component_touches_border(bbox, size):
@@ -95,13 +95,21 @@ def main():
         "DSHPC_CFG_MAX_COMPONENTS", args.max_components))
     min_voxels = int(os.environ.get("DSHPC_CFG_MIN_VOXELS", args.min_voxels))
 
+    collection_mode = not bool(image)
     if image:
-        sid = sample_id or _strip_extensions(os.path.basename(image))
+        if not sample_id:
+            print("ERROR: Single-image mode requires sample_id", file=sys.stderr)
+            sys.exit(1)
+        sid = sample_id
         images = [(image, sid)]
         print(f"CT threshold segmentation")
-        print(f"  Single-image mode: {sid}")
+        print("  Single-image mode")
     else:
-        images = find_images(args.input)
+        try:
+            images = find_images()
+        except RuntimeError:
+            print("ERROR: Admitted imaging inputs are unavailable", file=sys.stderr)
+            sys.exit(1)
         print("CT threshold segmentation")
 
     print(f"  Threshold: {threshold}")
@@ -111,6 +119,7 @@ def main():
     import SimpleITK as sitk
 
     results = []
+    output_samples = {}
     manifest = {
         "provider": "ct_lung_threshold",
         "threshold": threshold,
@@ -119,10 +128,12 @@ def main():
 
     for img_path, sid in images:
         try:
-            print(f"  Segmenting: {sid}")
+            print("  Segmenting admitted image")
             img = sitk.ReadImage(img_path)
             mask = segment_image(img, threshold, max_components, min_voxels)
-            out_path = os.path.join(args.output, f"{sid}_ct_lung_mask.nii.gz")
+            out_path = os.path.join(
+                args.output, f"{sample_token(sid)}_ct_lung_mask.nii.gz"
+            )
             sitk.WriteImage(mask, out_path)
             manifest["samples"][sid] = {
                 "sample_id": sid,
@@ -131,8 +142,9 @@ def main():
                 "status": "done",
             }
             results.append({"sample_id": sid, "status": "done"})
+            output_samples[sid] = {"primary": out_path, "files": [out_path]}
         except Exception as exc:
-            print(f"  FAILED {sid}: {exc}", file=sys.stderr)
+            print("  FAILED: admitted image segmentation failed", file=sys.stderr)
             results.append({
                 "sample_id": sid,
                 "status": "failed",
@@ -154,6 +166,8 @@ def main():
 
     if summary["n_failed"]:
         sys.exit(1)
+    if collection_mode:
+        write_collection_output_manifest(args.output, "mask_root", output_samples)
     print(f"  Done: {summary['n_done']}/{summary['n_total']}")
 
 

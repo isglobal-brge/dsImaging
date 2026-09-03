@@ -7,17 +7,13 @@ import os
 import sys
 
 from dsimaging_utils import (
+    IMAGE_EXTS,
+    MASK_EXTS,
     cfg,
-    image_files,
+    mapped_sample_files,
     package_versions,
-    resolve_asset_path,
-    strip_extensions,
     write_json,
 )
-
-
-def index(paths):
-    return {strip_extensions(os.path.basename(p)): p for p in paths}
 
 
 def image_metrics(path):
@@ -68,18 +64,23 @@ def main():
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
-    image_root = resolve_asset_path(cfg("image_asset", "images"), "images", cfg("image_root"))
+    image_asset = cfg("image_asset", "images")
     mask_asset = cfg("mask_asset", "")
-    mask_explicit = cfg("mask_root")
-    mask_root = (
-        resolve_asset_path(mask_asset, "masks", mask_explicit)
-        if mask_asset or mask_explicit else None
-    )
-    images = index(image_files(image_root))
+    try:
+        images = dict((sid, path) for path, sid in mapped_sample_files(
+            image_asset, "images", artifact_types=("image_root",),
+            extensions=IMAGE_EXTS,
+        ))
+        masks = dict((sid, path) for path, sid in mapped_sample_files(
+            mask_asset, "masks", artifact_types=("mask_root",),
+            extensions=MASK_EXTS,
+        )) if mask_asset else {}
+    except RuntimeError:
+        print("ERROR: Admitted imaging inputs are unavailable", file=sys.stderr)
+        sys.exit(1)
     if not images:
         print("ERROR: No images found", file=sys.stderr)
         sys.exit(1)
-    masks = index(image_files(mask_root)) if mask_root else {}
     os.makedirs(args.output, exist_ok=True)
 
     rows = []

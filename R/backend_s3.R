@@ -59,12 +59,14 @@
 #' @keywords internal
 .s3_head <- function(config, bucket, key) {
   result <- tryCatch({
-    resp <- aws.s3::head_object(
-      object = key, bucket = bucket,
-      key = config$access_key, secret = config$secret_key,
-      base_url = .s3_base_url(config$endpoint),
-      region = config$region,
-      use_https = .s3_use_https(config$endpoint))
+    resp <- .s3_quiet_call(function() {
+      aws.s3::head_object(
+        object = key, bucket = bucket,
+        key = config$access_key, secret = config$secret_key,
+        base_url = .s3_base_url(config$endpoint),
+        region = config$region,
+        use_https = .s3_use_https(config$endpoint))
+    })
     if (isTRUE(as.logical(resp))) {
       headers <- attributes(resp)
       list(
@@ -192,19 +194,46 @@
       file.path(getOption("dsimaging.data_dir",
         getOption("default.dsimaging.data_dir", "/var/lib/dsimaging")),
         "credentials.yaml")))
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE,
+             mode = "0700")
+  tryCatch(Sys.chmod(dirname(path), "0700", use_umask = FALSE),
+           error = function(e) NULL)
+  lock_path <- paste0(path, ".lock")
+  deadline <- Sys.time() + 5
+  repeat {
+    if (isTRUE(dir.create(lock_path, showWarnings = FALSE, mode = "0700"))) {
+      break
+    }
+    if (Sys.time() >= deadline) {
+      stop("Credential store is busy.", call. = FALSE)
+    }
+    Sys.sleep(0.02)
+  }
+  on.exit(unlink(lock_path, recursive = TRUE, force = TRUE), add = TRUE)
+
   store <- tryCatch({
     if (file.exists(path)) yaml::yaml.load_file(path) else list()
-  }, error = function(e) list())
-  if (is.null(store) || !is.list(store)) store <- list()
+  }, error = function(e) {
+    stop("Credential store is unavailable.", call. = FALSE)
+  })
+  if (is.null(store) || !is.list(store)) {
+    stop("Credential store is unavailable.", call. = FALSE)
+  }
   store[[ref]] <- list(
     access_key = cred$access_key %||% cred$identity,
     secret_key = cred$secret_key %||% cred$secret,
     endpoint = cred$endpoint %||% NULL,
     region = cred$region %||% NULL
   )
-  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  yaml::write_yaml(store, path)
-  tryCatch(Sys.chmod(path, "0600"), error = function(e) NULL)
+  tmp <- tempfile(pattern = ".credentials-", tmpdir = dirname(path),
+                  fileext = ".yaml")
+  on.exit(unlink(tmp, force = TRUE), add = TRUE)
+  yaml::write_yaml(store, tmp)
+  tryCatch(Sys.chmod(tmp, "0600", use_umask = FALSE),
+           error = function(e) NULL)
+  if (!file.rename(tmp, path)) {
+    stop("Could not atomically update credential store.", call. = FALSE)
+  }
   invisible(TRUE)
 }
 
@@ -245,6 +274,35 @@
   list(access_key = ak, secret_key = sk)
 }
 
+#' Keep an S3 backend safe for a private, session-bound handle
+#'
+#' A Resource object may remain referenced by the package-private handle
+#' registry so same-session consumers can fetch collection objects lazily. Its
+#' credentials are never copied to options, disk, descriptors, or job records.
+#' Durable worker contexts are handled separately by
+#' `.portable_backend_context()` and require administrator-managed
+#' credentials.
+#' @keywords internal
+.sanitize_imaging_backend <- function(backend, dataset_id) {
+  if (is.null(backend) || !identical(backend$type, "s3")) return(backend)
+  cfg <- backend$config %||% list()
+  raw_fields <- c("access_key", "secret_key", "identity", "secret",
+                  "password")
+  if (any(raw_fields %in% names(cfg))) {
+    stop("Raw storage credentials are not accepted in imaging backends.",
+         call. = FALSE)
+  }
+  ref <- cfg$credentials_ref %||% NULL
+  clean <- list(
+    endpoint = cfg$endpoint %||% NULL,
+    credentials_ref = ref,
+    region = cfg$region %||% NULL,
+    uri_prefix = cfg$uri_prefix %||% NULL
+  )
+  if (!is.null(cfg$resource)) clean$resource <- cfg$resource
+  storage_backend("s3", config = clean)
+}
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -265,8 +323,23 @@
 
 #' Wrapper for aws.s3 calls with error handling
 #' @keywords internal
+.s3_quiet_call <- function(fn) {
+  if (!is.function(fn)) {
+    stop("Invalid S3 operation.", call. = FALSE)
+  }
+  result <- NULL
+  invisible(utils::capture.output(
+    result <- withCallingHandlers(
+      suppressMessages(fn()),
+      warning = function(w) invokeRestart("muffleWarning")),
+    type = "output"))
+  result
+}
+
+#' Wrapper for aws.s3 calls with error handling
+#' @keywords internal
 .s3_call <- function(fn) {
-  tryCatch(fn(), error = function(e) {
-    stop("S3 operation failed: ", conditionMessage(e), call. = FALSE)
+  tryCatch(.s3_quiet_call(fn), error = function(e) {
+    stop("S3 operation failed.", call. = FALSE)
   })
 }

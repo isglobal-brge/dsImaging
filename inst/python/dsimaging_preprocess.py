@@ -6,14 +6,14 @@ import os
 import sys
 
 from dsimaging_utils import (
+    IMAGE_EXTS,
     cfg,
     cfg_float,
     cfg_list,
-    image_files,
+    mapped_sample_files,
     package_versions,
-    resolve_asset_path,
-    safe_id,
-    strip_extensions,
+    sample_token,
+    write_collection_output_manifest,
     write_json,
 )
 
@@ -83,8 +83,15 @@ def main():
     import SimpleITK as sitk
 
     operations = cfg_list("operations", []) or [v.strip() for v in str(args.operations or "float32").split(",") if v.strip()]
-    root = resolve_asset_path(cfg("image_asset", "images"), "images", cfg("image_root"))
-    images = image_files(root)
+    image_asset = cfg("image_asset", "images")
+    try:
+        images = mapped_sample_files(
+            image_asset, "images", artifact_types=("image_root",),
+            extensions=IMAGE_EXTS,
+        )
+    except RuntimeError:
+        print("ERROR: Admitted imaging inputs are unavailable", file=sys.stderr)
+        sys.exit(1)
     if not images:
         print("ERROR: No images found", file=sys.stderr)
         sys.exit(1)
@@ -93,8 +100,8 @@ def main():
 
     manifest = {"runner": "dsimaging_preprocess", "operations": operations, "samples": {}}
     results = []
-    for path in images:
-        sid = strip_extensions(os.path.basename(path))
+    output_samples = {}
+    for path, sid in images:
         try:
             img = sitk.ReadImage(path)
             for op in operations:
@@ -111,10 +118,13 @@ def main():
                     img = cast_float32(img)
                 else:
                     raise ValueError(f"Unsupported preprocessing operation: {op}")
-            out_path = os.path.join(args.output, f"{safe_id(sid)}_preprocessed.nii.gz")
+            out_path = os.path.join(
+                args.output, f"{sample_token(sid)}_preprocessed.nii.gz"
+            )
             sitk.WriteImage(img, out_path)
             manifest["samples"][sid] = {"primary_image": out_path, "status": "done"}
             results.append({"sample_id": sid, "status": "done"})
+            output_samples[sid] = {"primary": out_path, "files": [out_path]}
         except Exception as exc:
             manifest["samples"][sid] = {"status": "failed", "error": str(exc)}
             results.append({"sample_id": sid, "status": "failed", "error": str(exc)})
@@ -130,6 +140,7 @@ def main():
     write_json(os.path.join(args.output, "preprocess_summary.json"), summary)
     if summary["n_failed"]:
         sys.exit(1)
+    write_collection_output_manifest(args.output, "image_root", output_samples)
 
 
 if __name__ == "__main__":

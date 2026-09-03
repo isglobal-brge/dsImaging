@@ -4,7 +4,6 @@ import json
 import hashlib
 import os
 import re
-import sqlite3
 import sys
 from urllib.parse import urlparse
 
@@ -60,6 +59,14 @@ def safe_id(value):
     value = strip_extensions(os.path.basename(str(value)))
     value = re.sub(r"[^A-Za-z0-9_.-]+", "_", value)
     return value.strip("._") or "sample"
+
+
+def sample_token(value):
+    """Return a collision-resistant filesystem token for a private sample id."""
+    value = str(value)
+    return hashlib.sha256(
+        ("dsImaging:private-sample:" + value).encode("utf-8")
+    ).hexdigest()
 
 
 def image_files(root, extensions=IMAGE_EXTS):
@@ -127,15 +134,41 @@ def cache_root():
     )
 
 
-def registry_entry(dataset_id):
-    registry_path = cfg("registry_path", os.environ.get("DSIMAGING_REGISTRY_PATH", "/var/lib/dsimaging/registry.yaml"))
-    registry = read_yaml(registry_path, {})
-    if not isinstance(registry, dict):
+def worker_context():
+    """Load the exact server-created context for this job.
+
+    Analyst configuration may name logical assets, but it never selects a
+    manifest, registry, database, or filesystem path.  The context id and path
+    are injected by dsImaging after handle authorization.
+    """
+    context_id = cfg("dataset_id", "")
+    if not re.fullmatch(r"dsctx_[0-9a-f]{64}", str(context_id)):
         return {}
-    entry = registry.get(dataset_id)
-    if not isinstance(entry, dict):
+
+    root = os.path.realpath(os.environ.get(
+        "DSIMAGING_WORKER_CONTEXT_DIR", "/srv/dshpc/staging/dsimaging-contexts"
+    ))
+    expected = os.path.join(root, f"{context_id}.context.yaml")
+    configured = cfg("worker_context", expected)
+    if not configured or os.path.realpath(configured) != os.path.realpath(expected):
         return {}
-    return entry
+    path = os.path.realpath(expected)
+    try:
+        if os.path.commonpath([root, path]) != root or not os.path.isfile(path):
+            return {}
+    except (OSError, ValueError):
+        return {}
+
+    context = read_yaml(path, {})
+    if not isinstance(context, dict) or context.get("context_id") != context_id:
+        return {}
+    if context.get("schema_version") != 1:
+        return {}
+    manifest = context.get("manifest")
+    backend = context.get("backend")
+    if not isinstance(manifest, dict) or not isinstance(backend, dict):
+        return {}
+    return context
 
 
 def load_persisted_credentials(ref):
@@ -250,91 +283,298 @@ def s3_materialize_uri(entry, uri, dataset_id, role="images"):
     return root
 
 
-def manifest_from_registry(dataset_id):
-    entry = registry_entry(dataset_id)
-    if not entry:
-        return {}
-    manifest_path = entry.get("manifest") or entry.get("manifest_uri")
-    if not manifest_path:
-        return {}
-    if is_s3_uri(manifest_path):
-        manifest = read_yaml_text(s3_get_text(entry, manifest_path), {})
-        return manifest if isinstance(manifest, dict) else {}
-    if not os.path.exists(manifest_path):
-        return {}
-    manifest = read_yaml(manifest_path, {})
-    if not isinstance(manifest, dict):
-        return {}
-    return manifest
-
-
-def manifest_assets_from_registry(dataset_id):
-    manifest = manifest_from_registry(dataset_id)
-    if not isinstance(manifest, dict):
-        return {}
-    return manifest.get("assets", {}) or {}
-
-
-def resolve_catalog_asset_path(asset_name, dataset_id=None):
-    if not asset_name:
-        return None
-    dataset_id = dataset_id or cfg("dataset_id", "")
-    db_path = cfg("asset_db", os.environ.get("DSIMAGING_ASSET_DB", "/var/lib/dsimaging/imaging_assets.sqlite"))
-    if not db_path or not os.path.exists(db_path):
-        return None
-    try:
-        con = sqlite3.connect(db_path)
-        con.row_factory = sqlite3.Row
-        row = con.execute(
-            "SELECT path_or_root FROM assets WHERE asset_id = ? AND status = 'active'",
-            (asset_name,),
-        ).fetchone()
-        if row is None and dataset_id:
-            row = con.execute(
-                "SELECT a.path_or_root FROM asset_aliases aa "
-                "JOIN assets a ON a.asset_id = aa.asset_id "
-                "WHERE aa.dataset_id = ? AND aa.alias = ? AND a.status = 'active'",
-                (dataset_id, asset_name),
-            ).fetchone()
-        con.close()
-        if row is not None:
-            path = row["path_or_root"]
-            if path and os.path.exists(path):
-                return path
-    except Exception:
-        return None
-    return None
-
-
 def resolve_asset_path(asset_name, role="images", explicit=None):
-    if explicit and os.path.exists(explicit):
-        return explicit
+    if not isinstance(asset_name, str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", asset_name
+    ) or ".." in asset_name:
+        return None
 
-    dataset_id = cfg("dataset_id", "")
-    catalog_path = resolve_catalog_asset_path(asset_name, dataset_id)
-    if catalog_path:
-        return catalog_path
-
-    if dataset_id:
-        entry = registry_entry(dataset_id)
-        assets = manifest_assets_from_registry(dataset_id)
-        candidates = [asset_name, role, "images" if role == "image" else role]
-        for name in candidates:
-            if not name:
-                continue
-            uri = asset_uri(assets.get(name))
-            if uri and os.path.exists(uri):
-                return uri
-            if uri and is_s3_uri(uri) and entry:
-                staged = s3_materialize_uri(entry, uri, dataset_id, role)
-                if staged and os.path.exists(staged):
-                    return staged
+    context = worker_context()
+    if context:
+        manifest = context["manifest"]
+        assets = manifest.get("assets", {}) or {}
+        backend = context.get("backend", {})
+        entry = backend.get("config", {}) or {}
+        context_id = context["context_id"]
+        uri = asset_uri(assets.get(asset_name))
+        if uri and os.path.exists(uri):
+            return uri
+        if uri and is_s3_uri(uri) and backend.get("type") == "s3":
+            staged = s3_materialize_uri(entry, uri, context_id, role)
+            if staged and os.path.exists(staged):
+                return staged
 
     input_dir = os.environ.get("DSHPC_INPUT_DIR") or cfg("input_dir")
     if input_dir and os.path.exists(input_dir):
         return input_dir
 
-    return explicit
+    # Previous-step artifacts are already isolated inside this dsHPC job. An
+    # analyst-provided absolute path is never accepted as a fallback.
+    return None
+
+
+def _privacy_sample_ids(context):
+    manifest = context.get("manifest", {})
+    roster = manifest.get(".dsimaging_privacy_roster", {})
+    sample_ids = roster.get("sample_ids")
+    if not isinstance(sample_ids, list) or not sample_ids:
+        raise RuntimeError("The admitted collection roster is unavailable")
+    sample_ids = [str(value) for value in sample_ids]
+    if len(set(sample_ids)) != len(sample_ids):
+        raise RuntimeError("The admitted collection roster is invalid")
+    return sample_ids
+
+
+def _safe_relative_path(value):
+    if not isinstance(value, str) or not value or "\\" in value:
+        raise RuntimeError("An imaging sample route is invalid")
+    if value.startswith("/") or re.match(r"^[A-Za-z]:", value):
+        raise RuntimeError("An imaging sample route is invalid")
+    parts = value.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        raise RuntimeError("An imaging sample route is invalid")
+    return value
+
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _verify_mapped_file(path, record, extensions):
+    if not os.path.isfile(path):
+        raise RuntimeError("An admitted imaging sample is unavailable")
+    if extensions and not path.lower().endswith(tuple(e.lower() for e in extensions)):
+        raise RuntimeError("An admitted imaging sample has an unsupported format")
+    expected_size = record.get("size")
+    expected_hash = str(record.get("content_hash", "")).lower()
+    try:
+        expected_size = int(expected_size)
+    except Exception as exc:
+        raise RuntimeError("An admitted imaging sample has invalid integrity metadata") from exc
+    if expected_size < 0 or not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+        raise RuntimeError("An admitted imaging sample has invalid integrity metadata")
+    if os.path.getsize(path) != expected_size:
+        raise RuntimeError("An admitted imaging sample failed integrity verification")
+    if _sha256_file(path) != expected_hash:
+        raise RuntimeError("An admitted imaging sample failed integrity verification")
+    return path
+
+
+def collection_sample_files(asset_name="images", role="images", extensions=IMAGE_EXTS):
+    """Resolve the exact snapshot roster without scanning an asset directory."""
+    context = worker_context()
+    if not context:
+        raise RuntimeError("The admitted collection mapping is unavailable")
+    sample_ids = _privacy_sample_ids(context)
+    mapping = context.get("collection_map")
+    if not isinstance(mapping, dict) or mapping.get("version") != 1:
+        raise RuntimeError("The admitted collection mapping is unavailable")
+    asset_names = mapping.get("asset_names")
+    records = mapping.get("records")
+    if not isinstance(asset_names, list) or asset_name not in asset_names:
+        raise RuntimeError("The requested asset has no exact sample mapping")
+    if not isinstance(records, list) or len(records) != len(sample_ids):
+        raise RuntimeError("The admitted collection mapping is invalid")
+    by_id = {}
+    for record in records:
+        if not isinstance(record, dict):
+            raise RuntimeError("The admitted collection mapping is invalid")
+        sid = str(record.get("sample_id", ""))
+        if not sid or sid in by_id:
+            raise RuntimeError("The admitted collection mapping is invalid")
+        by_id[sid] = record
+    if set(by_id) != set(sample_ids):
+        raise RuntimeError("The admitted collection mapping is not the complete roster")
+
+    manifest = context["manifest"]
+    asset = (manifest.get("assets", {}) or {}).get(asset_name)
+    root_uri = asset_uri(asset)
+    backend = context.get("backend", {})
+    backend_type = backend.get("type")
+    entry = backend.get("config", {}) or {}
+    if not isinstance(root_uri, str) or not root_uri:
+        raise RuntimeError("The requested imaging asset is unavailable")
+
+    resolved = []
+    for sid in sample_ids:
+        record = by_id[sid]
+        if record.get("source_kind") != "single_file" or record.get("n_files") != 1:
+            raise RuntimeError("Multi-file imaging samples are not supported by this runner")
+        uri = record.get("uri")
+        relative = _safe_relative_path(record.get("relative_path"))
+        if not isinstance(uri, str) or not uri:
+            raise RuntimeError("An admitted imaging sample route is invalid")
+
+        if backend_type == "s3":
+            root_bucket, root_key = parse_s3_uri(root_uri)
+            bucket, key = parse_s3_uri(uri)
+            prefix = root_key.rstrip("/") + "/"
+            if bucket != root_bucket or not key.startswith(prefix):
+                raise RuntimeError("An admitted imaging sample leaves its collection")
+            if key[len(prefix):] != relative:
+                raise RuntimeError("An admitted imaging sample route is inconsistent")
+            digest = hashlib.sha256(uri.encode("utf-8")).hexdigest()[:16]
+            path = os.path.join(cache_root(), context["context_id"],
+                                safe_id(role), digest, os.path.basename(relative))
+            s3_download(entry, bucket, key, path)
+        elif backend_type == "file":
+            root = os.path.realpath(root_uri)
+            path = os.path.realpath(uri)
+            try:
+                if os.path.commonpath([root, path]) != root:
+                    raise RuntimeError("An admitted imaging sample leaves its collection")
+            except ValueError as exc:
+                raise RuntimeError("An admitted imaging sample leaves its collection") from exc
+            actual_relative = os.path.relpath(path, root).replace(os.sep, "/")
+            if actual_relative != relative:
+                raise RuntimeError("An admitted imaging sample route is inconsistent")
+        else:
+            raise RuntimeError("The admitted imaging backend is unavailable")
+
+        resolved.append((_verify_mapped_file(path, record, extensions), sid))
+    return resolved
+
+
+def artifact_sample_files(root, artifact_types=None, extensions=None):
+    """Read an exact per-sample mapping emitted by a prior trusted runner."""
+    context = worker_context()
+    if not context:
+        raise RuntimeError("The admitted collection roster is unavailable")
+    sample_ids = _privacy_sample_ids(context)
+    if not root or not os.path.isdir(root):
+        raise RuntimeError("The requested imaging asset is unavailable")
+    manifest_path = os.path.join(root, "dsimaging_output_manifest.json")
+    manifest = read_json(manifest_path, {})
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+        raise RuntimeError("The requested imaging asset has no exact sample mapping")
+    artifact_type = manifest.get("artifact_type")
+    if artifact_types and artifact_type not in artifact_types:
+        raise RuntimeError("The requested imaging asset has an incompatible sample mapping")
+    samples = manifest.get("samples")
+    if not isinstance(samples, list) or len(samples) != len(sample_ids):
+        raise RuntimeError("The requested imaging asset is not the complete roster")
+
+    by_id = {}
+    used_files = set()
+    root_real = os.path.realpath(root)
+    for sample in samples:
+        if not isinstance(sample, dict):
+            raise RuntimeError("The requested imaging asset mapping is invalid")
+        sid = str(sample.get("sample_id", ""))
+        files = sample.get("files")
+        primary = sample.get("primary")
+        integrity = sample.get("file_integrity")
+        if not sid or sid in by_id or not isinstance(files, list) or not files:
+            raise RuntimeError("The requested imaging asset mapping is invalid")
+        files = [_safe_relative_path(value) for value in files]
+        if (len(set(files)) != len(files) or primary not in files or
+                not isinstance(integrity, list) or len(integrity) != len(files)):
+            raise RuntimeError("The requested imaging asset mapping is invalid")
+        integrity_by_path = {}
+        for record in integrity:
+            if not isinstance(record, dict):
+                raise RuntimeError("The requested imaging asset mapping is invalid")
+            relative = _safe_relative_path(record.get("path"))
+            if relative in integrity_by_path:
+                raise RuntimeError("The requested imaging asset mapping is invalid")
+            integrity_by_path[relative] = record
+        if set(integrity_by_path) != set(files):
+            raise RuntimeError("The requested imaging asset mapping is invalid")
+        if any(value in used_files for value in files):
+            raise RuntimeError("An imaging artifact is attributed to multiple samples")
+        used_files.update(files)
+        primary_path = None
+        for relative in files:
+            path = os.path.realpath(os.path.join(root_real, relative))
+            try:
+                if os.path.commonpath([root_real, path]) != root_real or not os.path.isfile(path):
+                    raise RuntimeError("A mapped imaging artifact is unavailable")
+            except ValueError as exc:
+                raise RuntimeError("A mapped imaging artifact is unavailable") from exc
+            if extensions and not path.lower().endswith(tuple(e.lower() for e in extensions)):
+                raise RuntimeError("A mapped imaging artifact has an unsupported format")
+            _verify_mapped_file(path, {
+                "size": integrity_by_path[relative].get("size"),
+                "content_hash": integrity_by_path[relative].get("sha256"),
+            }, extensions)
+            if relative == primary:
+                primary_path = path
+        if primary_path is None:
+            raise RuntimeError("The requested imaging asset mapping is invalid")
+        by_id[sid] = primary_path
+    if set(by_id) != set(sample_ids):
+        raise RuntimeError("The requested imaging asset is not the complete roster")
+    return [(by_id[sid], sid) for sid in sample_ids]
+
+
+def mapped_sample_files(asset_name, role="images", artifact_types=None,
+                        extensions=IMAGE_EXTS):
+    context = worker_context()
+    mapping = context.get("collection_map", {}) if context else {}
+    if asset_name in (mapping.get("asset_names") or []):
+        return collection_sample_files(asset_name, role, extensions)
+    root = resolve_asset_path(asset_name, role)
+    return artifact_sample_files(root, artifact_types, extensions)
+
+
+def write_collection_output_manifest(output_dir, artifact_type, samples):
+    """Write the canonical complete-roster map consumed by later runners."""
+    context = worker_context()
+    if not context:
+        raise RuntimeError("The admitted collection roster is unavailable")
+    sample_ids = _privacy_sample_ids(context)
+    if not isinstance(samples, dict) or set(samples) != set(sample_ids):
+        raise RuntimeError("Runner output is not the complete admitted collection")
+    root = os.path.realpath(output_dir)
+    encoded = []
+    used_files = set()
+    for sid in sample_ids:
+        sample = samples[sid]
+        if not isinstance(sample, dict):
+            raise RuntimeError("Runner output sample mapping is invalid")
+        primary = sample.get("primary")
+        files = sample.get("files") or ([primary] if primary else [])
+        relative_files = []
+        integrity = []
+        relative_primary = None
+        for path in files:
+            path_real = os.path.realpath(path)
+            try:
+                if os.path.commonpath([root, path_real]) != root or not os.path.isfile(path_real):
+                    raise RuntimeError("Runner output leaves its artifact directory")
+            except ValueError as exc:
+                raise RuntimeError("Runner output leaves its artifact directory") from exc
+            relative = _safe_relative_path(os.path.relpath(path_real, root).replace(os.sep, "/"))
+            if relative in used_files:
+                raise RuntimeError("Runner output is attributed to multiple samples")
+            used_files.add(relative)
+            relative_files.append(relative)
+            integrity.append({
+                "path": relative,
+                "size": os.path.getsize(path_real),
+                "sha256": _sha256_file(path_real),
+            })
+            if primary and os.path.realpath(primary) == path_real:
+                relative_primary = relative
+        if not relative_files or relative_primary is None:
+            raise RuntimeError("Runner output sample mapping is invalid")
+        encoded.append({
+            "sample_id": sid,
+            "primary": relative_primary,
+            "files": relative_files,
+            "file_integrity": integrity,
+        })
+    path = os.path.join(output_dir, "dsimaging_output_manifest.json")
+    write_json(path, {
+        "schema_version": 1,
+        "artifact_type": artifact_type,
+        "samples": encoded,
+    })
+    return path
 
 
 def write_json(path, obj):

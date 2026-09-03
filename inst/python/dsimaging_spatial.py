@@ -5,11 +5,17 @@ import argparse
 import os
 import sys
 
-from dsimaging_utils import cfg, cfg_float, cfg_int, cfg_list, image_files, package_versions, resolve_asset_path, strip_extensions, write_json
-
-
-def index(paths):
-    return {strip_extensions(os.path.basename(p)): p for p in paths}
+from dsimaging_utils import (
+    IMAGE_EXTS,
+    MASK_EXTS,
+    cfg,
+    cfg_list,
+    mapped_sample_files,
+    package_versions,
+    sample_token,
+    write_collection_output_manifest,
+    write_json,
+)
 
 
 def parse_ints(value, default):
@@ -112,41 +118,58 @@ def main():
 
     import SimpleITK as sitk
 
-    image_root = resolve_asset_path(cfg("image_asset", "images"), "images", cfg("image_root"))
-    mask_root = resolve_asset_path(cfg("mask_asset", "masks"), "masks", cfg("mask_root"))
-    reference_root = resolve_asset_path(cfg("reference_asset", "reference"), "images", cfg("reference_image"))
-
-    images = index(image_files(image_root))
+    image_asset = cfg("image_asset", "images")
+    mask_asset = cfg("mask_asset", "")
+    reference_asset = cfg("reference_asset", "")
+    try:
+        images = dict((sid, path) for path, sid in mapped_sample_files(
+            image_asset, "images", artifact_types=("image_root",),
+            extensions=IMAGE_EXTS,
+        ))
+        masks = dict((sid, path) for path, sid in mapped_sample_files(
+            mask_asset, "masks", artifact_types=("mask_root",),
+            extensions=MASK_EXTS,
+        )) if mask_asset else {}
+        refs = dict((sid, path) for path, sid in mapped_sample_files(
+            reference_asset, "images", artifact_types=("image_root",),
+            extensions=IMAGE_EXTS,
+        )) if reference_asset else {}
+    except RuntimeError:
+        print("ERROR: Admitted imaging inputs are unavailable", file=sys.stderr)
+        sys.exit(1)
     if not images:
         print("ERROR: No images found for spatial processing", file=sys.stderr)
         sys.exit(1)
-    masks = index(image_files(mask_root)) if mask_root else {}
-    refs = index(image_files(reference_root)) if reference_root else {}
-    first_ref = sitk.ReadImage(next(iter(refs.values()))) if refs else None
 
     operations = [op.strip() for op in args.operations.split(",") if op.strip()]
+    if "crop_to_mask" in operations and not masks:
+        print("ERROR: crop_to_mask requires an exact mask mapping", file=sys.stderr)
+        sys.exit(1)
+    if "register_rigid" in operations and not refs:
+        print("ERROR: register_rigid requires an exact reference mapping", file=sys.stderr)
+        sys.exit(1)
     spacing = [float(x) for x in cfg_list("spacing", [])]
     crop_size = parse_ints(cfg("crop_size", ""), [])
 
     manifest = []
-    for sample_id, path in sorted(images.items()):
+    output_samples = {}
+    for sample_id, path in images.items():
         img = sitk.ReadImage(path)
         for op in operations:
-            if op == "crop_to_mask" and sample_id in masks:
+            if op == "crop_to_mask":
                 img = crop_to_mask(img, sitk.ReadImage(masks[sample_id]))
             elif op == "center_crop":
                 img = center_crop(img, crop_size or [128, 128, 128])
             elif op == "n4_bias":
                 img = n4_bias_correct(img)
             elif op == "register_rigid":
-                ref = sitk.ReadImage(refs[sample_id]) if sample_id in refs else first_ref
-                if ref is not None:
-                    img = register_rigid(img, ref)
+                img = register_rigid(img, sitk.ReadImage(refs[sample_id]))
             elif op == "resample":
                 img = resample_spacing(img, spacing)
-        out_path = os.path.join(args.output, sample_id + ".nii.gz")
+        out_path = os.path.join(args.output, sample_token(sample_id) + ".nii.gz")
         sitk.WriteImage(img, out_path)
         manifest.append({"sample_id": sample_id, "image": out_path, "operations": operations})
+        output_samples[sample_id] = {"primary": out_path, "files": [out_path]}
 
     write_json(os.path.join(args.output, "derived_images_manifest.json"), {
         "images": manifest,
@@ -154,6 +177,7 @@ def main():
         "operations": operations,
         "versions": package_versions(["SimpleITK", "numpy"]),
     })
+    write_collection_output_manifest(args.output, "image_root", output_samples)
 
 
 if __name__ == "__main__":

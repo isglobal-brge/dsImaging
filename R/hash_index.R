@@ -62,11 +62,13 @@ write_hash_index <- function(backend, index_uri, df) {
     tryCatch({
       parsed <- .parse_s3_uri(staging_uri)
       config <- .resolve_backend_s3_config(backend)
-      aws.s3::delete_object(parsed$key, bucket = parsed$bucket,
-        key = config$access_key, secret = config$secret_key,
-        base_url = .s3_base_url(config$endpoint),
-        region = config$region,
-        use_https = .s3_use_https(config$endpoint))
+      .s3_call(function() {
+        aws.s3::delete_object(parsed$key, bucket = parsed$bucket,
+          key = config$access_key, secret = config$secret_key,
+          base_url = .s3_base_url(config$endpoint),
+          region = config$region,
+          use_https = .s3_use_https(config$endpoint))
+      })
     }, error = function(e) NULL)
   } else {
     backend_put_file(backend, tmp, index_uri)
@@ -77,16 +79,19 @@ write_hash_index <- function(backend, index_uri, df) {
 #'
 #' @param index_df data.frame from read_hash_index.
 #' @param dataset_id Character; for looking up stored hashes.
+#' @param collection_seal Character; immutable collection-snapshot seal.
 #' @return Named list: new, changed, unchanged (character vectors of sample_ids),
 #'   plus content_hashes (named list).
 #' @export
-diff_hash_index <- function(index_df, dataset_id) {
+diff_hash_index <- function(index_df, dataset_id, collection_seal) {
+  collection_seal <- .asset_collection_seal(collection_seal, required = TRUE)
   db <- .asset_db_connect()
   on.exit(.asset_db_close(db))
 
   stored <- DBI::dbGetQuery(db,
-    "SELECT sample_id, content_hash FROM content_fingerprints WHERE dataset_id = ?",
-    params = list(dataset_id))
+    "SELECT sample_id, content_hash FROM content_fingerprints
+     WHERE dataset_id = ? AND collection_seal = ?",
+    params = list(dataset_id, collection_seal))
   stored_map <- stats::setNames(stored$content_hash, stored$sample_id)
 
   new_ids <- character(0)

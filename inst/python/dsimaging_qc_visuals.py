@@ -7,11 +7,16 @@ import hashlib
 import os
 import sys
 
-from dsimaging_utils import cfg, cfg_bool, cfg_int, image_files, package_versions, resolve_asset_path, strip_extensions, write_json
-
-
-def index(paths):
-    return {strip_extensions(os.path.basename(p)): p for p in paths}
+from dsimaging_utils import (
+    IMAGE_EXTS,
+    MASK_EXTS,
+    cfg,
+    cfg_int,
+    mapped_sample_files,
+    package_versions,
+    write_collection_output_manifest,
+    write_json,
+)
 
 
 def middle_slice(path):
@@ -74,43 +79,58 @@ def main():
     args = parser.parse_args()
     os.makedirs(args.output, exist_ok=True)
 
-    image_root = resolve_asset_path(cfg("image_asset", "images"), "images", cfg("image_root"))
-    mask_root = resolve_asset_path(cfg("mask_asset", "masks"), "masks", cfg("mask_root"))
+    image_asset = cfg("image_asset", "images")
+    mask_asset = cfg("mask_asset", "")
     max_size = cfg_int("max_size", 192)
-    max_images = cfg_int("max_images", 24)
-    anonymize = cfg_bool("anonymize_names", True)
-
-    images = index(image_files(image_root))
+    try:
+        images = dict((sid, path) for path, sid in mapped_sample_files(
+            image_asset, "images", artifact_types=("image_root",),
+            extensions=IMAGE_EXTS,
+        ))
+        masks = dict((sid, path) for path, sid in mapped_sample_files(
+            mask_asset, "masks", artifact_types=("mask_root",),
+            extensions=MASK_EXTS,
+        )) if mask_asset else {}
+    except RuntimeError:
+        print("ERROR: Admitted imaging inputs are unavailable", file=sys.stderr)
+        sys.exit(1)
     if not images:
         print("ERROR: No images found for QC thumbnails", file=sys.stderr)
         sys.exit(1)
-    masks = index(image_files(mask_root)) if mask_root else {}
 
     rows = []
-    for idx, (sample_id, image_path) in enumerate(sorted(images.items())[:max_images], start=1):
+    output_samples = {}
+    for idx, (sample_id, image_path) in enumerate(images.items(), start=1):
         arr = middle_slice(image_path)
         marr = mask_slice(masks[sample_id], arr.shape) if sample_id in masks else None
-        name = public_name(sample_id, idx, anonymize=anonymize) + ".png"
+        name = public_name(sample_id, idx, anonymize=True) + ".png"
         out_path = os.path.join(args.output, name)
         save_overlay(arr, marr, out_path, max_size)
         rows.append({
+            "sample_id": sample_id,
             "qc_id": os.path.splitext(name)[0],
             "file": name,
             "has_mask": bool(marr is not None),
             "width_px": max_size,
         })
+        output_samples[sample_id] = {"primary": out_path, "files": [out_path]}
 
     manifest_path = os.path.join(args.output, "qc_visual_manifest.csv")
     with open(manifest_path, "w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=["qc_id", "file", "has_mask", "width_px"])
+        writer = csv.DictWriter(handle, fieldnames=[
+            "sample_id", "qc_id", "file", "has_mask", "width_px"
+        ])
         writer.writeheader()
         writer.writerows(rows)
     write_json(os.path.join(args.output, "qc_visual_summary.json"), {
         "n_images": len(rows),
         "max_size": max_size,
-        "anonymized_names": anonymize,
+        "anonymized_names": True,
         "versions": package_versions(["SimpleITK", "numpy", "PIL"]),
     })
+    write_collection_output_manifest(
+        args.output, "qc_visual_asset", output_samples
+    )
 
 
 if __name__ == "__main__":

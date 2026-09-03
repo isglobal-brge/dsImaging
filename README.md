@@ -18,26 +18,23 @@ external/HPC backend configured in `dsHPC`.
 - Store-backed existing mask assets with their own content hash index, so
   manual/consensus segmentations can drive radiomics without recomputation and
   still participate in derivation hashing.
-- Feature assets can be loaded with dataset metadata joined on `sample_id`,
-  enabling radiomics plus clinical/outcome analysis without ad hoc client-side
-  merges.
+- Feature assets can be loaded with the manifest-declared `label_col` joined on
+  the declared sample identifier. Other clinical/outcome metadata is never
+  joined implicitly.
 - Immutable derivation hashes, aliases, lineage, and per-image generation state.
-- DICOM series conversion to NIfTI with `dcm2niix` or SimpleITK fallback.
-- RTSTRUCT and DICOM SEG conversion into first-class mask assets.
-- RTDOSE/RTPLAN summaries, with optional dose-in-mask metrics.
 - Image preprocessing runners for resampling, normalization, clamping/windowing,
   and float32 casting.
+- Exact single-file DICOM-to-NIfTI conversion through the admitted sample map.
 - Spatial runners for resampling, registration, cropping, and N4 bias
   correction.
 - Segmentation runners: existing masks, CT lung threshold, LungMask,
-  TotalSegmentator, nnU-Net v2, and MONAI bundles.
+  TotalSegmentator, and nnU-Net v2.
 - Mask/ROI operations: label selection, binarization, union, intersection,
   difference, morphology, connected components, and mask-to-image resampling.
 - QC metrics for images and masks, including size, spacing, intensity summaries,
   and mask volumes.
-- Non-disclosive QC thumbnail/overlay artifacts with anonymized filenames and
-  size caps.
-- Basic WSI/pathology tiling with OpenSlide when available and Pillow fallback.
+- Collection-complete QC thumbnail/overlay artifacts with anonymized filenames
+  and size caps.
 - Image embedding tables using a deterministic local baseline, scheduled as
   GPU-optional so external HPC units can accelerate future model-backed
   embedding runners.
@@ -48,6 +45,14 @@ external/HPC backend configured in `dsHPC`.
 - Per-image collection orchestration with server-side drip-feed and safe
   reconnect/status/publish flow.
 - dsHPC publisher hooks that register job outputs as `dsImaging` assets.
+
+Multi-file DICOM-series conversion, RTSTRUCT/DICOM SEG conversion,
+RTDOSE/RTPLAN analysis, WSI tiling, and MONAI bundle inference remain available
+as site-maintained runner code but are deliberately unavailable through the
+analyst-facing DataSHIELD workflow. Those formats do not yet carry a verified
+one-to-one sample mapping through every input and output. They must remain
+fail-closed until that association is represented in the collection manifest
+and tested.
 
 ## Runtime Setup
 
@@ -88,10 +93,15 @@ options(
   dsimaging.analysis.container_runtime = "auto",
   dsimaging.analysis.container_pull = "missing",
   dsimaging.analysis.container_images = list(
-    pyradiomics_extract = "ghcr.io/isglobal-brge/dsimaging-runner:latest"
+    pyradiomics_extract = paste0(
+      "ghcr.io/isglobal-brge/dsimaging-runner@sha256:",
+      "<64-hex-digest>")
   )
 )
 ```
+
+Clinical runner images must use an immutable `@sha256:<digest>` reference;
+mutable tags such as `:latest` are rejected.
 
 `dsHPC` controls the shared scheduler, adaptive resource limits, GPU detection,
 container execution, and external/HPC backend. `dsImaging` only declares the
@@ -116,24 +126,29 @@ assets whose artifact path still exists and satisfies that same contract.
 Running items without any active dsHPC job are also returned to `pending`, so a
 worker crash or package reinstall cannot leave a generation permanently stuck.
 
-## Server Methods
+Collection-level runners do not infer patient identity from filenames or scan
+an asset directory. They consume the exact `sample_id` routes pinned in the
+admitted collection snapshot, verify each source object's size and SHA-256, and
+publish either one table row per admitted sample or an exact per-sample artifact
+manifest. Missing, duplicate, extra, or cross-attributed outputs are rejected
+before they enter the asset catalog.
 
-Primary analysis methods:
+## DataSHIELD Methods
 
-- `imagingCapabilitiesDS()`
-- `imagingInstallModelDS()`
-- `imagingListModelsDS()`
-- `imagingRadiomicsScanCollectionDS()`
-- `imagingRadiomicsSubmitBatchDS()`
-- `imagingRadiomicsCollectionStatusDS()`
-- `imagingRadiomicsRecoverCollectionDS()`
-- `imagingRadiomicsCancelCollectionDS()`
-- `imagingRadiomicsPublishCollectionDS()`
-- `imagingLoadAssetDS()`
-- `imagingSegmentationValidateMasksDS()`
+The registered analyst surface starts with `imagingInitDS()` and its opaque
+session handle. It exposes disclosure-controlled metadata/validation, a
+sanitized global asset catalog, private handle-bound workflow submission and
+coarse workflow status/publication. The exact `AggregateMethods` and
+`AssignMethods` allowlists are declared in `DESCRIPTION` and should be
+resynchronized in Opal/Rock after every package upgrade.
 
-The public DataSHIELD surface is now `imaging*DS`; the former `radiomics*DS`
-server aliases have been retired before production use.
+Legacy dataset enumeration, raw asset details/lineage, raw collection scans,
+batch submission, exact generation status/recovery, and raw mask-path methods
+are not registered. Their old exported names are fail-closed stubs so a stale
+server allowlist cannot restore the previous behavior.
+
+See [`DISCLOSURE_CONTROL.md`](DISCLOSURE_CONTROL.md) for the release invariants,
+operator obligations, supported formats, and residual disclosure signals.
 
 ## Architecture
 

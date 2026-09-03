@@ -46,6 +46,7 @@ validate_manifest <- function(manifest, source = "manifest") {
     if (!meta$format %in% c("parquet", "csv"))
       stop("Unsupported metadata format: ", meta$format, call. = FALSE)
   }
+  .imaging_privacy_contract(manifest)
 
   # Assets
   if (!is.null(manifest$assets)) {

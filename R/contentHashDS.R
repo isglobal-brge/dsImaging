@@ -203,12 +203,14 @@
     return(head_fn(bucket, object_key, locator = locator))
 
   config <- .content_hash_s3_config(locator)
-  resp <- aws.s3::head_object(
-    object = object_key, bucket = bucket,
-    key = config$access_key, secret = config$secret_key,
-    base_url = .s3_base_url(config$endpoint),
-    region = config$region,
-    use_https = .s3_use_https(config$endpoint))
+  resp <- .s3_call(function() {
+    aws.s3::head_object(
+      object = object_key, bucket = bucket,
+      key = config$access_key, secret = config$secret_key,
+      base_url = .s3_base_url(config$endpoint),
+      region = config$region,
+      use_https = .s3_use_https(config$endpoint))
+  })
   attrs <- attributes(resp)
   list(
     etag = attrs$etag %||% attrs$ETag %||% attrs$`x-amz-meta-etag`,
@@ -358,9 +360,14 @@
 #' @return Single-row list with `resource_name`, `content_hash`, `updated_at`,
 #'   and `source`. Unsupported non-MinIO resources return `content_hash = NA`
 #'   and `source = "unsupported"`.
-#' @export
-contentHashDS <- function(resource_name) {
+#' @keywords internal
+.content_hash_for_resource <- function(resource_name) {
   resource_name <- as.character(resource_name)[1]
+  if (length(resource_name) != 1L || is.na(resource_name) ||
+      !grepl("^[A-Za-z0-9][A-Za-z0-9._-]*$", resource_name)) {
+    stop("contentHashDS accepts only a registered dataset or asset name.",
+         call. = FALSE)
+  }
   row <- .content_hash_get(resource_name)
   if (!is.null(row)) {
     return(list(resource_name = row$resource_name,
@@ -389,6 +396,16 @@ contentHashDS <- function(resource_name) {
     content_hash = row$content_hash,
     updated_at = row$updated_at,
     source = row$source)
+}
+
+#' Legacy Content Hash DataSHIELD Method
+#'
+#' Retained only so stale Opal allowlists fail closed instead of exposing a
+#' resource-existence/content oracle.
+#' @param resource_name Ignored legacy argument.
+#' @export
+contentHashDS <- function(resource_name) {
+  .legacy_imaging_ds_disabled("contentHashDS")
 }
 
 #' Seed the resource content-hash index from configured MinIO buckets

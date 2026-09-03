@@ -97,8 +97,8 @@ def main():
             if args.compute_content_hash:
                 entry["content_hash"] = content_hash_file(filepath)
             results.append(entry)
-        except Exception as e:
-            print(f"  Warning: skipping {filename}: {e}", file=sys.stderr)
+        except Exception:
+            print("  Warning: skipped one admitted image", file=sys.stderr)
 
     with open(args.output, "w") as f:
         json.dump(results, f)

@@ -10,7 +10,7 @@ test_that("runner health includes clinical imaging analysis runners", {
   runners <- dsImaging:::.radiomics_runner_health()
   expect_true("ct_lung_threshold" %in% runners$runner)
   expect_true("dicom_convert" %in% runners$runner)
-  expect_true("image_preprocess" %in% runners$runner)
+  expect_true("dsimaging_image_preprocess" %in% runners$runner)
   expect_true("mask_ops" %in% runners$runner)
   expect_true("imaging_qc_metrics" %in% runners$runner)
   expect_true("rt_convert" %in% runners$runner)
@@ -52,7 +52,46 @@ test_that("radiomics runners declare scheduler resources", {
   expect_equal(qc$resources$max_concurrent, 4L)
   expect_equal(rt$resources$concurrency_group, "imaging_rt")
   expect_equal(embeddings$resources$optional_gpus, 1L)
-  expect_true("DSIMAGING_ASSET_DB" %in% names(pyradiomics$env))
+  expect_true("DSIMAGING_WORKER_CONTEXT_DIR" %in% names(pyradiomics$env))
+  expect_true("DSIMAGING_CREDENTIALS_PATH" %in% names(pyradiomics$env))
+  expect_false(any(c("DSIMAGING_ASSET_DB", "DSIMAGING_REGISTRY_PATH") %in%
+                   names(pyradiomics$env)))
+
+  permission_bits <- function(path) bitwAnd(
+    as.integer(file.info(path)$mode), strtoi("0777", base = 8L))
+  expect_identical(permission_bits(file.path(home, "runners")),
+                   strtoi("0770", base = 8L))
+  expect_identical(permission_bits(file.path(
+    home, "runners", "pyradiomics_extract.yml")),
+    strtoi("0660", base = 8L))
+  expect_identical(permission_bits(dirname(pyradiomics$args_template[[1]])),
+                   strtoi("0770", base = 8L))
+})
+
+test_that("runner registration rejects symlinked and world-writable configs", {
+  skip_on_os("windows")
+  root <- withr::local_tempdir()
+  runners <- file.path(root, "runners")
+  dir.create(runners, mode = "0770")
+  Sys.chmod(runners, "0770", use_umask = FALSE)
+  outside <- file.path(root, "outside.yml")
+  writeLines("sentinel", outside)
+  link <- file.path(runners, "linked.yml")
+  if (!isTRUE(file.symlink(outside, link))) {
+    skip("Symbolic links are unavailable on this platform")
+  }
+
+  expect_error(dsImaging:::.write_runner_yaml(
+    runners, "linked", list(name = "linked")),
+    "symbolic link", fixed = TRUE)
+  expect_identical(readLines(outside), "sentinel")
+
+  ordinary <- file.path(runners, "ordinary.yml")
+  writeLines("name: ordinary", ordinary)
+  Sys.chmod(ordinary, "0666", use_umask = FALSE)
+  expect_error(dsImaging:::.assert_imaging_runner_permissions(
+    ordinary, "0660", "Runner configuration"),
+    "world-writable", fixed = TRUE)
 })
 
 test_that("radiomics runners can declare containerized execution metadata", {
@@ -63,7 +102,7 @@ test_that("radiomics runners can declare containerized execution metadata", {
     dshpc.home = home,
     dsimaging.analysis.home = imaging_home,
     dsimaging.container_images = list(
-      pyradiomics_extract = "ghcr.io/isglobal-brge/dsimaging-runner:test"
+      pyradiomics_extract = "ghcr.io/isglobal-brge/dsimaging-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     ),
     dsimaging.container_runtime = "docker",
     dsimaging.container_pull = "never"
@@ -74,12 +113,26 @@ test_that("radiomics runners can declare containerized execution metadata", {
   runner <- yaml::read_yaml(file.path(home, "runners", "pyradiomics_extract.yml"))
 
   expect_equal(runner$container$image,
-    "ghcr.io/isglobal-brge/dsimaging-runner:test")
+    "ghcr.io/isglobal-brge/dsimaging-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
   expect_equal(runner$container$runtime, "docker")
   expect_equal(runner$container$pull, "never")
   expect_equal(runner$container$command, "python")
   expect_equal(runner$container$args_template[[1]], "-m")
   expect_equal(runner$container$args_template[[2]], "dsimaging_extract")
+})
+
+test_that("clinical runner images must be immutable", {
+  withr::local_options(list(
+    dsimaging.container_images = list(
+      pyradiomics_extract = "ghcr.io/isglobal-brge/dsimaging-runner:latest"
+    )
+  ))
+
+  expect_error(
+    dsImaging:::.imaging_container_config(
+      "pyradiomics_extract", list("-m", "dsimaging_extract")),
+    "immutable sha256"
+  )
 })
 
 test_that("bundled profile paths are materialised outside the package tree", {

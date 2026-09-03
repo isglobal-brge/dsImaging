@@ -5,26 +5,20 @@ Uses MONAI Model Zoo bundles for segmentation.
 """
 import argparse, json, os, sys
 
-from dsimaging_utils import package_versions
+from dsimaging_utils import (
+    image_files,
+    package_versions,
+    resolve_asset_path,
+    sample_token,
+    strip_extensions,
+)
 
 
 def find_images(input_dir):
-    registry_path = "/var/lib/dsimaging/registry.yaml"
-    dataset_id = os.environ.get("DSHPC_CFG_DATASET_ID", "")
-    if os.path.exists(registry_path):
-        try:
-            import yaml
-            registry = yaml.safe_load(open(registry_path))
-            for ds_id, entry in registry.items():
-                if dataset_id and ds_id != dataset_id:
-                    continue
-                manifest = yaml.safe_load(open(entry["manifest"]))
-                root = manifest.get("assets", {}).get("images", {}).get("root")
-                if root and os.path.isdir(root):
-                    return [(os.path.join(root, f), os.path.splitext(f)[0])
-                            for f in sorted(os.listdir(root)) if not f.startswith(".")]
-        except Exception:
-            pass
+    root = resolve_asset_path("images", "images")
+    images = image_files(root)
+    if images:
+        return [(path, strip_extensions(os.path.basename(path))) for path in images]
     return [(os.path.join(input_dir, f), os.path.splitext(f)[0])
             for f in sorted(os.listdir(input_dir))
             if not f.startswith(".") and os.path.isfile(os.path.join(input_dir, f))]
@@ -60,7 +54,7 @@ def main():
     if image:
         sid = sample_id or os.path.splitext(os.path.basename(image))[0]
         images = [(image, sid)]
-        print(f"  Single-image mode: {sid}")
+        print("  Single-image mode")
     else:
         images = find_images(args.input)
 
@@ -72,8 +66,10 @@ def main():
     results = []
     for img_path, sample_id in images:
         try:
-            print(f"  Inferring: {sample_id}")
-            out_path = os.path.join(args.output, f"{sample_id}_seg.nii.gz")
+            print("  Inferring admitted image")
+            out_path = os.path.join(
+                args.output, f"{sample_token(sample_id)}_seg.nii.gz"
+            )
             run(
                 runner_id="inference",
                 meta_file=os.path.join(bundle_dir, "configs", "metadata.json"),
@@ -85,7 +81,7 @@ def main():
             )
             results.append({"sample_id": sample_id, "status": "done"})
         except Exception as e:
-            print(f"  FAILED {sample_id}: {e}", file=sys.stderr)
+            print("  FAILED: admitted image inference failed", file=sys.stderr)
             results.append({"sample_id": sample_id, "status": "failed", "error": str(e)})
 
     summary = {"n_total": len(images), "n_done": sum(1 for r in results if r["status"] == "done"),
@@ -99,7 +95,9 @@ def main():
     for r in results:
         sid = r["sample_id"]
         if r["status"] == "done":
-            mask_path = os.path.join(args.output, f"{sid}_seg.nii.gz")
+            mask_path = os.path.join(
+                args.output, f"{sample_token(sid)}_seg.nii.gz"
+            )
             seg_manifest["samples"][sid] = {
                 "sample_id": sid, "primary_mask": mask_path,
                 "mask_files": [mask_path], "status": "done"
