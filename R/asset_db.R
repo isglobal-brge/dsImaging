@@ -41,31 +41,33 @@
   db_path <- .asset_db_path()
   .asset_db_prepare_path(db_path)
 
-  db <- DBI::dbConnect(RSQLite::SQLite(), db_path)
-  DBI::dbExecute(db, "PRAGMA journal_mode=WAL")
+  db <- DBI::dbConnect(RSQLite::SQLite(), db_path, synchronous = NULL)
+  ready <- FALSE
+  on.exit(if (!ready && DBI::dbIsValid(db)) DBI::dbDisconnect(db), add = TRUE)
   DBI::dbExecute(db, "PRAGMA busy_timeout=5000")
+  DBI::dbExecute(db, "PRAGMA journal_mode=WAL")
   DBI::dbExecute(db, "PRAGMA foreign_keys=ON")
 
   .asset_db_create_schema(db)
   .asset_db_repair_permissions(db_path)
+  ready <- TRUE
   db
 }
 
 #' Get path to the asset catalog database
 #' @keywords internal
 .asset_db_path <- function() {
-  path <- getOption("dsimaging.asset_db",
-            getOption("default.dsimaging.asset_db", NULL))
+  path <- .imaging_option("asset_db", NULL)
   if (!is.null(path)) return(path)
 
   # Default: alongside the registry
-  reg_path <- getOption("dsimaging.registry_path",
-                getOption("default.dsimaging.registry_path", NULL))
+  reg_path <- .imaging_option("registry_path", NULL)
   if (!is.null(reg_path) && nzchar(reg_path))
     return(file.path(dirname(reg_path), "imaging_assets.sqlite"))
 
   # Final fallback
-  "/var/lib/dsimaging/imaging_assets.sqlite"
+  file.path(.imaging_option("data_dir", "/var/lib/dsimaging"),
+            "imaging_assets.sqlite")
 }
 
 #' Prepare asset DB directory and repair common permission drift.

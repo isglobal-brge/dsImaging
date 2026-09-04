@@ -1664,8 +1664,7 @@ imagingSegmentationGetMaskPaths <- function(generation_id, dataset_id) {
     stop("Worker storage credentials are not configured.", call. = FALSE)
   }
   ref <- cfg$credentials_ref %||%
-    getOption("dsimaging.worker_credentials_ref",
-      getOption("default.dsimaging.worker_credentials_ref", NULL))
+    .imaging_option("worker_credentials_ref", NULL)
   if (!is.null(cfg$resource) &&
       (is.null(ref) || !is.character(ref) || length(ref) != 1L ||
        is.na(ref) || !nzchar(ref))) {

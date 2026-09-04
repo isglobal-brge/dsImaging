@@ -9,6 +9,7 @@
 \description{
 Option chain:
 \verb{dsimaging.analysis.<name>} -> \verb{default.dsimaging.analysis.<name>} ->
-\verb{dsimaging.<name>} -> \verb{default.dsimaging.<name>} -> default.
+\verb{dsimaging.<name>} -> \verb{default.dsimaging.<name>} ->
+\verb{DSIMAGING_ANALYSIS_<NAME>} -> \verb{DSIMAGING_<NAME>} -> default.
 }
 \keyword{internal}

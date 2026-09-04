@@ -328,12 +328,18 @@ imagingMasksDS <- function(handle_symbol) {
 #' Get the asset database connection
 #' @keywords internal
 .get_asset_db <- function() {
-  db_path <- getOption("dsimaging.asset_db",
-    file.path(getOption("dsimaging.data_dir", "/var/lib/dsimaging"),
-              "imaging_assets.sqlite"))
+  db_path <- .asset_db_path()
   if (!file.exists(db_path)) return(NULL)
-  tryCatch(DBI::dbConnect(RSQLite::SQLite(), db_path),
-           error = function(e) NULL)
+  db <- NULL
+  tryCatch({
+    db <- DBI::dbConnect(
+      RSQLite::SQLite(), db_path, synchronous = NULL)
+    DBI::dbExecute(db, "PRAGMA busy_timeout=5000")
+    db
+  }, error = function(e) {
+    if (!is.null(db) && DBI::dbIsValid(db)) DBI::dbDisconnect(db)
+    NULL
+  })
 }
 
 #' Count samples from a manifest's metadata file

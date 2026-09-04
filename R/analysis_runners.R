@@ -45,12 +45,7 @@
     MKL_SERVICE_FORCE_INTEL = "0",
     MKL_THREADING_LAYER = "GNU",
     DSIMAGING_WORKER_CONTEXT_DIR = .imaging_worker_context_dir(),
-    DSIMAGING_CREDENTIALS_PATH = getOption(
-      "dsimaging.credentials_path",
-      getOption("default.dsimaging.credentials_path",
-        file.path(getOption("dsimaging.data_dir",
-          getOption("default.dsimaging.data_dir", "/var/lib/dsimaging")),
-          "credentials.yaml")))
+    DSIMAGING_CREDENTIALS_PATH = .imaging_credentials_path()
   )
 
   # PyRadiomics extraction runner

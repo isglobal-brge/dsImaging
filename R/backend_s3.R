@@ -198,11 +198,7 @@
 #' @keywords internal
 .persist_s3_credential <- function(ref, cred) {
   if (is.null(ref) || !nzchar(ref) || is.null(cred)) return(invisible(FALSE))
-  path <- getOption("dsimaging.credentials_path",
-    getOption("default.dsimaging.credentials_path",
-      file.path(getOption("dsimaging.data_dir",
-        getOption("default.dsimaging.data_dir", "/var/lib/dsimaging")),
-        "credentials.yaml")))
+  path <- .imaging_credentials_path()
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE,
              mode = "0700")
   tryCatch(Sys.chmod(dirname(path), "0700", use_umask = FALSE),
@@ -248,11 +244,7 @@
 
 #' @keywords internal
 .load_persisted_s3_credential <- function(ref) {
-  path <- getOption("dsimaging.credentials_path",
-    getOption("default.dsimaging.credentials_path",
-      file.path(getOption("dsimaging.data_dir",
-        getOption("default.dsimaging.data_dir", "/var/lib/dsimaging")),
-        "credentials.yaml")))
+  path <- .imaging_credentials_path()
   if (!file.exists(path)) return(NULL)
   store <- tryCatch(yaml::yaml.load_file(path), error = function(e) NULL)
   if (is.null(store) || !is.list(store)) return(NULL)

@@ -4,7 +4,16 @@
 \alias{imagingFeatureViewDS}
 \title{Create an opaque, patient-bound feature view for dsFlower}
 \usage{
-imagingFeatureViewDS(handle_symbol, asset_id_or_alias, columns = NULL)
+imagingFeatureViewDS(
+  handle_symbol,
+  asset_id_or_alias,
+  columns = NULL,
+  clinical_symbol = NULL,
+  clinical_id_col = "patient_id",
+  clinical_columns = NULL,
+  target_col = NULL,
+  target_levels = NULL
+)
 }
 \arguments{
 \item{handle_symbol}{Character; initialized imaging handle.}
@@ -13,14 +22,36 @@ imagingFeatureViewDS(handle_symbol, asset_id_or_alias, columns = NULL)
 
 \item{columns}{Optional public feature-column selection. Sample, label, and
 patient identity columns are retained by the server as structural fields.}
+
+\item{clinical_symbol}{Optional character name of a data frame assigned in
+the same DataSHIELD session. If supplied, the remaining clinical arguments
+describe an external clinical table.}
+
+\item{clinical_id_col}{Character; external table column containing one
+canonical patient identifier per row. It is matched to the sealed imaging
+privacy-unit roster, never to image sample identifiers.}
+
+\item{clinical_columns}{Optional public covariate columns copied into the
+private feature view. Sample and patient identity columns are forbidden.}
+
+\item{target_col}{Character; explicit external target column. It becomes the
+view's manifest-declared label without changing the source imaging handle.}
+
+\item{target_levels}{Optional ordered public classification vocabulary. It is
+never inferred or validated against private target values.}
 }
 \value{
 An opaque feature-view reference for assignment in the same session.
 }
 \description{
 DataSHIELD ASSIGN method. Loads one complete feature asset under the
-authority of an initialized dsImaging handle, joins only its manifest label,
-and retains the admitted patient mapping in a private session registry. The
-assigned result contains only a high-entropy capability; it is not a table
-and cannot be subset into a smaller cohort.
+authority of an initialized dsImaging handle and retains the admitted patient
+mapping in a private session registry. By default it joins only the manifest
+label. An external, same-session clinical table can instead supply an explicit
+target and approved covariates from one row per patient. The image roster
+always remains authoritative: unmatched or ambiguous patient identifiers are
+totalised as missing and extra clinical rows are ignored, so linkage cannot
+subset the admitted image cohort or expose identifier membership through
+success/failure. The assigned result contains only a high-entropy capability;
+it is not a table and cannot be subset into a smaller cohort.
 }

@@ -6,6 +6,66 @@ test_that("radiomics envs are listed", {
   expect_true("seg_totalseg" %in% envs$framework)
 })
 
+test_that("worker processes can recover administrator path configuration", {
+  root <- withr::local_tempdir()
+  venv_root <- file.path(root, "analysis-venvs")
+  credentials_path <- file.path(root, "credentials.yaml")
+  asset_db <- file.path(root, "assets.sqlite")
+  withr::local_options(list(
+    dsimaging.analysis.venv_root = NULL,
+    default.dsimaging.analysis.venv_root = NULL,
+    dsimaging.venv_root = NULL,
+    default.dsimaging.venv_root = NULL,
+    dsimaging.credentials_path = NULL,
+    default.dsimaging.credentials_path = NULL,
+    dsimaging.asset_db = NULL,
+    default.dsimaging.asset_db = NULL
+  ))
+  withr::local_envvar(c(
+    DSIMAGING_ANALYSIS_VENV_ROOT = venv_root,
+    DSIMAGING_CREDENTIALS_PATH = credentials_path,
+    DSIMAGING_ASSET_DB = asset_db
+  ))
+
+  expect_identical(
+    dsImaging:::.imaging_analysis_option("venv_root"), venv_root)
+  expect_identical(dsImaging:::.imaging_credentials_path(), credentials_path)
+  expect_identical(dsImaging:::.asset_db_path(), asset_db)
+})
+
+test_that("runner registration pins environment paths for detached workers", {
+  root <- withr::local_tempdir()
+  dshpc_home <- file.path(root, "dshpc")
+  imaging_home <- file.path(root, "imaging")
+  venv_root <- file.path(root, "analysis-venvs")
+  credentials_path <- file.path(root, "credentials.yaml")
+  dir.create(file.path(dshpc_home, "runners"), recursive = TRUE,
+             mode = "0770")
+  withr::local_options(list(
+    dshpc.home = dshpc_home,
+    dsimaging.analysis.home = imaging_home,
+    dsimaging.analysis.venv_root = NULL,
+    default.dsimaging.analysis.venv_root = NULL,
+    dsimaging.venv_root = NULL,
+    default.dsimaging.venv_root = NULL,
+    dsimaging.credentials_path = NULL,
+    default.dsimaging.credentials_path = NULL
+  ))
+  withr::local_envvar(c(
+    DSIMAGING_ANALYSIS_VENV_ROOT = venv_root,
+    DSIMAGING_CREDENTIALS_PATH = credentials_path
+  ))
+
+  dsImaging:::.register_radiomics_runners()
+  runner <- yaml::read_yaml(file.path(
+    dshpc_home, "runners", "pyradiomics_extract.yml"))
+
+  expect_identical(
+    runner$python, file.path(venv_root, "radiomics", "bin", "python"))
+  expect_identical(
+    runner$env$DSIMAGING_CREDENTIALS_PATH, credentials_path)
+})
+
 test_that("runner health includes clinical imaging analysis runners", {
   runners <- dsImaging:::.radiomics_runner_health()
   expect_true("ct_lung_threshold" %in% runners$runner)

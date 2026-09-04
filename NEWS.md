@@ -1,3 +1,17 @@
+# dsImaging 0.3.8
+
+* Opaque imaging feature views can now join a normal server-side clinical table
+  by the sealed patient roster before dsFlower consumes it. Missing, duplicate,
+  malformed, and out-of-roster clinical keys are totalised without exposing a
+  membership oracle, while sample and patient identifiers remain
+  server-authoritative and unavailable as model features.
+* Detached dsHPC imaging workers now inherit the exact analysis environment,
+  registry, asset-catalog, and credential-file configuration selected by the
+  node, including environment-backed deployments.
+* SQLite asset-catalog connections now establish their busy timeout before WAL
+  negotiation and close partial connections on failure, avoiding transient
+  lock errors between collection workers and status/publication calls.
+
 # dsImaging 0.3.7
 
 * Armadillo imaging Resources now carry a strict
