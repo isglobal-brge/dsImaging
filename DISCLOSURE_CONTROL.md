@@ -6,8 +6,10 @@ object store, node filesystem, or server-administrator interfaces public.
 
 ## Public resource and session model
 
-An analyst starts from a resource explicitly authorized by the node, normally
-an `imaging+dataset://<endpoint>/<bucket>/datasets/<collection>` resource.
+An analyst starts from a resource explicitly authorized by the node: either an
+Opal/DSLite `imaging+dataset://<endpoint>/<bucket>/datasets/<collection>`
+resource or an Armadillo marker Resource whose `format` is exactly
+`dsimaging-dataset:<dataset_id>`.
 `imagingInitDS()` validates that complete collection and leaves only a
 session-bound opaque capability in the DataSHIELD workspace. The manifest,
 storage credentials, object routes, metadata rows, patient identifiers, and
@@ -82,6 +84,9 @@ does not authorize neighbouring collection prefixes.
 Store access credentials belong to the node/operator boundary. They must be
 provided through protected deployment configuration and must never be returned
 by a DataSHIELD method, embedded in a manifest, or logged by a client.
+Armadillo locators resolve only through that server-managed registry. Its
+marker URL, injected transport JWT, identity, and secret are discarded after
+resolution and cannot select or authenticate an object-store backend.
 
 ## Trust boundary and residual signals
 
@@ -89,6 +94,10 @@ by a DataSHIELD method, embedded in a manifest, or logged by a client.
   exact state by design. Installing or registering an unreviewed server package
   can invalidate this contract; the effective Opal/Rock method allowlist must
   be audited after every upgrade.
+- Armadillo marker and Resource publication is administrator-only. The format
+  locator selects a registry entry but is not itself an authorization token;
+  allowing analysts to upload or replace Resource RDS files would invalidate
+  the Resource authorization boundary.
 - Polling reveals coarse state and elapsed wall time observable by the caller.
   Runners therefore use bounded, fixed workflows and generic failures, but
   infrastructure-level timing remains a deployment-side signal.

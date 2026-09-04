@@ -70,6 +70,71 @@ On load it registers:
 - publishers for generic imaging assets and radiomics outputs;
 - load-time issues in `imagingCapabilitiesDS()$onload_errors`.
 
+### Resource registration
+
+Opal and DSLite can continue to use a direct `imaging+dataset://` Resource. In
+Opal, `inst/resources/resource.js` supplies the administrator UI for that
+descriptor. For compatibility, an unrelated `format` value on a direct
+Resource remains ordinary metadata and is ignored. A value beginning with
+`dsimaging-dataset` is instead treated as a locator claim and must match the
+strict syntax and the URL dataset identifier.
+
+Armadillo rewrites a Resource's backing URL and replaces its secret with a
+short-lived internal JWT. Use an inert marker table for that transport and put
+only the dataset identifier in `format`:
+
+```r
+marker <- data.frame(selector = TRUE)
+MolgenisArmadillo::armadillo.upload_table(
+  project = "imaging", folder = "markers", table = marker,
+  name = "imaging_contract_marker")
+
+images <- resourcer::newResource(
+  name = "imaging.contract",
+  url = paste0(
+    sub("/$", "", armadillo_url),
+    "/storage/projects/imaging/objects/",
+    "markers%2Fimaging_contract_marker.parquet"
+  ),
+  format = "dsimaging-dataset:imaging.contract"
+)
+MolgenisArmadillo::armadillo.upload_resource(
+  project = "imaging", folder = "resources",
+  resource = images, name = "imaging_contract")
+
+# After the normal DataSHIELD login:
+dsImagingClient::ds.imaging.init(
+  conns, resource = "imaging/resources/imaging_contract", symbol = "img")
+```
+
+Current Armadillo servers parse marker URLs narrowly. Use only letters,
+digits, and underscores for the marker project, folder, and object name. The
+dataset identifier in `format` may also contain dots and hyphens.
+
+An Armadillo Resource never carries object-store credentials or an object-store
+endpoint. Its dataset identifier resolves through the node registry, for
+example:
+
+```yaml
+schema_version: 1
+imaging.contract:
+  enabled: true
+  backend: s3
+  manifest_uri: s3://imaging-data/datasets/imaging.contract/manifest.yaml
+  endpoint: http://minio:9000
+  credentials_ref: imaging_store_ro
+```
+
+`credentials_ref` must resolve from protected server deployment configuration,
+such as `/var/lib/dsimaging/credentials.yaml` mounted with mode `0600`. Never
+put an access key, secret key, endpoint, bucket, or manifest path in the
+Resource `format` locator.
+
+Publishing the Armadillo marker and Resource is a trusted node-administrator
+operation. The dataset identifier is a selector, not an authorization token:
+analysts should receive read/assign access only to curated Resources, never
+permission to upload or replace their RDS descriptors.
+
 During package installation, `configure` also performs best-effort Python
 provisioning for the analysis runners under `/var/lib/dsimaging/venvs`. Set
 `DSIMAGING_SKIP_ANALYSIS_PROVISION=1` to skip all analysis venvs, or

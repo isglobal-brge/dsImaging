@@ -59,6 +59,151 @@ test_that("resource clients and imaging handles retain their storage context", {
                "could not be initialized", fixed = TRUE)
 })
 
+test_that("Armadillo format locators use only the server registry", {
+  root <- withr::local_tempdir()
+  collection <- write_test_imaging_collection(
+    root, "imaging.contract",
+    data.frame(sample_id = paste0("case", 1:3),
+      patient_id = paste0("patient", 1:3), label = c(0L, 1L, 0L)),
+    label_col = "label")
+  registry_path <- file.path(root, "registry.yaml")
+  yaml::write_yaml(list(
+    schema_version = 1L,
+    "imaging.contract" = list(
+      enabled = TRUE, backend = "file",
+      manifest_uri = collection$manifest_path)
+  ), registry_path)
+  withr::local_options(list(dsimaging.registry_path = registry_path))
+
+  uploaded <- resourcer::newResource(
+    name = "imaging.contract",
+    url = paste0("https://armadillo.test/storage/projects/imaging/",
+      "objects/markers%2Fimaging_contract.parquet"),
+    format = "dsimaging-dataset:imaging.contract")
+  # This is the exact descriptor shape created by current Armadillo servers.
+  reconstructed <- resourcer::newResource(
+    name = uploaded$name,
+    url = gsub("/objects/", "/rawfiles/", uploaded$url),
+    format = uploaded$format,
+    secret = "temporary-armadillo-jwt")
+
+  resolver <- ImagingDatasetResourceResolver$new()
+  expect_true(resolver$isFor(reconstructed))
+  client <- resourcer::newResourceClient(reconstructed)
+  expect_s3_class(client, "ImagingDatasetResourceClient")
+  expect_identical(client$getDatasetId(), "imaging.contract")
+  expect_identical(client$getManifestUri(), collection$manifest_path)
+  expect_identical(client$getBackend()$type, "file")
+
+  retained <- client$getResource()
+  expect_identical(retained$name, "dsImaging dataset")
+  expect_identical(retained$url, "imaging+dataset://imaging.contract")
+  expect_null(retained$identity)
+  expect_null(retained$secret)
+  expect_null(retained$format)
+  expect_false(grepl("armadillo.test", retained$url, fixed = TRUE))
+  expect_false(grepl("temporary-armadillo-jwt",
+    paste(unlist(retained), collapse = ""), fixed = TRUE))
+
+  # Even if a non-Armadillo caller attaches credential-shaped fields, a
+  # format locator must not switch to the direct S3 Resource path.
+  credential_bait <- resourcer::newResource(
+    name = uploaded$name, url = reconstructed$url,
+    identity = "must-not-be-used", secret = "must-not-be-used",
+    format = uploaded$format)
+  bait_client <- ImagingDatasetResourceClient$new(credential_bait)
+  expect_identical(bait_client$getBackend()$type, "file")
+  expect_null(bait_client$getResource()$identity)
+  expect_null(bait_client$getResource()$secret)
+
+  direct_with_unrelated_format <- resourcer::newResource(
+    "PROJECT.images", "imaging+dataset://imaging.contract",
+    format = "parquet")
+  direct_client <- ImagingDatasetResourceClient$new(
+    direct_with_unrelated_format)
+  expect_identical(direct_client$getDatasetId(), "imaging.contract")
+  expect_identical(direct_client$getResource()$format, "parquet")
+})
+
+test_that("imaging Resource locators reject malformed and conflicting forms", {
+  marker_url <- paste0(
+    "https://armadillo.test/storage/projects/imaging/rawfiles/",
+    "markers%2Fimaging_contract.parquet")
+  malformed <- list(
+    NULL,
+    "dsimaging-dataset:",
+    "dsimaging-dataset",
+    "dsimaging-dataset:../imaging.contract",
+    "dsimaging-dataset:Imaging.Contract",
+    "dsimaging-dataset:imaging.contract?endpoint=other",
+    "unrelated-format",
+    c("dsimaging-dataset:imaging.contract", "extra"),
+    1L)
+  for (format in malformed) {
+    resource <- resourcer::newResource(
+      "PROJECT.images", marker_url, format = format)
+    expect_error(ImagingDatasetResourceClient$new(resource),
+      "Invalid imaging dataset resource", fixed = TRUE)
+  }
+
+  conflicting <- resourcer::newResource(
+    "PROJECT.images", "imaging+dataset://imaging.contract",
+    format = "dsimaging-dataset:other.dataset")
+  expect_error(ImagingDatasetResourceClient$new(conflicting),
+    "Invalid imaging dataset resource", fixed = TRUE)
+
+  vector_locator <- resourcer::newResource(
+    "PROJECT.images", "imaging+dataset://imaging.contract",
+    format = c("dsimaging-dataset:imaging.contract", "parquet"))
+  expect_error(ImagingDatasetResourceClient$new(vector_locator),
+    "Invalid imaging dataset resource", fixed = TRUE)
+
+  direct_with_unrelated_format <- resourcer::newResource(
+    "PROJECT.images", "imaging+dataset://imaging.contract",
+    format = "parquet")
+  selector <- dsImaging:::.imaging_resource_selector(
+    direct_with_unrelated_format)
+  expect_identical(selector$transport, "direct")
+  expect_identical(selector$dataset_id, "imaging.contract")
+
+  partial_format <- structure(list(
+    name = "PROJECT.images",
+    url = "imaging+dataset://imaging.contract",
+    identity = NULL,
+    secret = NULL,
+    formatLocator = "dsimaging-dataset:other.dataset"),
+    class = "resource")
+  partial_selector <- dsImaging:::.imaging_resource_selector(partial_format)
+  expect_identical(partial_selector$transport, "direct")
+  expect_identical(partial_selector$dataset_id, "imaging.contract")
+
+  partial_only <- structure(list(
+    name = "PROJECT.images", urlLocator = marker_url,
+    formatLocator = "dsimaging-dataset:imaging.contract"),
+    class = "resource")
+  expect_false(ImagingDatasetResourceResolver$new()$isFor(partial_only))
+  expect_error(ImagingDatasetResourceClient$new(partial_only),
+    "Invalid imaging dataset resource", fixed = TRUE)
+
+  oversized_secret <- resourcer::newResource(
+    "PROJECT.images", "imaging+dataset://imaging.contract",
+    secret = strrep("x", 65537L))
+  expect_error(ImagingDatasetResourceClient$new(oversized_secret),
+    "Invalid imaging dataset resource", fixed = TRUE)
+
+  oversized_identity <- resourcer::newResource(
+    "PROJECT.images", "imaging+dataset://imaging.contract",
+    identity = strrep("x", 4097L))
+  expect_error(ImagingDatasetResourceClient$new(oversized_identity),
+    "Invalid imaging dataset resource", fixed = TRUE)
+
+  oversized_format <- resourcer::newResource(
+    "PROJECT.images", "imaging+dataset://imaging.contract",
+    format = strrep("x", 257L))
+  expect_error(ImagingDatasetResourceClient$new(oversized_format),
+    "Invalid imaging dataset resource", fixed = TRUE)
+})
+
 test_that("S3 resource clients retain the Resource without copying credentials", {
   manifest <- list(
     schema_version = 1L,

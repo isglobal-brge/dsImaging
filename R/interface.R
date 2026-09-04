@@ -5,8 +5,9 @@
 #'
 #' DataSHIELD ASSIGN method. Creates an imaging dataset handle from a
 #' resource that was assigned via \code{datashield.assign.resource()}.
-#' The resource must be an \code{imaging+dataset://} URL resolved by
-#' \code{ImagingDatasetResourceResolver}.
+#' The resource must be a direct \code{imaging+dataset://} Resource or an
+#' Armadillo Resource with a \code{dsimaging-dataset:<dataset_id>} format
+#' locator, resolved by \code{ImagingDatasetResourceResolver}.
 #'
 #' @param resource_symbol Character; symbol name of the assigned resource.
 #' @return An imaging handle object (assigned server-side).

@@ -1,5 +1,11 @@
 # dsImaging 0.3.7
 
+* Armadillo imaging Resources now carry a strict
+  `dsimaging-dataset:<dataset_id>` locator in `format`, while their backing URL
+  remains an inert Armadillo marker. These Resources resolve only through the
+  administrator-managed dataset registry; the marker URL, transport JWT, and
+  credential-shaped fields are discarded after resolution. Direct
+  `imaging+dataset://` Resources remain available for Opal and DSLite.
 * Imaging submissions now consume the active dsHPC execution-unit Resource and
   persist the same sealed selection through collection generations, drip-feed
   jobs, and direct workflows. With no selection they pin the server default.

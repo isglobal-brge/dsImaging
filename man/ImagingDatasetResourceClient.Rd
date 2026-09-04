@@ -9,8 +9,10 @@ ImagingDatasetResourceClient R6 class
 ImagingDatasetResourceClient R6 class
 }
 \details{
-Resolves \code{imaging+dataset://} URLs to imaging manifests via
-the registry or via S3 credentials from the Opal resource.
+Resolves direct \code{imaging+dataset://} URLs via the registry or S3
+credentials from an Opal resource. Armadillo Resources carry the strict
+\code{dsimaging-dataset:<dataset_id>} locator in \code{format} and are
+resolved only through the administrator-managed registry.
 }
 \section{Super class}{
 \code{\link[resourcer:ResourceClient]{resourcer::ResourceClient}} -> \code{ImagingDatasetResourceClient}

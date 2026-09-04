@@ -1,11 +1,13 @@
 # Module: Resource Client
-# ImagingDatasetResourceClient for imaging+dataset:// URLs.
+# ImagingDatasetResourceClient for direct and Armadillo dataset Resources.
 # Defined at file level (resourcer is in Imports).
 
 #' ImagingDatasetResourceClient R6 class
 #'
-#' Resolves \code{imaging+dataset://} URLs to imaging manifests via
-#' the registry or via S3 credentials from the Opal resource.
+#' Resolves direct \code{imaging+dataset://} URLs via the registry or S3
+#' credentials from an Opal resource. Armadillo Resources carry the strict
+#' \code{dsimaging-dataset:<dataset_id>} locator in \code{format} and are
+#' resolved only through the administrator-managed registry.
 #'
 #' @export
 ImagingDatasetResourceClient <- R6::R6Class(
@@ -16,55 +18,53 @@ ImagingDatasetResourceClient <- R6::R6Class(
     .manifest_uri = NULL,
     .dataset_id = NULL,
     .backend = NULL,
+    .sanitize_resource = FALSE,
 
     .resolve = function() {
       resource <- self$getResource()
-      url <- resource$url %||% ""
-      parsed <- .validate_imaging_resource_location(.parse_imaging_url(url))
+      selector <- .imaging_resource_selector(resource)
+      parsed <- selector$parsed
       dataset_id <- parsed$dataset_id
 
       private$.dataset_id <- dataset_id
 
-      # Try 1: the resource itself carries S3 endpoint + credentials. The
-      # resource is the single source of truth, so it takes PRECEDENCE over any
-      # server-side registry entry (a stale registry row must never shadow the
-      # credentials the caller explicitly attached to the resource).
-      params <- parsed$params %||% list()
-      endpoint <- params$endpoint %||% ""
-      bucket <- params$bucket %||% "imaging-data"
-      prefix <- params$prefix %||% paste0("datasets/", dataset_id)
-      # Opal may pass identity=NULL due to credential mapping quirks; the
-      # helper tries several field names. This is only a presence check to
-      # decide the S3 path -- the keys are NOT copied anywhere here.
-      creds <- .resource_s3_credentials(resource)
+      if (identical(selector$transport, "direct")) {
+        # A direct Opal/DSLite resource may carry S3 endpoint + credentials.
+        # Armadillo format locators never enter this branch: its injected JWT
+        # is a transport token, not an object-store credential.
+        params <- parsed$params %||% list()
+        endpoint <- params$endpoint %||% ""
+        bucket <- params$bucket %||% "imaging-data"
+        prefix <- params$prefix %||% paste0("datasets/", dataset_id)
+        creds <- .resource_s3_credentials(resource)
 
-      if (nzchar(creds$access_key) && nzchar(creds$secret_key)) {
-        location <- .validate_imaging_resource_location(list(
-          dataset_id = dataset_id,
-          params = list(endpoint = endpoint, bucket = bucket, prefix = prefix,
-            region = params$region %||% ""),
-          s3 = TRUE))
-        endpoint <- location$params$endpoint
-        bucket <- location$params$bucket
-        prefix <- location$params$prefix
-        # The S3 backend keeps a reference to the resourcer Resource object and
-        # resolves identity/secret FROM it on demand -- credentials are never
-        # copied into the backend, stashed in options, or written to disk.
-        backend <- storage_backend("s3", config = list(
-          resource = resource, endpoint = endpoint, region = params$region))
-        manifest_uri <- paste0("s3://", bucket, "/", prefix, "/manifest.yaml")
+        if (nzchar(creds$access_key) && nzchar(creds$secret_key)) {
+          location <- .validate_imaging_resource_location(list(
+            dataset_id = dataset_id,
+            params = list(endpoint = endpoint, bucket = bucket,
+              prefix = prefix, region = params$region %||% ""),
+            s3 = TRUE))
+          endpoint <- location$params$endpoint
+          bucket <- location$params$bucket
+          prefix <- location$params$prefix
+          # The S3 backend keeps a reference to the Resource and resolves its
+          # credentials on demand; they are not copied into backend fields.
+          backend <- storage_backend("s3", config = list(
+            resource = resource, endpoint = endpoint, region = params$region))
+          manifest_uri <- paste0(
+            "s3://", bucket, "/", prefix, "/manifest.yaml")
 
-        private$.backend <- backend
-        private$.manifest_uri <- manifest_uri
-        manifest <- parse_manifest(manifest_uri, backend)
-        .assert_imaging_resource_dataset(manifest, dataset_id)
-        .assert_imaging_manifest_scope(manifest, manifest_uri, backend)
-        private$.manifest <- manifest
-        return(invisible(NULL))
+          private$.backend <- backend
+          private$.manifest_uri <- manifest_uri
+          manifest <- parse_manifest(manifest_uri, backend)
+          .assert_imaging_resource_dataset(manifest, dataset_id)
+          .assert_imaging_manifest_scope(manifest, manifest_uri, backend)
+          private$.manifest <- manifest
+          return(invisible(NULL))
+        }
       }
 
-      # Try 2: server pre-configured registry (bare imaging+dataset://<id>
-      # URLs with no credentials on the resource).
+      # Bare direct URLs and all Armadillo locators use server-managed storage.
       resolved <- tryCatch(resolve_dataset(dataset_id), error = function(e) NULL)
       if (!is.null(resolved)) {
         if (!identical(as.character(resolved$dataset_id), dataset_id)) {
@@ -77,6 +77,8 @@ ImagingDatasetResourceClient <- R6::R6Class(
         private$.backend <- resolved$backend
         private$.manifest_uri <- resolved$manifest_uri
         private$.manifest <- manifest
+        private$.sanitize_resource <- identical(
+          selector$transport, "armadillo")
         return(invisible(NULL))
       }
 
@@ -92,6 +94,10 @@ ImagingDatasetResourceClient <- R6::R6Class(
       .validate_imaging_resource_object(resource)
       super$initialize(resource)
       private$.resolve()
+      if (isTRUE(private$.sanitize_resource)) {
+        super$initialize(.sanitized_imaging_dataset_resource(
+          private$.dataset_id))
+      }
     },
     #' @description Return the parsed imaging manifest.
     getManifest = function() private$.manifest,
@@ -117,6 +123,69 @@ ImagingDatasetResourceClient <- R6::R6Class(
   )
 )
 
+# Test a strict dataset locator carried in a Resource format.
+.is_imaging_dataset_format_locator <- function(value) {
+  is.character(value) && length(value) == 1L && !is.na(value) &&
+    nchar(value, type = "bytes") <= 256L &&
+    startsWith(value, "dsimaging-dataset:")
+}
+
+# Resolve one unambiguous dataset selector from a Resource.
+.imaging_resource_selector <- function(resource) {
+  fail <- function() stop("Invalid imaging dataset resource.", call. = FALSE)
+  url <- tryCatch(
+    resource[["url", exact = TRUE]], error = function(e) "") %||% ""
+  format <- tryCatch(
+    resource[["format", exact = TRUE]], error = function(e) NULL)
+  if (!is.null(format) &&
+      (!is.character(format) || length(format) != 1L || is.na(format) ||
+       nchar(format, type = "bytes") > 256L)) {
+    fail()
+  }
+
+  has_url <- is.character(url) && length(url) == 1L && !is.na(url) &&
+    startsWith(url, "imaging+dataset://")
+  has_format <- .is_imaging_dataset_format_locator(format)
+  claims_format <- is.character(format) && length(format) == 1L &&
+    !is.na(format) && startsWith(format, "dsimaging-dataset")
+  if (claims_format && !has_format) fail()
+  if (!has_url && !has_format) fail()
+
+  parsed_url <- if (has_url) {
+    .validate_imaging_resource_location(.parse_imaging_url(url))
+  } else NULL
+  if (!has_format) {
+    return(list(
+      transport = "direct",
+      dataset_id = parsed_url$dataset_id,
+      parsed = parsed_url))
+  }
+
+  dataset_id <- substring(format, nchar("dsimaging-dataset:") + 1L)
+  parsed_format <- tryCatch(
+    .validate_imaging_resource_location(list(
+      dataset_id = dataset_id, params = list(), s3 = FALSE)),
+    error = function(e) NULL)
+  if (is.null(parsed_format) ||
+      (!is.null(parsed_url) &&
+       !identical(parsed_url$dataset_id, parsed_format$dataset_id))) {
+    fail()
+  }
+  list(
+    transport = "armadillo",
+    dataset_id = parsed_format$dataset_id,
+    parsed = parsed_format)
+}
+
+# Strip Armadillo transport state after registry resolution.
+.sanitized_imaging_dataset_resource <- function(dataset_id) {
+  parsed <- .validate_imaging_resource_location(list(
+    dataset_id = dataset_id, params = list(), s3 = FALSE))
+  resourcer::newResource(
+    name = "dsImaging dataset",
+    url = paste0("imaging+dataset://", parsed$dataset_id))
+}
+
 #' Validate the provenance-bearing resourcer object accepted by the client
 #' @keywords internal
 .validate_imaging_resource_object <- function(resource) {
@@ -125,22 +194,24 @@ ImagingDatasetResourceClient <- R6::R6Class(
     stop("Invalid imaging dataset resource.", call. = FALSE)
   }
   for (field in c("name", "url")) {
-    value <- resource[[field]]
+    value <- resource[[field, exact = TRUE]]
     if (!is.character(value) || length(value) != 1L || is.na(value) ||
         !nzchar(value) || nchar(value, type = "bytes") > 2048L) {
       stop("Invalid imaging dataset resource.", call. = FALSE)
     }
   }
   for (field in c("identity", "secret")) {
-    value <- resource[[field]]
+    value <- resource[[field, exact = TRUE]]
     if (!is.null(value) &&
-        (!is.character(value) || length(value) != 1L || is.na(value))) {
+        (!is.character(value) || length(value) != 1L || is.na(value) ||
+         (identical(field, "identity") &&
+          nchar(value, type = "bytes") > 4096L) ||
+         (identical(field, "secret") &&
+          nchar(value, type = "bytes") > 65536L))) {
       stop("Invalid imaging dataset resource.", call. = FALSE)
     }
   }
-  if (!grepl("^imaging\\+dataset://", resource$url)) {
-    stop("Invalid imaging dataset resource.", call. = FALSE)
-  }
+  .imaging_resource_selector(resource)
   invisible(TRUE)
 }
 

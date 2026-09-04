@@ -9,7 +9,8 @@ ImagingDatasetResourceResolver R6 class
 ImagingDatasetResourceResolver R6 class
 }
 \details{
-Resolves \code{imaging+dataset://} URLs within the resourcer framework.
+Resolves direct \code{imaging+dataset://} URLs and Armadillo Resources whose
+strict \code{format} locator is \code{dsimaging-dataset:<dataset_id>}.
 }
 \section{Super class}{
 \code{\link[resourcer:ResourceResolver]{resourcer::ResourceResolver}} -> \code{ImagingDatasetResourceResolver}
@@ -41,7 +42,7 @@ Check whether this resolver handles a resource.
 \subsection{Arguments}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
-\item{\code{x}}{Resource-like object with a \code{url} field.}
+\item{\code{x}}{Resource-like object with \code{url} and optional \code{format} fields.}
 }
 \if{html}{\out{</div>}}
 }
