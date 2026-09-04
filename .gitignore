@@ -16,6 +16,8 @@ docs/
 *.dll
 *.so
 *.dylib
+__pycache__/
+*.py[cod]
 
 # Output files
 output/

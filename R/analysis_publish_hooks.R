@@ -439,8 +439,7 @@
   profile <- .imaging_profile_spec(profile)
   profile_name <- profile$name %||% spec$profile_name
   processor <- paste0(segmenter$provider, "_", segmenter$task %||% "default")
-  profile_signature <- spec$profile_signature %||%
-    .radiomics_profile_signature(profile)
+  profile_signature <- .generation_profile_signature(spec, profile)
 
   resolved <- .resolve_ds_from_generation(generation_id, dataset_id)
   if (is.null(resolved))
@@ -458,7 +457,8 @@
   backend <- resolved$backend
   image_root <- manifest$assets$images$uri
   mask_root <- .resolve_mask_root(dataset_id, segmenter, resolved = resolved)
-  mask_hashes <- .existing_mask_hashes(resolved, manifest, segmenter)
+  mask_hashes <- .generation_mask_hashes(spec,
+    .existing_mask_hashes(resolved, manifest, segmenter))
   seg_runner <- switch(segmenter$provider,
     existing_mask_asset = NULL,
     totalsegmentator = "totalsegmentator_infer",
@@ -504,7 +504,8 @@
         segmenter = segmenter,
         profile = profile,
         profile_signature = profile_signature,
-        mask_content_hash = mask_ch
+        mask_content_hash = mask_ch,
+        execution_unit = spec$dshpc_unit %||% NULL
       )
     )
 
@@ -563,6 +564,15 @@
       }
       extract_config$mask <- .stage_backend_file_for_job(mp, sid, dataset_id,
         backend, role = "masks")
+      actual_mask_hash <- tryCatch(digest::digest(
+        file = extract_config$mask, algo = "sha256"),
+        error = function(e) NULL)
+      if (is.null(actual_mask_hash) ||
+          !identical(actual_mask_hash, mask_hashes[[sid]])) {
+        complete_item_atomic(generation_id, sid, "failed",
+          error = "Mask integrity verification failed")
+        next
+      }
     }
     steps[[length(steps) + 1]] <- list(
       type = "extract", runner = "pyradiomics_extract",
@@ -583,7 +593,8 @@
 
     tryCatch({
       spec_enc <- .dsr_encode(job_spec)
-      dsHPC::hpcSubmitInternal(spec_enc)
+      dsHPC::hpcSubmitInternal(spec_enc,
+        unit_selection = spec$dshpc_unit %||% NULL)
       record_item_status(
         generation_id, sid, "running", job_token = job_token)
     }, error = function(e) {

@@ -160,7 +160,6 @@ test_that("drip feed resolves only the context sealed into its generation", {
   generation_spec <- list(
     segmenter = list(provider = "existing_mask_asset", mask_asset = "masks"),
     profile = list(name = "demo_ct_firstorder_v1", bin_width = 25),
-    profile_signature = "sealed-profile",
     dataset_context = list(sealed = TRUE))
   generation <- list(
     generation_id = generation_id, dataset_id = "lung", state = "RUNNING",

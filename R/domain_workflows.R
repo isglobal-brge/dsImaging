@@ -28,10 +28,13 @@ imagingProcessRadiomicsCollectionDS <- function(request_encoded) {
       batch_size > 100L) {
     stop("batch_size must be between 1 and 100.", call. = FALSE)
   }
+  unit_selection <- dsHPC::hpcUnitSelectionInternal(owner_env,
+    default_label = "dsImaging")
 
   scan <- tryCatch(
     .imaging_radiomics_scan_collection(dataset_id, segmenter, profile,
-      visibility, resolved_override = context$authorized),
+      visibility, resolved_override = context$authorized,
+      unit_selection = unit_selection),
     error = function(e) stop(
       "Collection processing could not be initialized.", call. = FALSE))
   if (identical(scan$action, "reuse_asset")) {
@@ -80,6 +83,9 @@ imagingProcessRadiomicsAssetDS <- function(request_encoded) {
   profile <- .imaging_profile_spec(req$profile %||%
     list(name = "ibsi_ct_3d_v1", bin_width = 25))
   visibility <- "private"
+  unit_selection <- dsHPC::hpcUnitSelectionInternal(owner_env,
+    default_label = "dsImaging")
+  profile_signature <- .radiomics_profile_signature(profile)
 
   worker_assets <- c(image_asset, mask_asset)
   worker_manifest <- .imaging_worker_manifest(
@@ -95,7 +101,8 @@ imagingProcessRadiomicsAssetDS <- function(request_encoded) {
     image_asset = image_asset, mask_asset = mask_asset,
     image_input_identity = image_input_identity,
     mask_input_identity = mask_input_identity,
-    profile = profile)
+    profile = profile, profile_signature = profile_signature,
+    execution_unit = unit_selection)
   existing <- find_asset_by_hash(dataset_id, hash, collection_seal)
   if (!is.null(existing)) {
     return(.imaging_reuse_handle(existing, dataset_id, owner_env))
@@ -128,7 +135,8 @@ imagingProcessRadiomicsAssetDS <- function(request_encoded) {
       .imaging_step_safe_summary()
     ))
   .imaging_submit_job(.imaging_enrich_job_resources(job), owner_env,
-    dataset_id, worker_dataset_id, "feature_table", hash)
+    dataset_id, worker_dataset_id, "feature_table", hash,
+    unit_selection = unit_selection)
 }
 
 #' Submit a segmentation job
@@ -155,6 +163,8 @@ imagingProcessSegmentationCollectionDS <- function(request_encoded) {
     return(.imaging_source_asset_handle(
       segmenter$mask_asset, dataset_id, owner_env))
   }
+  unit_selection <- dsHPC::hpcUnitSelectionInternal(owner_env,
+    default_label = "dsImaging")
   image_asset <- .imaging_safe_name(req$image_asset %||% "images",
                                     "image_asset")
   visibility <- "private"
@@ -168,7 +178,7 @@ imagingProcessSegmentationCollectionDS <- function(request_encoded) {
     collection_seal = collection_seal,
     image_asset = image_asset,
     image_input_identity = image_input_identity,
-    segmenter = segmenter)
+    segmenter = segmenter, execution_unit = unit_selection)
   existing <- find_asset_by_hash(dataset_id, hash, collection_seal)
   if (!is.null(existing)) {
     return(.imaging_reuse_handle(existing, dataset_id, owner_env))
@@ -197,7 +207,8 @@ imagingProcessSegmentationCollectionDS <- function(request_encoded) {
       .imaging_step_run_artifact(runner, config = config),
       publish_step, .imaging_step_safe_summary()))
   .imaging_submit_job(.imaging_enrich_job_resources(job), owner_env,
-    dataset_id, worker_dataset_id, "mask_root", hash)
+    dataset_id, worker_dataset_id, "mask_root", hash,
+    unit_selection = unit_selection)
 }
 
 #' Submit a chained segmentation and radiomics job
@@ -221,6 +232,9 @@ imagingProcessSegmentAndExtractDS <- function(request_encoded) {
   profile <- .imaging_profile_spec(req$profile %||%
     list(name = "ibsi_ct_3d_v1", bin_width = 25))
   visibility <- "private"
+  unit_selection <- dsHPC::hpcUnitSelectionInternal(owner_env,
+    default_label = "dsImaging")
+  profile_signature <- .radiomics_profile_signature(profile)
 
   existing_mask <- identical(
     segmenter$provider, "existing_mask_asset")
@@ -241,13 +255,14 @@ imagingProcessSegmentAndExtractDS <- function(request_encoded) {
     collection_seal = collection_seal,
     image_asset = image_asset,
     image_input_identity = image_input_identity,
-    segmenter = segmenter)
+    segmenter = segmenter, execution_unit = unit_selection)
   full_hash_params <- list(dataset_id = dataset_id,
     collection_seal = collection_seal,
     image_asset = image_asset,
     image_input_identity = image_input_identity,
     segmenter = segmenter,
-    profile = profile)
+    profile = profile, profile_signature = profile_signature,
+    execution_unit = unit_selection)
   if (!is.null(mask_input_identity)) {
     full_hash_params$mask_input_identity <- mask_input_identity
   }
@@ -320,7 +335,8 @@ imagingProcessSegmentAndExtractDS <- function(request_encoded) {
     tags = c("segment_and_extract", dataset_id, segmenter$provider, profile$name),
     visibility = visibility, steps = steps)
   .imaging_submit_job(.imaging_enrich_job_resources(job), owner_env,
-    dataset_id, worker_dataset_id, "feature_table", full_hash)
+    dataset_id, worker_dataset_id, "feature_table", full_hash,
+    unit_selection = unit_selection)
 }
 
 #' Submit a generic clinical imaging asset workflow
@@ -534,7 +550,8 @@ imagingWorkflowStatusDS <- function(reference_symbol) {
     stop("Workflow status is unavailable.", call. = FALSE)
   }
 
-  status <- tryCatch(dsHPC::hpcStatusDS(workflow$job), error = function(e) NULL)
+  status <- tryCatch(dsHPC::hpcStatusInternal(workflow$job,
+    required_label = "dsImaging"), error = function(e) NULL)
   if (is.null(status)) {
     stop("Workflow status is unavailable.", call. = FALSE)
   }
@@ -1195,7 +1212,8 @@ imagingListProfilesDS <- function() {
 #' @keywords internal
 .imaging_submit_job <- function(job, owner_env, dataset_id,
                                 worker_context_id, output_asset_kind,
-                                derivation_hash = NULL) {
+                                derivation_hash = NULL,
+                                unit_selection = NULL) {
   if (!is.character(job$label) || length(job$label) != 1L ||
       is.na(job$label) || !nzchar(job$label)) {
     stop("dsImaging dsHPC submissions must carry a non-empty label.",
@@ -1217,7 +1235,12 @@ imagingListProfilesDS <- function() {
   capability <- workflow_ref$capability
   job$.owner <- .dsr_owner_id()
   result <- tryCatch(
-    dsHPC::hpcSubmitInternal(.dsr_encode(job)),
+    if (is.null(unit_selection)) {
+      dsHPC::hpcSubmitInternal(.dsr_encode(job), session_env = owner_env)
+    } else {
+      dsHPC::hpcSubmitInternal(.dsr_encode(job),
+        unit_selection = unit_selection)
+    },
     error = function(e) {
       state <- .imaging_session_state(owner_env, create = FALSE)
       rm(list = capability, envir = state$workflows)
@@ -1277,6 +1300,8 @@ imagingListProfilesDS <- function() {
   runner <- .imaging_safe_name(req$runner, "runner")
   contract <- .imaging_runner_contract(runner)
   config <- .imaging_runner_config(runner, req$config %||% list())
+  unit_selection <- dsHPC::hpcUnitSelectionInternal(owner_env,
+    default_label = "dsImaging")
   execution_runner <- if (identical(runner, "image_preprocess")) {
     "dsimaging_image_preprocess"
   } else runner
@@ -1295,7 +1320,7 @@ imagingListProfilesDS <- function() {
     asset_type = asset_type, publish_kind = "imaging_asset")
   publish_step$alias <- .imaging_safe_name(req$alias, "alias", required = FALSE)
   publish_step$runner <- execution_runner
-  publish_step$config <- config
+  publish_step$config <- c(config, list(execution_unit = unit_selection))
 
   job <- .imaging_job(label = "dsImaging",
     name = req$name %||% paste(dataset_id, label_tag),
@@ -1305,7 +1330,8 @@ imagingListProfilesDS <- function() {
       .imaging_step_run_artifact(execution_runner, config = config),
       publish_step, .imaging_step_safe_summary()))
   .imaging_submit_job(.imaging_enrich_job_resources(job), owner_env,
-    dataset_id, worker_dataset_id, asset_type)
+    dataset_id, worker_dataset_id, asset_type,
+    unit_selection = unit_selection)
 }
 
 #' @keywords internal

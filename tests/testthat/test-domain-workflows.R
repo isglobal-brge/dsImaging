@@ -1,5 +1,15 @@
 test_that("radiomics domain method composes a labelled dsHPC job", {
   submitted <- NULL
+  submitted_unit <- NULL
+  unit_selection <- list(
+    schema_version = 1L, source = "resource", unit_id = "unit_alpha",
+    resource_pool_id = "unit_alpha", type = "external",
+    config_seal = strrep("b", 64), config = list(),
+    allowed_labels = list("dsImaging"), allowed_runners = list())
+  testthat::local_mocked_bindings(
+    hpcUnitSelectionInternal = function(...) unit_selection,
+    .package = "dsHPC"
+  )
   testthat::local_mocked_bindings(
     .authorized_imaging_dataset = function(handle_symbol, dataset_id = NULL,
                                            owner_env = NULL) {
@@ -24,8 +34,9 @@ test_that("radiomics domain method composes a labelled dsHPC job", {
       list(resource_name = resource_name, content_hash = NA_character_,
         updated_at = NA_character_, source = "unsupported")
     },
-    .imaging_submit_job = function(job, ...) {
+    .imaging_submit_job = function(job, ..., unit_selection = NULL) {
       submitted <<- job
+      submitted_unit <<- unit_selection
       structure(list(capability = paste0("imgw_", strrep("1", 64))),
         class = "dsimaging_workflow_ref")
     },
@@ -45,6 +56,7 @@ test_that("radiomics domain method composes a labelled dsHPC job", {
   expect_identical(submitted$visibility, "private")
   expect_equal(submitted$steps[[2]]$runner, "pyradiomics_extract")
   expect_equal(submitted$steps[[3]]$publish_kind, "imaging_radiomics_asset")
+  expect_identical(submitted_unit, unit_selection)
   expect_match(submitted$steps[[2]]$config$dataset_id,
                "^dsctx_[0-9a-f]{64}$")
   expect_identical(anyDuplicated(names(submitted$steps[[2]]$config)), 0L)
@@ -411,6 +423,28 @@ test_that("domain submissions reject missing labels before dsHPC submit", {
   )
 })
 
+test_that("domain submissions pass the owning session to dsHPC", {
+  session <- new.env(parent = globalenv())
+  observed_session <- NULL
+  context_id <- paste0("dsctx_", strrep("a", 64))
+  testthat::local_mocked_bindings(
+    hpcSubmitInternal = function(spec_encoded, session_env = NULL,
+                                 unit_selection = NULL) {
+      observed_session <<- session_env
+      list(job_id = "job_test", .dshpc_capability = "opaque")
+    },
+    .package = "dsHPC")
+
+  reference <- dsImaging:::.imaging_submit_job(
+    list(label = "dsImaging", steps = list(list(
+      type = "emit", plane = "session", output_name = "out", value = 1))),
+    owner_env = session, dataset_id = "lung1",
+    worker_context_id = context_id, output_asset_kind = "feature_table")
+
+  expect_s3_class(reference, "dsimaging_workflow_ref")
+  expect_true(identical(observed_session, session))
+})
+
 test_that("job workflows expose only coarse status and their exact private asset", {
   db_path <- tempfile(fileext = ".sqlite")
   withr::local_options(list(dsimaging.asset_db = db_path))
@@ -433,7 +467,10 @@ test_that("job workflows expose only coarse status and their exact private asset
          envir = session)
   cleaned <- character()
   testthat::local_mocked_bindings(
-    hpcStatusDS = function(job) list(state = "FINISHED", is_done = TRUE),
+    hpcStatusInternal = function(job, required_label = NULL) {
+      expect_identical(required_label, "dsImaging")
+      list(state = "FINISHED", is_done = TRUE)
+    },
     .package = "dsHPC"
   )
   testthat::local_mocked_bindings(
@@ -471,7 +508,10 @@ test_that("a successful job without its exact published asset fails closed", {
   assign("imagingWorkflowStatusDS", dsImaging::imagingWorkflowStatusDS,
          envir = session)
   testthat::local_mocked_bindings(
-    hpcStatusDS = function(job) list(state = "FINISHED", is_done = TRUE),
+    hpcStatusInternal = function(job, required_label = NULL) {
+      expect_identical(required_label, "dsImaging")
+      list(state = "FINISHED", is_done = TRUE)
+    },
     .package = "dsHPC"
   )
   testthat::local_mocked_bindings(
@@ -499,7 +539,10 @@ test_that("active workflows cannot be destroyed and terminal cleanup is exact", 
   assign("imagingWorkflowDestroyDS", dsImaging::imagingWorkflowDestroyDS,
          envir = session)
   testthat::local_mocked_bindings(
-    hpcStatusDS = function(job) list(state = "RUNNING", is_done = FALSE),
+    hpcStatusInternal = function(job, required_label = NULL) {
+      expect_identical(required_label, "dsImaging")
+      list(state = "RUNNING", is_done = FALSE)
+    },
     .package = "dsHPC"
   )
   expect_error(

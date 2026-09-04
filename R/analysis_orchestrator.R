@@ -23,12 +23,14 @@
 #' @param profile Validated radiomics profile.
 #' @param visibility Derived-asset visibility.
 #' @param resolved_override Optional session-authorized dataset context.
+#' @param unit_selection Optional sealed dsHPC execution-unit snapshot.
 #' @return Named list describing whether an existing asset/generation was
 #'   reused or a new generation was created, plus pending sample metadata.
 #' @keywords internal
 .imaging_radiomics_scan_collection <- function(dataset_id, segmenter, profile,
                                                visibility,
-                                               resolved_override = NULL) {
+                                               resolved_override = NULL,
+                                               unit_selection = NULL) {
   dataset_id <- .required_scalar(dataset_id, "dataset_id")
   segmenter <- .imaging_segmenter_spec(segmenter)
   profile <- .imaging_profile_spec(profile)
@@ -70,6 +72,9 @@
   if (identical(segmenter$provider, "existing_mask_asset")) {
     .assert_exact_imaging_roster(names(mask_hashes), admission$roster,
       context = "Existing mask asset")
+  }
+  if (length(mask_hashes) > 0L) {
+    mask_hashes <- .ordered_sample_hashes(mask_hashes)
   }
 
   # Diff only the exact sample-to-object mapping already validated and pinned
@@ -120,7 +125,8 @@
     profile = profile,
     profile_signature = profile_signature,
     mask_asset = segmenter$mask_asset %||% NULL,
-    image_hashes = hash_source
+    image_hashes = hash_source,
+    execution_unit = unit_selection
   )
 
   # Claim or reuse generation
@@ -143,6 +149,8 @@
     profile_signature = profile_signature,
     profile_name = profile$name,
     segmenter = segmenter,
+    dshpc_unit = unit_selection,
+    mask_hashes = mask_hashes,
     privacy_roster = admission$roster,
     dataset_context = .dataset_context_from_resolved(
       resolved, manifest, admission$roster)
@@ -250,6 +258,36 @@
   as.list(stats::setNames(as.character(hashes[order]), ids[order]))
 }
 
+#' Revalidate a generation's immutable radiomics settings
+#' @keywords internal
+.generation_profile_signature <- function(spec, profile) {
+  current <- .radiomics_profile_signature(profile)
+  expected <- spec$profile_signature %||% current
+  if (!is.character(expected) || length(expected) != 1L || is.na(expected) ||
+      !nzchar(expected) || !identical(expected, current)) {
+    stop("Generation processing profile no longer matches its snapshot.",
+      call. = FALSE)
+  }
+  expected
+}
+
+#' Revalidate a generation's immutable mask content map
+#' @keywords internal
+.generation_mask_hashes <- function(spec, current) {
+  current <- if (length(current) > 0L) .ordered_sample_hashes(current) else list()
+  # Legacy generations predate a persisted mask map. They remain readable and
+  # use the already established behavior; every new generation is pinned.
+  if (is.null(spec$mask_hashes)) return(current)
+  pinned <- if (length(spec$mask_hashes) > 0L) {
+    .ordered_sample_hashes(spec$mask_hashes)
+  } else list()
+  if (!identical(pinned, current)) {
+    stop("Generation mask inputs no longer match their snapshot.",
+      call. = FALSE)
+  }
+  pinned
+}
+
 # ---------------------------------------------------------------------------
 # 2. Submit batch: create per-image dsHPC jobs for pending samples
 # ---------------------------------------------------------------------------
@@ -326,14 +364,15 @@
   }
   image_root <- if (!is.null(manifest)) manifest$assets$images$uri else NULL
   mask_root <- .resolve_mask_root(dataset_id, segmenter, resolved = resolved)
-  mask_hashes <- .existing_mask_hashes(resolved, manifest, segmenter)
+  mask_hashes <- .generation_mask_hashes(gen_spec,
+    .existing_mask_hashes(resolved, manifest, segmenter))
   if (identical(segmenter$provider, "existing_mask_asset")) {
     .assert_exact_imaging_roster(names(mask_hashes), generation_roster,
       context = "Existing mask asset")
   }
   backend <- resolved$backend
   processor <- paste0(segmenter$provider, "_", segmenter$task %||% "default")
-  profile_signature <- .radiomics_profile_signature(profile)
+  profile_signature <- .generation_profile_signature(gen_spec, profile)
 
   # Map segmenter to runner. Accept both short forms (e.g. "lungmask") and
   # canonical runner names (e.g. "lungmask_infer") from ds.imaging.segmenter.*.
@@ -384,7 +423,8 @@
         segmenter = segmenter,
         profile = profile,
         profile_signature = profile_signature,
-        mask_content_hash = mask_ch
+        mask_content_hash = mask_ch,
+        execution_unit = gen_spec$dshpc_unit %||% NULL
       )
     )
 
@@ -497,7 +537,8 @@
 
     tryCatch({
       spec_enc <- .dsr_encode(job_spec)
-      result <- dsHPC::hpcSubmitInternal(spec_enc)
+      result <- dsHPC::hpcSubmitInternal(spec_enc,
+        unit_selection = gen_spec$dshpc_unit %||% NULL)
       record_item_status(
         generation_id, sid, "running", job_token = job_token)
       submitted[[sid]] <- list(status = "submitted", job_id = result$job_id)

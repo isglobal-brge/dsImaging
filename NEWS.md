@@ -1,3 +1,21 @@
+# dsImaging 0.3.7
+
+* Imaging submissions now consume the active dsHPC execution-unit Resource and
+  persist the same sealed selection through collection generations, drip-feed
+  jobs, and direct workflows. With no selection they pin the server default.
+* Per-image and collection derivation identities include the execution-unit
+  snapshot, preventing cross-unit artifact reuse after a backend change.
+* Workflow status now uses dsHPC's trusted exact-label internal status contract
+  instead of an analyst-facing expression boundary.
+* Collection generations now pin and revalidate the radiomics-profile
+  signature and the complete ordered mask hash map before every initial or
+  drip-feed child, including a post-stage mask integrity check.
+* Direct radiomics, segmentation, chained, and generic asset workflows pass the
+  same captured unit snapshot to submission and bind reusable identities to it.
+* Imaging initialization now accepts only the Resource client resolved by the
+  DataSHIELD platform, so a raw in-session descriptor cannot bypass the
+  Resource authorization enforced by Opal or Armadillo.
+
 # dsImaging 0.3.6
 
 * Private handles, workflows, feature views, export taint, and asset grants now

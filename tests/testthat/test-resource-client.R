@@ -47,12 +47,8 @@ test_that("resource clients and imaging handles retain their storage context", {
   raw_env <- new.env(parent = globalenv())
   assign("img_resource", resource, envir = raw_env)
   assign("imagingInitDS", dsImaging::imagingInitDS, envir = raw_env)
-  raw_reference <- eval(quote(imagingInitDS("img_resource")), envir = raw_env)
-  assign("raw_handle", raw_reference, envir = raw_env)
-  expect_equal(
-    eval(quote(dsImaging:::.getImagingHandle("raw_handle")$dataset_id),
-         envir = raw_env),
-    "imaging.contract")
+  expect_error(eval(quote(imagingInitDS("img_resource")), envir = raw_env),
+    "could not be initialized", fixed = TRUE)
 
   mismatched_class <- R6::R6Class(
     "MismatchedImagingDatasetResourceClient",
@@ -167,11 +163,6 @@ test_that("resource manifest must match the URL dataset exactly", {
   expect_error(ImagingDatasetResourceClient$new(resource),
                "does not match its dataset", fixed = TRUE)
 
-  env <- new.env(parent = globalenv())
-  assign("img_resource", resource, envir = env)
-  assign("imagingInitDS", dsImaging::imagingInitDS, envir = env)
-  expect_error(eval(quote(imagingInitDS("img_resource")), envir = env),
-               "Imaging resource could not be initialized", fixed = TRUE)
 })
 
 test_that("S3 resource manifests cannot reference another collection prefix", {

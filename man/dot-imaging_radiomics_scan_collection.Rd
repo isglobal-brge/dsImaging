@@ -9,7 +9,8 @@
   segmenter,
   profile,
   visibility,
-  resolved_override = NULL
+  resolved_override = NULL,
+  unit_selection = NULL
 )
 }
 \arguments{
@@ -22,6 +23,8 @@
 \item{visibility}{Derived-asset visibility.}
 
 \item{resolved_override}{Optional session-authorized dataset context.}
+
+\item{unit_selection}{Optional sealed dsHPC execution-unit snapshot.}
 }
 \value{
 Named list describing whether an existing asset/generation was

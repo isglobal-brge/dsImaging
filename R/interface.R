@@ -24,23 +24,9 @@ imagingInitDS <- function(resource_symbol) {
   }
   obj <- get(resource_symbol, envir = owner_env, inherits = FALSE)
 
-  # Path 1: Raw Resource from datashield.assign.resource()
-  # In Opal, this is a resourcer::Resource object (not yet resolved)
-  if (inherits(obj, c("resource", "Resource"))) {
-    url <- obj$url %||% ""
-    if (is.character(url) && length(url) == 1L && !is.na(url) &&
-        grepl("^imaging\\+dataset://", url)) {
-      return(tryCatch({
-        client <- ImagingDatasetResourceClient$new(obj)
-        handle <- .imaging_handle_from_resource_client(client, resource_symbol)
-        .register_imaging_handle(handle, owner_env)
-      }, error = function(e) {
-        stop("Imaging resource could not be initialized.", call. = FALSE)
-      }))
-    }
-  }
-
-  # Path 2: Already-resolved ImagingDatasetResourceClient
+  # Opal, Armadillo, and DSLite resolve the authorized descriptor before the
+  # assign method runs. Requiring that client prevents an in-session raw
+  # descriptor from bypassing the platform's Resource authorization.
   if (inherits(obj, "ImagingDatasetResourceClient")) {
     return(tryCatch({
       handle <- .imaging_handle_from_resource_client(obj, resource_symbol)

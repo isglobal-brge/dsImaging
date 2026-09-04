@@ -82,7 +82,7 @@ test_that("image snapshot records are unique and bytes remain pinned", {
     image_root = collection$image_root, snapshot = snapshot), "integrity")
 })
 
-test_that("collection scans use snapshot IDs instead of image filenames", {
+test_that("collection scans use snapshot IDs and persist the execution unit", {
   root <- withr::local_tempdir()
   dataset_id <- "opaque.image.names"
   ids <- c("sample-A", "sample-B", "sample-C")
@@ -117,7 +117,13 @@ test_that("collection scans use snapshot IDs instead of image filenames", {
     collection$manifest, backend, admission)
   withr::local_options(list(
     dsimaging.asset_db = tempfile(fileext = ".sqlite"),
+    dsimaging.analysis.home = file.path(root, "analysis"),
     dsimaging.nfilter.subset = 3L))
+  unit_selection <- list(
+    schema_version = 1L, source = "resource", unit_id = "unit_alpha",
+    resource_pool_id = "unit_alpha", type = "external",
+    config_seal = strrep("b", 64), config = list(),
+    allowed_labels = list("dsImaging"), allowed_runners = list())
   scan <- dsImaging:::.imaging_radiomics_scan_collection(
     dataset_id,
     list(provider = "ct_lung_threshold"),
@@ -126,11 +132,41 @@ test_that("collection scans use snapshot IDs instead of image filenames", {
     resolved_override = list(
       manifest = collection$manifest,
       backend = backend,
-      collection_snapshot = snapshot))
+      collection_snapshot = snapshot),
+    unit_selection = unit_selection)
 
   expect_identical(scan$pending_ids, sort(ids, method = "radix"))
   expect_setequal(names(scan$content_hashes), ids)
   expect_false(any(opaque_names %in% scan$pending_ids))
+  generation <- get_generation(scan$generation_id)
+  contract <- jsonlite::fromJSON(generation$spec_json,
+    simplifyVector = FALSE)
+  expect_identical(contract$dshpc_unit, unit_selection)
+
+  submitted_units <- list()
+  testthat::local_mocked_bindings(
+    hpcSubmitInternal = function(spec_encoded, session_env = NULL,
+                                 unit_selection = NULL) {
+      submitted_units[[length(submitted_units) + 1L]] <<- unit_selection
+      list(job_id = paste0("job_", length(submitted_units)))
+    },
+    count_active_jobs = function(...) 0L,
+    .package = "dsHPC")
+  testthat::local_mocked_bindings(
+    .sync_active_jobs = function(...) invisible(NULL),
+    requeue_stale_claimed_items = function(...) invisible(NULL),
+    .package = "dsImaging")
+
+  first <- scan$pending_ids[[1L]]
+  initial <- dsImaging:::.imaging_radiomics_submit_batch(
+    scan$generation_id, first, dataset_id, list(),
+    scan$content_hashes[first])
+  expect_identical(initial$submitted, 1L)
+  expect_invisible(dsImaging:::.drip_feed_next_batch(
+    scan$generation_id, dataset_id))
+  expect_length(submitted_units, length(ids))
+  expect_true(all(vapply(submitted_units, identical, logical(1),
+    unit_selection)))
 })
 
 test_that("collection derivations bind hashes to their exact sample IDs", {
@@ -145,6 +181,41 @@ test_that("collection derivations bind hashes to their exact sample IDs", {
   expect_false(identical(
     compute_derivation_hash(image_hashes = left),
     compute_derivation_hash(image_hashes = swapped)))
+})
+
+test_that("per-image derivations bind reusable artifacts to an execution unit", {
+  base <- list(source = "resource", type = "external",
+    resource_pool_id = "cluster", config_seal = strrep("a", 64))
+  changed <- base
+  changed$config_seal <- strrep("b", 64)
+  hash <- function(unit) compute_image_derivation_hash(
+    content_hash = strrep("c", 64), processor = "radiomics",
+    params = list(execution_unit = unit))
+
+  expect_false(identical(hash(base), hash(changed)))
+})
+
+test_that("generation profile and mask inputs cannot change between batches", {
+  profile <- list(name = "demo_ct_firstorder_v1", bin_width = 25L)
+  signature <- dsImaging:::.radiomics_profile_signature(profile)
+  hashes <- list(
+    sample.B = strrep("b", 64), sample.A = strrep("a", 64))
+  spec <- list(profile_signature = signature,
+    mask_hashes = dsImaging:::.ordered_sample_hashes(hashes))
+
+  expect_identical(dsImaging:::.generation_profile_signature(spec, profile),
+    signature)
+  expect_identical(dsImaging:::.generation_mask_hashes(spec, rev(hashes)),
+    spec$mask_hashes)
+
+  changed_profile <- profile
+  changed_profile$bin_width <- 50L
+  expect_error(dsImaging:::.generation_profile_signature(
+    spec, changed_profile), "no longer matches")
+  changed_hashes <- hashes
+  changed_hashes$sample.A <- strrep("c", 64)
+  expect_error(dsImaging:::.generation_mask_hashes(
+    spec, changed_hashes), "no longer match")
 })
 
 test_that("generation resolution revalidates the pinned collection seal", {
