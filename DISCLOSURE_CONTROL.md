@@ -1,6 +1,6 @@
 # dsImaging disclosure-control contract
 
-Reviewed: 2026-09-03. This document defines the analyst-facing DataSHIELD
+Reviewed: 2026-09-05. This document defines the analyst-facing DataSHIELD
 boundary for imaging resources. It is a release invariant; it does not make the
 object store, node filesystem, or server-administrator interfaces public.
 
@@ -54,20 +54,35 @@ and does not pass it a raw manifest, bucket path, credential, or image table.
    hidden and admitted counts are normally upper-power-of-two buckets. A label
    distribution is withheld in full if any cell is below `nfilter.tab`, which
    prevents recovery of a suppressed cell by subtraction.
-7. Analytical workflows are handle-bound, private, and represented in the
-   workspace by opaque workflow capabilities. Public status exposes coarse
-   state only. Raw dsHPC job identifiers, bearers, retries, timestamps, paths,
-   errors, logs, and per-item outcomes remain on the node.
-8. Derived feature tables can enter a DataSHIELD session only through the
+7. Each collection or direct derivation has one durable dsHPC tracking root.
+   Its public identifier exposes only the fixed logical kind, coarse state,
+   and completion flag. Per-image execution children and their exact count,
+   progress, identifiers, bearers, retries, timestamps, paths, errors, logs,
+   and outcomes remain hidden on the node. A session-bound workflow capability
+   remains available for live orchestration but is not the durable identity.
+   It can be reconstructed from the public id in a new session only when an
+   imaging handle reauthorizes the same dataset and immutable collection seal.
+8. Only a complete, active, globally reusable asset with an immutable
+   collection seal can be published as `server_reusable`. A public tracking id
+   may assign an opaque output reference containing no asset id, provider
+   reference, path, or bytes. On consumption, `dsImaging` resolves that
+   reference server-side and revalidates its provider, classification, asset
+   state, collection seal, and requested derivation before use.
+   Direct primary execution passes that derivation identity to dsHPC as its
+   immutable active/completed-reuse fingerprint; dsHPC additionally binds
+   package, runner, execution-unit identity, and an administrator-set SHA-256
+   runtime revision covering the executable/container/model bundle. dsImaging
+   refuses reusable workflow submission if that runtime seal is absent.
+9. Derived feature tables can enter a DataSHIELD session only through the
    authorized imaging handle. Their complete patient roster is revalidated;
    only the manifest-declared label may be joined automatically, and no other
    clinical metadata is copied implicitly.
-9. Collection runners consume the exact admitted sample map. Tabular outputs
+10. Collection runners consume the exact admitted sample map. Tabular outputs
    require exactly one row per admitted sample; file outputs require a complete
    confined per-sample artifact manifest. Publication rejects missing,
    duplicate, extra, cross-attributed, symlinked, or hash/size-mismatched
    outputs.
-10. Raster images, single-file NIfTI, and single-file DICOM can follow this
+11. Raster images, single-file NIfTI, and single-file DICOM can follow this
     exact mapping. Multi-file DICOM series, RT, WSI, and MONAI analyst workflows
     remain fail-closed until their complete input/output patient association is
     represented and verified. Analyze `.img/.hdr` pairs are not a supported
@@ -105,5 +120,9 @@ resolution and cannot select or authenticate an object-store backend.
   counts. Production analyst endpoints should use a clinical/bucketed profile
   and site-approved `nfilter` values.
 - The minimum-patient gate prevents tiny-cohort use; it is not, by itself, a
-  differential-privacy guarantee for every downstream algorithm. Each trusted
-  consumer remains responsible for its own output disclosure controls.
+  differential-privacy guarantee for every downstream algorithm. `dsImaging`
+  enforces its own registered methods and validates shared references it
+  consumes. After a server-side object is assigned, every other trusted
+  DataSHIELD package and its allowlisted methods remain responsible for their
+  own output disclosure controls. Provenance is audit metadata, not a
+  cross-package policy engine.

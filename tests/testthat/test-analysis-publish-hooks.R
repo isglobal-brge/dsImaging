@@ -151,6 +151,7 @@ test_that("feature publishers reject ambiguous multiple output tables", {
 })
 
 test_that("drip feed resolves only the context sealed into its generation", {
+  withr::local_options(list(dshpc.runtime_revision = strrep("a", 64)))
   generation_id <- paste0("gen_", strrep("a", 32))
   root <- withr::local_tempdir()
   images <- file.path(root, "images")

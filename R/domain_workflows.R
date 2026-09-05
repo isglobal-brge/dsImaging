@@ -22,7 +22,7 @@ imagingProcessRadiomicsCollectionDS <- function(request_encoded) {
          mask_asset = req$mask_asset %||% "masks"))
   profile <- .imaging_profile_spec(req$profile %||%
     list(name = "ibsi_ct_3d_v1", bin_width = 25))
-  visibility <- "private"
+  visibility <- "global"
   batch_size <- as.integer(req$batch_size %||% 10L)
   if (length(batch_size) != 1L || is.na(batch_size) || batch_size < 1L ||
       batch_size > 100L) {
@@ -40,6 +40,7 @@ imagingProcessRadiomicsCollectionDS <- function(request_encoded) {
   if (identical(scan$action, "reuse_asset")) {
     return(.register_imaging_workflow(list(
       action = "reuse_asset", asset_id = scan$asset_id,
+      tracking_id = scan$tracking_id,
       dataset_id = dataset_id), owner_env))
   }
 
@@ -60,6 +61,7 @@ imagingProcessRadiomicsCollectionDS <- function(request_encoded) {
 
   .register_imaging_workflow(list(
     action = "running", generation_id = scan$generation_id,
+    tracking_id = scan$tracking_id,
     dataset_id = dataset_id), owner_env)
 }
 
@@ -82,9 +84,10 @@ imagingProcessRadiomicsAssetDS <- function(request_encoded) {
   mask_asset <- .imaging_safe_name(req$mask_asset, "mask_asset")
   profile <- .imaging_profile_spec(req$profile %||%
     list(name = "ibsi_ct_3d_v1", bin_width = 25))
-  visibility <- "private"
+  visibility <- "global"
   unit_selection <- dsHPC::hpcUnitSelectionInternal(owner_env,
     default_label = "dsImaging")
+  runtime_identity <- .imaging_runtime_identity(unit_selection)
   profile_signature <- .radiomics_profile_signature(profile)
 
   worker_assets <- c(image_asset, mask_asset)
@@ -102,10 +105,13 @@ imagingProcessRadiomicsAssetDS <- function(request_encoded) {
     image_input_identity = image_input_identity,
     mask_input_identity = mask_input_identity,
     profile = profile, profile_signature = profile_signature,
+    runtime_identity = runtime_identity,
     execution_unit = unit_selection)
   existing <- find_asset_by_hash(dataset_id, hash, collection_seal)
   if (!is.null(existing)) {
-    return(.imaging_reuse_handle(existing, dataset_id, owner_env))
+    return(.imaging_reuse_handle(existing, dataset_id, owner_env,
+      output_asset_kind = "feature_table", derivation_hash = hash,
+      collection_seal = collection_seal))
   }
 
   worker_dataset_id <- .register_imaging_worker_context(context$authorized,
@@ -123,6 +129,7 @@ imagingProcessRadiomicsAssetDS <- function(request_encoded) {
   publish_step$runner <- "pyradiomics_extract"
   publish_step$config <- config
   publish_step$derivation_hash <- hash
+  publish_step$tracking_output <- TRUE
 
   job <- .imaging_job(label = "dsImaging",
     name = req$name %||% paste(dataset_id, "radiomics extraction"),
@@ -136,7 +143,7 @@ imagingProcessRadiomicsAssetDS <- function(request_encoded) {
     ))
   .imaging_submit_job(.imaging_enrich_job_resources(job), owner_env,
     dataset_id, worker_dataset_id, "feature_table", hash,
-    unit_selection = unit_selection)
+    unit_selection = unit_selection, collection_seal = collection_seal)
 }
 
 #' Submit a segmentation job
@@ -165,9 +172,10 @@ imagingProcessSegmentationCollectionDS <- function(request_encoded) {
   }
   unit_selection <- dsHPC::hpcUnitSelectionInternal(owner_env,
     default_label = "dsImaging")
+  runtime_identity <- .imaging_runtime_identity(unit_selection)
   image_asset <- .imaging_safe_name(req$image_asset %||% "images",
                                     "image_asset")
-  visibility <- "private"
+  visibility <- "global"
   worker_manifest <- .imaging_worker_manifest(
     context$authorized, asset_names = image_asset)
   collection_map <- .imaging_worker_collection_map(
@@ -178,10 +186,13 @@ imagingProcessSegmentationCollectionDS <- function(request_encoded) {
     collection_seal = collection_seal,
     image_asset = image_asset,
     image_input_identity = image_input_identity,
+    runtime_identity = runtime_identity,
     segmenter = segmenter, execution_unit = unit_selection)
   existing <- find_asset_by_hash(dataset_id, hash, collection_seal)
   if (!is.null(existing)) {
-    return(.imaging_reuse_handle(existing, dataset_id, owner_env))
+    return(.imaging_reuse_handle(existing, dataset_id, owner_env,
+      output_asset_kind = "mask_root", derivation_hash = hash,
+      collection_seal = collection_seal))
   }
 
   runner <- .imaging_segmenter_runner(segmenter$provider)
@@ -198,6 +209,7 @@ imagingProcessSegmentationCollectionDS <- function(request_encoded) {
   publish_step$runner <- runner
   publish_step$config <- config
   publish_step$derivation_hash <- hash
+  publish_step$tracking_output <- TRUE
 
   job <- .imaging_job(label = "dsImaging",
     name = req$name %||% paste(dataset_id, "segmentation"),
@@ -208,7 +220,7 @@ imagingProcessSegmentationCollectionDS <- function(request_encoded) {
       publish_step, .imaging_step_safe_summary()))
   .imaging_submit_job(.imaging_enrich_job_resources(job), owner_env,
     dataset_id, worker_dataset_id, "mask_root", hash,
-    unit_selection = unit_selection)
+    unit_selection = unit_selection, collection_seal = collection_seal)
 }
 
 #' Submit a chained segmentation and radiomics job
@@ -231,9 +243,10 @@ imagingProcessSegmentAndExtractDS <- function(request_encoded) {
     stop("segmenter is required.", call. = FALSE))
   profile <- .imaging_profile_spec(req$profile %||%
     list(name = "ibsi_ct_3d_v1", bin_width = 25))
-  visibility <- "private"
+  visibility <- "global"
   unit_selection <- dsHPC::hpcUnitSelectionInternal(owner_env,
     default_label = "dsImaging")
+  runtime_identity <- .imaging_runtime_identity(unit_selection)
   profile_signature <- .radiomics_profile_signature(profile)
 
   existing_mask <- identical(
@@ -255,6 +268,7 @@ imagingProcessSegmentAndExtractDS <- function(request_encoded) {
     collection_seal = collection_seal,
     image_asset = image_asset,
     image_input_identity = image_input_identity,
+    runtime_identity = runtime_identity,
     segmenter = segmenter, execution_unit = unit_selection)
   full_hash_params <- list(dataset_id = dataset_id,
     collection_seal = collection_seal,
@@ -262,6 +276,7 @@ imagingProcessSegmentAndExtractDS <- function(request_encoded) {
     image_input_identity = image_input_identity,
     segmenter = segmenter,
     profile = profile, profile_signature = profile_signature,
+    runtime_identity = runtime_identity,
     execution_unit = unit_selection)
   if (!is.null(mask_input_identity)) {
     full_hash_params$mask_input_identity <- mask_input_identity
@@ -269,7 +284,9 @@ imagingProcessSegmentAndExtractDS <- function(request_encoded) {
   full_hash <- do.call(compute_derivation_hash, full_hash_params)
   existing <- find_asset_by_hash(dataset_id, full_hash, collection_seal)
   if (!is.null(existing)) {
-    return(.imaging_reuse_handle(existing, dataset_id, owner_env))
+    return(.imaging_reuse_handle(existing, dataset_id, owner_env,
+      output_asset_kind = "feature_table", derivation_hash = full_hash,
+      collection_seal = collection_seal))
   }
 
   seg_runner <- if (identical(segmenter$provider, "existing_mask_asset")) {
@@ -324,6 +341,7 @@ imagingProcessSegmentAndExtractDS <- function(request_encoded) {
   radiomics_publish_step$runner <- "pyradiomics_extract"
   radiomics_publish_step$config <- extract_config
   radiomics_publish_step$derivation_hash <- full_hash
+  radiomics_publish_step$tracking_output <- TRUE
   extract_step <- .imaging_step_run_artifact("pyradiomics_extract",
     config = extract_config)
   if (!is.null(seg_runner)) extract_step$inputs <- list(2L)
@@ -336,7 +354,7 @@ imagingProcessSegmentAndExtractDS <- function(request_encoded) {
     visibility = visibility, steps = steps)
   .imaging_submit_job(.imaging_enrich_job_resources(job), owner_env,
     dataset_id, worker_dataset_id, "feature_table", full_hash,
-    unit_selection = unit_selection)
+    unit_selection = unit_selection, collection_seal = collection_seal)
 }
 
 #' Submit a generic clinical imaging asset workflow
@@ -422,6 +440,74 @@ imagingLoadRadiomicsFeaturesDS <- function(request_encoded) {
   data
 }
 
+#' Recover a collection workflow from its durable tracking root
+#'
+#' DataSHIELD ASSIGN method. Recovery still requires an imaging handle for the
+#' exact admitted collection; a public tracking id alone never authorizes its
+#' data or internal generation state.
+#'
+#' @param tracking_id Public dsHPC logical tracking id.
+#' @param handle_symbol Session symbol holding an authorized imaging handle.
+#' @return A new session-bound workflow reference.
+#' @export
+imagingRecoverWorkflowDS <- function(tracking_id, handle_symbol = "img") {
+  .dsimaging_require_literal_arguments()
+  tryCatch(.imaging_recover_tracking_workflow(
+    tracking_id, handle_symbol, parent.frame()),
+    error = function(e) stop(
+      "Shared imaging workflow could not be recovered.", call. = FALSE))
+}
+
+#' @keywords internal
+.imaging_recover_tracking_workflow <- function(tracking_id, handle_symbol,
+                                                owner_env) {
+  tracking_id <- .imaging_tracking_id(tracking_id)
+  generation <- .imaging_generation_for_tracking(tracking_id)
+  if (!identical(as.character(generation$kind), "radiomics_collection") ||
+      !identical(as.character(generation$visibility), "global")) {
+    stop("Shared imaging workflow is unavailable.", call. = FALSE)
+  }
+  collection_seal <- .asset_collection_seal(
+    generation$collection_seal, required = TRUE)
+  authorized <- .authorized_imaging_dataset(
+    .required_scalar(handle_symbol, "handle_symbol"),
+    as.character(generation$dataset_id), owner_env = owner_env)
+  if (!identical(.imaging_authorized_collection_seal(authorized),
+                 collection_seal)) {
+    stop("Shared imaging workflow is unavailable.", call. = FALSE)
+  }
+  tracking_status <- dsHPC::hpcTrackingStatusInternal(tracking_id)
+  if (!is.list(tracking_status) ||
+      !identical(tracking_status$tracking_id, tracking_id)) {
+    stop("Shared imaging workflow is unavailable.", call. = FALSE)
+  }
+
+  asset_id <- generation$published_asset_id
+  has_asset <- is.character(asset_id) && length(asset_id) == 1L &&
+    !is.na(asset_id) && grepl("^asset_[0-9a-f]{32}$", asset_id)
+  workflow <- list(
+    action = if (has_asset) "published" else "running",
+    generation_id = as.character(generation$generation_id),
+    tracking_id = tracking_id,
+    dataset_id = as.character(generation$dataset_id))
+  if (has_asset) {
+    db <- .asset_db_connect()
+    on.exit(.asset_db_close(db), add = TRUE)
+    asset <- .asset_get(db, asset_id)
+    valid_asset <- is.list(asset) && identical(asset$status, "active") &&
+      identical(asset$visibility, "global") &&
+      identical(as.character(asset$dataset_id), workflow$dataset_id) &&
+      identical(as.character(asset$collection_seal), collection_seal)
+    if (!isTRUE(valid_asset)) {
+      stop("Shared imaging workflow is unavailable.", call. = FALSE)
+    }
+    workflow$asset_id <- asset_id
+  } else if (identical(as.character(generation$state), "ACTIVE")) {
+    stop("Shared imaging workflow is unavailable.", call. = FALSE)
+  }
+  .register_imaging_workflow(workflow, owner_env)
+}
+
 #' Get collection status
 #' @param reference_symbol Session symbol holding the collection workflow.
 #' @export
@@ -438,8 +524,12 @@ imagingCollectionStatusDS <- function(reference_symbol) {
   if (identical(workflow$action, "reuse_asset") ||
       identical(workflow$action, "published")) {
     .authorize_workflow_private_asset(workflow$asset_id, workflow_context)
-    return(list(state = "ACTIVE", is_done = TRUE,
-                asset_id = workflow$asset_id))
+    result <- list(state = "ACTIVE", is_done = TRUE,
+                   asset_id = workflow$asset_id)
+    tracking_id <- .imaging_tracking_id(
+      workflow$tracking_id %||% NULL, required = FALSE)
+    if (!is.null(tracking_id)) result$tracking_id <- tracking_id
+    return(result)
   }
   status <- tryCatch(
     .imaging_radiomics_collection_status(workflow$generation_id),
@@ -448,7 +538,19 @@ imagingCollectionStatusDS <- function(reference_symbol) {
     stop("Collection status is unavailable.", call. = FALSE)
   }
   state <- .safe_collection_state(status$state)
+  tracking_id <- .imaging_tracking_id(
+    workflow$tracking_id %||% .imaging_generation_tracking_id(
+      workflow$generation_id, required = FALSE), required = FALSE)
+  failed <- isTRUE(status$is_done) &&
+    (as.integer(status$failed %||% 0L) > 0L ||
+     state %in% c("FAILED", "CANCELLED", "PARTIAL"))
+  if (failed) {
+    .imaging_tracking_finish_generation(workflow$generation_id,
+      success = FALSE)
+    state <- if (identical(state, "CANCELLED")) "CANCELLED" else "FAILED"
+  }
   result <- list(state = state, is_done = isTRUE(status$is_done))
+  if (!is.null(tracking_id)) result$tracking_id <- tracking_id
   gen <- get_generation(workflow$generation_id)
   asset_id <- if (is.null(gen)) NULL else gen$published_asset_id %||% NULL
   if (!is.null(asset_id) && !is.na(asset_id) && nzchar(asset_id)) {
@@ -493,7 +595,11 @@ imagingCollectionPublishDS <- function(reference_symbol) {
   if (identical(workflow$action, "reuse_asset") ||
       identical(workflow$action, "published")) {
     .authorize_workflow_private_asset(workflow$asset_id, workflow_context)
-    return(list(state = "ACTIVE", asset_id = workflow$asset_id))
+    result <- list(state = "ACTIVE", asset_id = workflow$asset_id)
+    tracking_id <- .imaging_tracking_id(
+      workflow$tracking_id %||% NULL, required = FALSE)
+    if (!is.null(tracking_id)) result$tracking_id <- tracking_id
+    return(result)
   }
   published <- tryCatch(
     .imaging_radiomics_publish_collection(
@@ -504,7 +610,11 @@ imagingCollectionPublishDS <- function(reference_symbol) {
   .update_imaging_workflow(reference_symbol, workflow,
                            owner_env = owner_env)
   .authorize_workflow_private_asset(published$asset_id, workflow_context)
-  list(state = "ACTIVE", asset_id = published$asset_id)
+  result <- list(state = "ACTIVE", asset_id = published$asset_id)
+  tracking_id <- .imaging_tracking_id(
+    workflow$tracking_id %||% NULL, required = FALSE)
+  if (!is.null(tracking_id)) result$tracking_id <- tracking_id
+  result
 }
 
 #' Get a domain workflow status
@@ -532,14 +642,49 @@ imagingWorkflowStatusDS <- function(reference_symbol) {
   }
   if (identical(workflow$action, "reuse_asset")) {
     .authorize_workflow_private_asset(workflow$asset_id, workflow_context)
-    return(list(state = "ACTIVE", is_done = TRUE,
-                asset_id = workflow$asset_id))
+    result <- list(state = "ACTIVE", is_done = TRUE,
+                   asset_id = workflow$asset_id)
+    tracking_id <- .imaging_tracking_id(
+      workflow$tracking_id %||% NULL, required = FALSE)
+    if (!is.null(tracking_id)) result$tracking_id <- tracking_id
+    return(result)
   }
   if (identical(workflow$action, "source_asset")) {
     return(list(state = "ACTIVE", is_done = TRUE))
   }
+  if (identical(workflow$action, "tracking")) {
+    tracking_id <- .imaging_tracking_id(workflow$tracking_id)
+    status <- tryCatch(dsHPC::hpcTrackingStatusInternal(tracking_id),
+                       error = function(e) NULL)
+    if (is.null(status) || !is.character(status$state) ||
+        length(status$state) != 1L || is.na(status$state) ||
+        !status$state %in% c("queued", "running", "terminal") ||
+        !is.logical(status$is_done) || length(status$is_done) != 1L ||
+        is.na(status$is_done)) {
+      stop("Workflow status is unavailable.", call. = FALSE)
+    }
+    if (!isTRUE(status$is_done)) {
+      state <- if (identical(status$state, "queued")) "PENDING" else "RUNNING"
+      return(list(state = state, is_done = FALSE,
+                  tracking_id = tracking_id))
+    }
+    asset_id <- tryCatch(.imaging_workflow_shared_asset(workflow),
+                         error = function(e) NULL)
+    workflow$action <- "terminal"
+    workflow$state <- if (is.null(asset_id)) "FAILED" else "PUBLISHED"
+    workflow$asset_id <- asset_id
+    .update_imaging_workflow(reference_symbol, workflow,
+                             owner_env = owner_env)
+    result <- list(state = workflow$state, is_done = TRUE,
+                   tracking_id = tracking_id)
+    if (!is.null(asset_id)) result$asset_id <- asset_id
+    return(result)
+  }
   if (identical(workflow$action, "terminal")) {
     result <- list(state = workflow$state, is_done = TRUE)
+    tracking_id <- .imaging_tracking_id(
+      workflow$tracking_id %||% NULL, required = FALSE)
+    if (!is.null(tracking_id)) result$tracking_id <- tracking_id
     if (!is.null(workflow$asset_id)) {
       .authorize_workflow_private_asset(workflow$asset_id, workflow_context)
       result$asset_id <- workflow$asset_id
@@ -548,6 +693,35 @@ imagingWorkflowStatusDS <- function(reference_symbol) {
   }
   if (!identical(workflow$action, "job") || !is.list(workflow$job)) {
     stop("Workflow status is unavailable.", call. = FALSE)
+  }
+
+  tracking_id <- .imaging_tracking_id(
+    workflow$tracking_id %||% NULL, required = FALSE)
+  tracking_status <- if (is.null(tracking_id)) NULL else tryCatch(
+    dsHPC::hpcTrackingStatusInternal(tracking_id), error = function(e) NULL)
+  if (is.list(tracking_status) && isTRUE(tracking_status$is_done)) {
+    tracked_asset <- tryCatch(.imaging_workflow_shared_asset(workflow),
+                              error = function(e) NULL)
+    if (!is.null(tracked_asset)) {
+      cleanup_ok <- tryCatch({
+        if (!is.null(workflow$worker_context_id)) {
+          .unregister_imaging_worker_context(workflow$worker_context_id)
+        }
+        TRUE
+      }, error = function(e) FALSE)
+      if (!cleanup_ok) {
+        stop("Workflow cleanup is unavailable.", call. = FALSE)
+      }
+      workflow$action <- "terminal"
+      workflow$state <- "PUBLISHED"
+      workflow$worker_context_id <- NULL
+      workflow$job <- NULL
+      workflow$asset_id <- tracked_asset
+      .update_imaging_workflow(reference_symbol, workflow,
+                               owner_env = owner_env)
+      return(list(state = "PUBLISHED", is_done = TRUE,
+                  asset_id = tracked_asset, tracking_id = tracking_id))
+    }
   }
 
   status <- tryCatch(dsHPC::hpcStatusInternal(workflow$job,
@@ -561,7 +735,11 @@ imagingWorkflowStatusDS <- function(reference_symbol) {
       (done && !state %in% c("FINISHED", "PUBLISHED", "FAILED", "CANCELLED"))) {
     stop("Workflow status is unavailable.", call. = FALSE)
   }
-  if (!done) return(list(state = state, is_done = FALSE))
+  if (!done) {
+    result <- list(state = state, is_done = FALSE)
+    if (!is.null(tracking_id)) result$tracking_id <- tracking_id
+    return(result)
+  }
 
   asset_id <- NULL
   if (state %in% c("FINISHED", "PUBLISHED")) {
@@ -579,6 +757,10 @@ imagingWorkflowStatusDS <- function(reference_symbol) {
   }
 
   missing_result <- state %in% c("FINISHED", "PUBLISHED") && is.null(asset_id)
+  if (!is.null(tracking_id) &&
+      (!state %in% c("FINISHED", "PUBLISHED") || missing_result)) {
+    dsHPC::hpcTrackingFinishInternal(tracking_id, success = FALSE)
+  }
   workflow$action <- "terminal"
   workflow$state <- if (missing_result) "FAILED" else state
   workflow$worker_context_id <- NULL
@@ -591,6 +773,7 @@ imagingWorkflowStatusDS <- function(reference_symbol) {
     stop("Workflow result is unavailable.", call. = FALSE)
   }
   result <- list(state = state, is_done = TRUE)
+  if (!is.null(tracking_id)) result$tracking_id <- tracking_id
   if (!is.null(asset_id)) {
     .authorize_workflow_private_asset(asset_id, workflow_context)
     result$asset_id <- asset_id
@@ -684,7 +867,7 @@ imagingWorkflowDestroyDS <- function(reference_symbol) {
   sql <- paste(
     "SELECT asset_id, derivation_hash FROM assets",
     "WHERE dataset_id = ? AND created_by_job = ? AND kind = ?",
-    "AND status = 'active' AND visibility = 'private'"
+    "AND status = 'active' AND visibility = 'global'"
   )
   rows <- DBI::dbGetQuery(db, sql, params = list(dataset_id, job_id, kind))
   expected_hash <- workflow$derivation_hash %||% NULL
@@ -697,6 +880,48 @@ imagingWorkflowDestroyDS <- function(reference_symbol) {
     stop("Workflow result is unavailable.", call. = FALSE)
   }
   as.character(rows$asset_id[[1L]])
+}
+
+#' Resolve the validated global output behind a logical workflow root
+#' @keywords internal
+.imaging_workflow_shared_asset <- function(workflow) {
+  tracking_id <- .imaging_tracking_id(workflow$tracking_id)
+  dataset_id <- .required_scalar(workflow$dataset_id, "dataset_id")
+  kind <- .imaging_safe_name(workflow$output_asset_kind,
+                             "output asset kind")
+  derivation_hash <- workflow$derivation_hash
+  if (!is.character(derivation_hash) || length(derivation_hash) != 1L ||
+      is.na(derivation_hash) || !grepl("^[0-9a-f]{64}$", derivation_hash)) {
+    stop("Workflow result is unavailable.", call. = FALSE)
+  }
+  collection_seal <- .asset_collection_seal(
+    workflow$collection_seal, required = TRUE)
+
+  asset_id <- tryCatch(.imaging_tracking_resolve_asset(
+    tracking_id, output_name = "imaging_asset", dataset_id = dataset_id,
+    kind = kind, derivation_hash = derivation_hash,
+    collection_seal = collection_seal), error = function(e) NULL)
+  if (is.null(asset_id)) {
+    asset_id <- find_asset_by_hash(dataset_id, derivation_hash,
+                                   collection_seal)
+  }
+  if (is.null(asset_id)) {
+    stop("Workflow result is unavailable.", call. = FALSE)
+  }
+
+  db <- .asset_db_connect()
+  on.exit(.asset_db_close(db))
+  asset <- .asset_get(db, asset_id)
+  valid <- is.list(asset) && identical(asset$status, "active") &&
+    identical(asset$visibility, "global") &&
+    identical(as.character(asset$dataset_id), dataset_id) &&
+    identical(as.character(asset$kind), kind) &&
+    identical(as.character(asset$derivation_hash), derivation_hash) &&
+    identical(as.character(asset$collection_seal), collection_seal)
+  if (!isTRUE(valid)) {
+    stop("Workflow result is unavailable.", call. = FALSE)
+  }
+  as.character(asset_id)
 }
 
 #' Authorize a private result only through the workflow capability that
@@ -1212,8 +1437,9 @@ imagingListProfilesDS <- function() {
 #' @keywords internal
 .imaging_submit_job <- function(job, owner_env, dataset_id,
                                 worker_context_id, output_asset_kind,
-                                derivation_hash = NULL,
-                                unit_selection = NULL) {
+                                derivation_hash,
+                                unit_selection = NULL,
+                                collection_seal) {
   if (!is.character(job$label) || length(job$label) != 1L ||
       is.na(job$label) || !nzchar(job$label)) {
     stop("dsImaging dsHPC submissions must carry a non-empty label.",
@@ -1227,41 +1453,85 @@ imagingListProfilesDS <- function() {
   }
   output_asset_kind <- .imaging_safe_name(
     output_asset_kind, "output asset kind")
-  workflow_ref <- .register_imaging_workflow(list(
-    action = "submitting", dataset_id = dataset_id,
-    worker_context_id = worker_context_id,
-    output_asset_kind = output_asset_kind,
-    derivation_hash = derivation_hash), owner_env)
-  capability <- workflow_ref$capability
+  if (!is.character(derivation_hash) || length(derivation_hash) != 1L ||
+      is.na(derivation_hash) || !grepl("^[0-9a-f]{64}$", derivation_hash)) {
+    stop("Invalid imaging workflow derivation.", call. = FALSE)
+  }
+  collection_seal <- .asset_collection_seal(collection_seal, required = TRUE)
+  # The derivation hash binds the admitted collection seal and normalized
+  # workflow inputs. dsHPC adds package, runner and execution-unit identity to
+  # its own hash before allowing completed-result reuse.
+  job$reuse_fingerprint <- derivation_hash
+  tracking <- .imaging_tracking_create(output_asset_kind, derivation_hash)
+  tracking_id <- tracking$tracking_id
+
+  if (isTRUE(tracking$is_done)) {
+    asset_id <- tryCatch(.imaging_tracking_resolve_asset(
+      tracking_id, output_name = "imaging_asset", dataset_id = dataset_id,
+      kind = output_asset_kind, derivation_hash = derivation_hash,
+      collection_seal = collection_seal), error = function(e) NULL)
+    tryCatch(.unregister_imaging_worker_context(worker_context_id),
+             error = function(e) NULL)
+    if (is.null(asset_id)) {
+      stop("Shared imaging workflow result is unavailable.", call. = FALSE)
+    }
+    return(.register_imaging_workflow(list(
+      action = "reuse_asset", asset_id = asset_id,
+      dataset_id = dataset_id, tracking_id = tracking_id,
+      output_asset_kind = output_asset_kind,
+      derivation_hash = derivation_hash,
+      collection_seal = collection_seal), owner_env))
+  }
+
   job$.owner <- .dsr_owner_id()
   result <- tryCatch(
     if (is.null(unit_selection)) {
-      dsHPC::hpcSubmitInternal(.dsr_encode(job), session_env = owner_env)
+      dsHPC::hpcSubmitInternal(.dsr_encode(job), session_env = owner_env,
+        tracking_id = tracking_id, tracking_role = "primary",
+        tracking_finalize = TRUE)
     } else {
       dsHPC::hpcSubmitInternal(.dsr_encode(job),
-        unit_selection = unit_selection)
+        unit_selection = unit_selection, tracking_id = tracking_id,
+        tracking_role = "primary", tracking_finalize = TRUE)
     },
     error = function(e) {
-      state <- .imaging_session_state(owner_env, create = FALSE)
-      rm(list = capability, envir = state$workflows)
       tryCatch(.unregister_imaging_worker_context(worker_context_id),
                error = function(e2) NULL)
+      if (!isTRUE(tracking$reused)) {
+        tryCatch(dsHPC::hpcTrackingFinishInternal(
+          tracking_id, success = FALSE), error = function(e2) NULL)
+      }
       stop("Imaging workflow submission failed.", call. = FALSE)
     })
-  state <- .imaging_session_state(owner_env, create = FALSE)
-  entry <- state$workflows[[capability]]
-  entry$workflow$action <- "job"
-  entry$workflow$job <- result
-  workflows <- state$workflows
-  workflows[[capability]] <- entry
-  workflow_ref
+  reused_execution <- isTRUE(result$reused) || isTRUE(result$deduplicated)
+  if (reused_execution) {
+    tryCatch(.unregister_imaging_worker_context(worker_context_id),
+             error = function(e) NULL)
+    worker_context_id <- NULL
+  }
+  .register_imaging_workflow(list(
+    action = if (reused_execution) "tracking" else "job",
+    job = if (reused_execution) NULL else result,
+    dataset_id = dataset_id,
+    worker_context_id = worker_context_id,
+    output_asset_kind = output_asset_kind,
+    derivation_hash = derivation_hash,
+    collection_seal = collection_seal,
+    tracking_id = tracking_id), owner_env)
 }
 
 #' @keywords internal
-.imaging_reuse_handle <- function(asset_id, dataset_id, owner_env) {
+.imaging_reuse_handle <- function(asset_id, dataset_id, owner_env,
+                                  output_asset_kind, derivation_hash,
+                                  collection_seal) {
+  tracking <- .imaging_tracking_create(output_asset_kind, derivation_hash)
+  .imaging_tracking_reuse_asset(tracking, asset_id)
   .register_imaging_workflow(list(
     action = "reuse_asset", asset_id = asset_id,
-    dataset_id = dataset_id), owner_env)
+    dataset_id = dataset_id, tracking_id = tracking$tracking_id,
+    output_asset_kind = output_asset_kind,
+    derivation_hash = derivation_hash,
+    collection_seal = collection_seal), owner_env)
 }
 
 #' @keywords internal
@@ -1302,6 +1572,7 @@ imagingListProfilesDS <- function() {
   config <- .imaging_runner_config(runner, req$config %||% list())
   unit_selection <- dsHPC::hpcUnitSelectionInternal(owner_env,
     default_label = "dsImaging")
+  runtime_identity <- .imaging_runtime_identity(unit_selection)
   execution_runner <- if (identical(runner, "image_preprocess")) {
     "dsimaging_image_preprocess"
   } else runner
@@ -1309,11 +1580,37 @@ imagingListProfilesDS <- function() {
   asset_type <- contract$asset_type
   input_assets <- unlist(config[intersect(contract$assets, names(config))],
                          use.names = FALSE)
+  input_assets <- unique(as.character(input_assets))
+  collection_seal <- .imaging_authorized_collection_seal(context$authorized)
+  worker_manifest <- .imaging_worker_manifest(
+    context$authorized, asset_names = input_assets)
+  collection_map <- .imaging_worker_collection_map(
+    context$authorized, worker_manifest)
+  input_identities <- stats::setNames(lapply(input_assets, function(asset) {
+    .imaging_worker_asset_identity(collection_map, worker_manifest, asset)
+  }), input_assets)
+  derivation_hash <- compute_derivation_hash(
+    dataset_id = dataset_id,
+    collection_seal = collection_seal,
+    runner = execution_runner,
+    config = config,
+    input_identities = input_identities,
+    output_asset = output_asset,
+    output_asset_kind = asset_type,
+    runtime_identity = runtime_identity,
+    execution_unit = unit_selection)
+  existing <- find_asset_by_hash(dataset_id, derivation_hash, collection_seal)
+  if (!is.null(existing)) {
+    return(.imaging_reuse_handle(existing, dataset_id, owner_env,
+      output_asset_kind = asset_type, derivation_hash = derivation_hash,
+      collection_seal = collection_seal))
+  }
   worker_dataset_id <- .register_imaging_worker_context(context$authorized,
-    asset_names = input_assets)
+    asset_names = input_assets, collection_map = collection_map,
+    worker_manifest = worker_manifest)
   config$dataset_id <- worker_dataset_id
   config$worker_context <- .imaging_worker_context_file(worker_dataset_id)
-  visibility <- "private"
+  visibility <- "global"
   label_tag <- contract$tag
 
   publish_step <- .imaging_step_publish_asset(dataset_id, output_asset,
@@ -1321,6 +1618,8 @@ imagingListProfilesDS <- function() {
   publish_step$alias <- .imaging_safe_name(req$alias, "alias", required = FALSE)
   publish_step$runner <- execution_runner
   publish_step$config <- c(config, list(execution_unit = unit_selection))
+  publish_step$derivation_hash <- derivation_hash
+  publish_step$tracking_output <- TRUE
 
   job <- .imaging_job(label = "dsImaging",
     name = req$name %||% paste(dataset_id, label_tag),
@@ -1330,8 +1629,8 @@ imagingListProfilesDS <- function() {
       .imaging_step_run_artifact(execution_runner, config = config),
       publish_step, .imaging_step_safe_summary()))
   .imaging_submit_job(.imaging_enrich_job_resources(job), owner_env,
-    dataset_id, worker_dataset_id, asset_type,
-    unit_selection = unit_selection)
+    dataset_id, worker_dataset_id, asset_type, derivation_hash,
+    unit_selection = unit_selection, collection_seal = collection_seal)
 }
 
 #' @keywords internal

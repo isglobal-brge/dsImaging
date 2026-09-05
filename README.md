@@ -44,6 +44,11 @@ external/HPC backend configured in `dsHPC`.
   provenance.
 - Per-image collection orchestration with server-side drip-feed and safe
   reconnect/status/publish flow.
+- One durable public tracking root per logical workflow, with all per-image
+  execution children and exact fan-out cardinality hidden.
+- Server-reusable validated outputs that trusted DataSHIELD packages can
+  consume through opaque references without transferring raw data or paths to
+  the client.
 - dsHPC publisher hooks that register job outputs as `dsImaging` assets.
 
 Multi-file DICOM-series conversion, RTSTRUCT/DICOM SEG conversion,
@@ -150,6 +155,8 @@ dependencies used by the lightweight runners: `pydicom`, `rt-utils`,
 
 ```r
 options(
+  # SHA-256 of the exact dsHPC/Python/container/model deployment.
+  dshpc.runtime_revision = Sys.getenv("DSHPC_RUNTIME_REVISION"),
   dsimaging.data_dir = "/var/lib/dsimaging",
   dsimaging.asset_db = "/var/lib/dsimaging/imaging_assets.sqlite",
   dsimaging.analysis.max_inflight = 2L,
@@ -167,6 +174,12 @@ options(
 
 Clinical runner images must use an immutable `@sha256:<digest>` reference;
 mutable tags such as `:latest` are rejected.
+
+Reusable imaging derivations additionally require dsHPC's lowercase 64-hex
+`runtime_revision`. It must change whenever Python locks, containers, remote
+execution images, or model weights change. Configure it on the local/site
+default or separately in each selectable execution-unit catalogue entry.
+dsImaging fails closed before claiming reusable work when this seal is absent.
 
 `dsHPC` controls the shared scheduler, adaptive resource limits, GPU detection,
 container execution, and external/HPC backend. `dsImaging` only declares the
@@ -202,10 +215,13 @@ before they enter the asset catalog.
 
 The registered analyst surface starts with `imagingInitDS()` and its opaque
 session handle. It exposes disclosure-controlled metadata/validation, a
-sanitized global asset catalog, private handle-bound workflow submission and
-coarse workflow status/publication. The exact `AggregateMethods` and
-`AssignMethods` allowlists are declared in `DESCRIPTION` and should be
-resynchronized in Opal/Rock after every package upgrade.
+sanitized global asset catalog, handle-bound workflow submission, and coarse
+workflow status/publication. dsHPC exposes one durable, cardinality-free
+tracking root per logical workflow; the public id can assign a server-side
+opaque reference to a validated reusable output, but cannot read its data.
+The exact `AggregateMethods` and `AssignMethods` allowlists are declared in
+`DESCRIPTION` and should be resynchronized in Opal/Rock after every package
+upgrade.
 
 Legacy dataset enumeration, raw asset details/lineage, raw collection scans,
 batch submission, exact generation status/recovery, and raw mask-path methods

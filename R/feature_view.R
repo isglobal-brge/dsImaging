@@ -262,8 +262,7 @@ imagingFeatureViewDS <- function(handle_symbol, asset_id_or_alias,
   .dsimaging_require_literal_arguments()
   columns <- .decode_imaging_columns_arg(columns)
   owner_env <- parent.frame()
-  asset_id_or_alias <- .imaging_safe_name(
-    asset_id_or_alias, "asset_id_or_alias")
+  asset_id_or_alias <- .imaging_resolve_asset_argument(asset_id_or_alias)
   if (!is.null(columns) &&
       (!is.character(columns) || !length(columns) || anyNA(columns) ||
        any(!nzchar(columns)) || anyDuplicated(columns))) {

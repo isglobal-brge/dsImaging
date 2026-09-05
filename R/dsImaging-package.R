@@ -63,7 +63,10 @@
 #' dsImaging does not run heavy work directly. Configure dsHPC with
 #' `dshpc.executor_backend`, `dshpc.backend_path_mappings`,
 #' `dshpc.backend_gpu_count`, and related options to choose embedded,
-#' Slurm, external, or containerized execution.
+#' Slurm, external, or containerized execution. Reusable derivations require
+#' `dshpc.runtime_revision`, a lowercase SHA-256 identifying the exact
+#' executable/container/model bundle (or the equivalent field on a selected
+#' execution unit).
 #'
 #' @name dsimaging-options
 NULL

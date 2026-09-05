@@ -1,3 +1,24 @@
+# dsImaging 0.4.0
+
+* Every collection or direct derivation now has one durable, public dsHPC
+  tracking root. Per-image fan-out remains private and is absent from the
+  public queue, including its exact cardinality and progress.
+* Complete disclosure-validated imaging assets can be published behind a
+  `server_reusable` output and resolved later by trusted server packages from
+  an opaque dsHPC reference. Paths, bytes, credentials, provider references,
+  and execution-job identifiers do not enter the analyst workspace.
+* Direct workflow submission uses an idempotent primary execution under the
+  logical root, and repeated reuse validates an already sealed output instead
+  of republishing it. The immutable derivation hash is passed to dsHPC as the
+  active/completed-reuse fingerprint. Failed attempts remain retryable.
+* Reusable derivation identity now includes dsHPC's operator-sealed runtime
+  revision. An absent or changed revision fails closed, preventing stale reuse
+  after Python, container, remote runtime, or model-weight replacement.
+* A collection workflow can be rebound in a new session by its tracking id
+  only after an imaging handle reauthorizes the exact dataset and immutable
+  collection seal. The id alone does not grant access to generation state or
+  data.
+
 # dsImaging 0.3.8
 
 * Opaque imaging feature views can now join a normal server-side clinical table

@@ -60,5 +60,8 @@ image references.
 dsImaging does not run heavy work directly. Configure dsHPC with
 \code{dshpc.executor_backend}, \code{dshpc.backend_path_mappings},
 \code{dshpc.backend_gpu_count}, and related options to choose embedded,
-Slurm, external, or containerized execution.
+Slurm, external, or containerized execution. Reusable derivations require
+\code{dshpc.runtime_revision}, a lowercase SHA-256 identifying the exact
+executable/container/model bundle (or the equivalent field on a selected
+execution unit).
 }

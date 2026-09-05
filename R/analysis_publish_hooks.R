@@ -46,6 +46,9 @@
     alias = step$alias,
     visibility = scope$visibility
   )
+  if (isTRUE(step$tracking_output)) {
+    .imaging_tracking_publish_job_asset(job_id, asset_id)
+  }
 
   list(status = "published", asset_id = asset_id,
        dataset_id = dataset_id, kind = asset_type)
@@ -100,6 +103,9 @@
     alias = step$alias,
     visibility = scope$visibility
   )
+  if (isTRUE(step$tracking_output)) {
+    .imaging_tracking_publish_job_asset(job_id, asset_id)
+  }
 
   list(status = "published", asset_id = asset_id,
        dataset_id = dataset_id, kind = asset_type)
@@ -430,6 +436,9 @@
     jsonlite::fromJSON(gen$spec_json, simplifyVector = FALSE),
     error = function(e) NULL)
   if (is.null(spec)) return(invisible(NULL))
+  tracking_id <- .imaging_tracking_id(
+    spec$tracking_id %||% NULL, required = FALSE)
+  runtime_identity <- .imaging_generation_runtime_identity(spec)
 
   segmenter <- .imaging_segmenter_spec(spec$segmenter)
   profile <- spec$profile
@@ -505,6 +514,7 @@
         profile = profile,
         profile_signature = profile_signature,
         mask_content_hash = mask_ch,
+        runtime_identity = runtime_identity,
         execution_unit = spec$dshpc_unit %||% NULL
       )
     )
@@ -594,7 +604,8 @@
     tryCatch({
       spec_enc <- .dsr_encode(job_spec)
       dsHPC::hpcSubmitInternal(spec_enc,
-        unit_selection = spec$dshpc_unit %||% NULL)
+        unit_selection = spec$dshpc_unit %||% NULL,
+        tracking_id = tracking_id)
       record_item_status(
         generation_id, sid, "running", job_token = job_token)
     }, error = function(e) {

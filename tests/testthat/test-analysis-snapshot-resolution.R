@@ -124,11 +124,19 @@ test_that("collection scans use snapshot IDs and persist the execution unit", {
     resource_pool_id = "unit_alpha", type = "external",
     config_seal = strrep("b", 64), config = list(),
     allowed_labels = list("dsImaging"), allowed_runners = list())
+  tracking_id <- "trk_11111111-2222-4333-8444-555555555555"
+  testthat::local_mocked_bindings(
+    hpcRuntimeIdentityInternal = function(unit_selection = NULL)
+      strrep("c", 64),
+    hpcTrackingCreateInternal = function(reuse_key = NULL, kind = "analysis") list(
+      tracking_id = tracking_id, state = "queued", is_done = FALSE,
+      kind = kind, reused = FALSE),
+    .package = "dsHPC")
   scan <- dsImaging:::.imaging_radiomics_scan_collection(
     dataset_id,
     list(provider = "ct_lung_threshold"),
     list(name = "demo_ct_firstorder_v1", bin_width = 25),
-    "private",
+    "global",
     resolved_override = list(
       manifest = collection$manifest,
       backend = backend,
@@ -142,12 +150,19 @@ test_that("collection scans use snapshot IDs and persist the execution unit", {
   contract <- jsonlite::fromJSON(generation$spec_json,
     simplifyVector = FALSE)
   expect_identical(contract$dshpc_unit, unit_selection)
+  expect_identical(contract$tracking_id, tracking_id)
 
   submitted_units <- list()
+  submitted_specs <- list()
   testthat::local_mocked_bindings(
     hpcSubmitInternal = function(spec_encoded, session_env = NULL,
-                                 unit_selection = NULL) {
+                                 unit_selection = NULL,
+                                 tracking_id = NULL) {
       submitted_units[[length(submitted_units) + 1L]] <<- unit_selection
+      submitted_specs[[length(submitted_specs) + 1L]] <<-
+        dsImaging:::.dsr_decode(spec_encoded)
+      expect_identical(tracking_id,
+        "trk_11111111-2222-4333-8444-555555555555")
       list(job_id = paste0("job_", length(submitted_units)))
     },
     count_active_jobs = function(...) 0L,
@@ -167,6 +182,10 @@ test_that("collection scans use snapshot IDs and persist the execution unit", {
   expect_length(submitted_units, length(ids))
   expect_true(all(vapply(submitted_units, identical, logical(1),
     unit_selection)))
+  expect_true(all(vapply(submitted_specs, function(spec) {
+    identical(spec$visibility, "private") &&
+      identical(spec$label, "dsImaging_image")
+  }, logical(1))))
 })
 
 test_that("collection derivations bind hashes to their exact sample IDs", {

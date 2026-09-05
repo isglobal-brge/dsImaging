@@ -225,6 +225,7 @@
       completed_n       INTEGER DEFAULT 0,
       failed_n          INTEGER DEFAULT 0,
       published_asset_id TEXT,
+      tracking_id       TEXT,
       spec_json         TEXT,
       error             TEXT,
       created_at        TEXT NOT NULL,
@@ -241,9 +242,16 @@
       "ALTER TABLE asset_generations ADD COLUMN visibility TEXT NOT NULL",
       "DEFAULT 'private'"))
   }
+  if (!"tracking_id" %in% generation_cols) {
+    DBI::dbExecute(db,
+      "ALTER TABLE asset_generations ADD COLUMN tracking_id TEXT")
+  }
   DBI::dbExecute(db, paste(
     "UPDATE asset_generations SET visibility = 'private'",
     "WHERE visibility IS NULL OR visibility NOT IN ('private','global')"))
+  DBI::dbExecute(db, paste(
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_asset_generations_tracking",
+    "ON asset_generations(tracking_id) WHERE tracking_id IS NOT NULL"))
 
   # Status state machine: pending -> claimed -> running -> completed | failed | skipped
   DBI::dbExecute(db, "
@@ -651,7 +659,13 @@ find_asset_by_hash <- function(dataset_id, derivation_hash, collection_seal) {
 compute_derivation_hash <- function(...) {
   params <- list(...)
   params <- params[order(names(params))]
-  blob <- jsonlite::toJSON(params, auto_unbox = TRUE, digits = 10)
+  implementation_version <- tryCatch(
+    as.character(utils::packageVersion("dsImaging")),
+    error = function(e) "development")
+  payload <- list(contract = "dsImaging-derivation-v2",
+    implementation_version = implementation_version, params = params)
+  blob <- jsonlite::toJSON(payload, auto_unbox = TRUE, digits = 10,
+    null = "null")
   digest::digest(blob, algo = "sha256", serialize = FALSE)
 }
 
@@ -728,17 +742,21 @@ claim_or_reuse_generation <- function(dataset_id, kind, derivation_hash,
     now <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3Z", tz = "UTC")
     spec_json <- if (!is.null(spec))
       as.character(jsonlite::toJSON(spec, auto_unbox = TRUE)) else NA_character_
+    tracking_id <- if (!is.null(spec$tracking_id)) {
+      .imaging_tracking_id(spec$tracking_id)
+    } else NULL
 
     DBI::dbExecute(db,
       "INSERT INTO asset_generations (generation_id, dataset_id, collection_seal,
         kind, derivation_hash,
-        visibility, state, owner_id, created_by_job, expected_n, spec_json,
-        created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?)",
+        visibility, state, owner_id, created_by_job, expected_n, tracking_id,
+        spec_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?)",
       params = list(gen_id, dataset_id, collection_seal %||% NA_character_,
         kind, derivation_hash,
         visibility, owner_id %||% NA_character_, job_id %||% NA_character_,
-        as.integer(expected_n %||% NA_integer_), spec_json, now, now))
+        as.integer(expected_n %||% NA_integer_), tracking_id %||% NA_character_,
+        spec_json, now, now))
 
     DBI::dbExecute(db, "COMMIT")
     list(action = "run_new", generation_id = gen_id)

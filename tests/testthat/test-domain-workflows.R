@@ -8,6 +8,8 @@ test_that("radiomics domain method composes a labelled dsHPC job", {
     allowed_labels = list("dsImaging"), allowed_runners = list())
   testthat::local_mocked_bindings(
     hpcUnitSelectionInternal = function(...) unit_selection,
+    hpcRuntimeIdentityInternal = function(unit_selection = NULL)
+      strrep("c", 64),
     .package = "dsHPC"
   )
   testthat::local_mocked_bindings(
@@ -53,7 +55,7 @@ test_that("radiomics domain method composes a labelled dsHPC job", {
   expect_false("job_id" %in% names(out))
   expect_null(submitted$job_id)
   expect_equal(submitted$label, "dsImaging")
-  expect_identical(submitted$visibility, "private")
+  expect_identical(submitted$visibility, "global")
   expect_equal(submitted$steps[[2]]$runner, "pyradiomics_extract")
   expect_equal(submitted$steps[[3]]$publish_kind, "imaging_radiomics_asset")
   expect_identical(submitted_unit, unit_selection)
@@ -87,6 +89,7 @@ test_that("exact asset map hashes are ordered and cover immutable identity", {
 })
 
 test_that("changed source masks cannot reuse a direct radiomics asset", {
+  withr::local_options(list(dshpc.runtime_revision = strrep("a", 64)))
   mask_hash <- strrep("b", 64)
   observed_hashes <- character(0)
   submitted <- FALSE
@@ -134,6 +137,10 @@ test_that("changed source masks cannot reuse a direct radiomics asset", {
       paste0("dsctx_", strrep("a", 64))
     },
     .content_hash_for_resource = function(...) NULL,
+    .imaging_tracking_create = function(...) list(
+      tracking_id = "trk_11111111-2222-4333-8444-555555555555",
+      state = "queued", is_done = FALSE, reused = FALSE),
+    .imaging_tracking_publish_asset = function(...) invisible(TRUE),
     .imaging_submit_job = function(job, ...) {
       submitted <<- TRUE
       structure(list(capability = paste0("imgw_", strrep("2", 64))),
@@ -177,6 +184,7 @@ test_that("changed source masks cannot reuse a direct radiomics asset", {
 })
 
 test_that("derived alias promotion changes radiomics input identity", {
+  withr::local_options(list(dshpc.runtime_revision = strrep("a", 64)))
   collection_seal <- strrep("a", 64)
   resolved_asset_id <- paste0("asset_", strrep("1", 32))
   observed_hashes <- character(0)
@@ -230,6 +238,10 @@ test_that("derived alias promotion changes radiomics input identity", {
       paste0("dsctx_", strrep("a", 64))
     },
     .content_hash_for_resource = function(...) NULL,
+    .imaging_tracking_create = function(...) list(
+      tracking_id = "trk_11111111-2222-4333-8444-555555555555",
+      state = "queued", is_done = FALSE, reused = FALSE),
+    .imaging_tracking_publish_asset = function(...) invisible(TRUE),
     .imaging_submit_job = function(job, ...) {
       structure(list(capability = paste0("imgw_", strrep("2", 64))),
         class = "dsimaging_workflow_ref")
@@ -344,16 +356,26 @@ test_that("segmenter and profile specifications cannot select server paths", {
 })
 
 test_that("generic workflows build publication fields server-side", {
+  withr::local_options(list(dshpc.runtime_revision = strrep("a", 64)))
   submitted <- NULL
   context_id <- paste0("dsctx_", strrep("b", 64))
   testthat::local_mocked_bindings(
     .authorized_imaging_dataset = function(handle_symbol, dataset_id = NULL,
                                            owner_env = NULL) {
-      list(dataset_id = "lung1", handle = list(), manifest = list(),
+      list(dataset_id = "lung1", handle = list(collection_snapshot = list(
+        version = 1L, seal = strrep("a", 64), artifacts = list(),
+        records = list())), manifest = list(),
         backend = NULL, privacy = list(), n_privacy_units = 3L)
     },
+    .imaging_worker_manifest = function(...) list(
+      dataset_id = "lung1", assets = list()),
+    .imaging_worker_collection_map = function(...) NULL,
+    .imaging_worker_asset_identity = function(...) strrep("f", 64),
+    find_asset_by_hash = function(...) NULL,
     .register_imaging_worker_context = function(authorized,
-                                                asset_names = NULL) context_id,
+                                                asset_names = NULL,
+                                                collection_map = NULL,
+                                                worker_manifest = NULL) context_id,
     .content_hash_for_resource = function(resource_name) NULL,
     .imaging_submit_job = function(job, ...) {
       submitted <<- job
@@ -380,7 +402,8 @@ test_that("generic workflows build publication fields server-side", {
   expect_identical(anyDuplicated(names(run$config)), 0L)
   expect_identical(publish$asset_type, "image_root")
   expect_identical(publish$publish_kind, "imaging_asset")
-  expect_identical(submitted$visibility, "private")
+  expect_identical(submitted$visibility, "global")
+  expect_true(isTRUE(publish$tracking_output))
   expect_false(any(c("sample_id", "generation_id") %in% names(run$config)))
 })
 
@@ -424,13 +447,21 @@ test_that("domain submissions reject missing labels before dsHPC submit", {
 })
 
 test_that("domain submissions pass the owning session to dsHPC", {
+  withr::local_options(list(dshpc.runtime_revision = strrep("a", 64)))
   session <- new.env(parent = globalenv())
   observed_session <- NULL
   context_id <- paste0("dsctx_", strrep("a", 64))
   testthat::local_mocked_bindings(
+    hpcTrackingCreateInternal = function(reuse_key = NULL, kind = "analysis") list(
+      tracking_id = "trk_11111111-2222-4333-8444-555555555555",
+      state = "queued", is_done = FALSE, kind = kind, reused = FALSE),
     hpcSubmitInternal = function(spec_encoded, session_env = NULL,
-                                 unit_selection = NULL) {
+                                 unit_selection = NULL, tracking_id = NULL,
+                                 tracking_role = NULL,
+                                 tracking_finalize = FALSE) {
       observed_session <<- session_env
+      expect_identical(tracking_role, "primary")
+      expect_true(tracking_finalize)
       list(job_id = "job_test", .dshpc_capability = "opaque")
     },
     .package = "dsHPC")
@@ -439,28 +470,30 @@ test_that("domain submissions pass the owning session to dsHPC", {
     list(label = "dsImaging", steps = list(list(
       type = "emit", plane = "session", output_name = "out", value = 1))),
     owner_env = session, dataset_id = "lung1",
-    worker_context_id = context_id, output_asset_kind = "feature_table")
+    worker_context_id = context_id, output_asset_kind = "feature_table",
+    derivation_hash = strrep("b", 64), collection_seal = strrep("c", 64))
 
   expect_s3_class(reference, "dsimaging_workflow_ref")
   expect_true(identical(observed_session, session))
 })
 
-test_that("job workflows expose only coarse status and their exact private asset", {
+test_that("job workflows expose only coarse status and their exact shared asset", {
   db_path <- tempfile(fileext = ".sqlite")
   withr::local_options(list(dsimaging.asset_db = db_path))
   job_id <- "job_11111111-2222-4333-8444-555555555555"
   db <- dsImaging:::.asset_db_connect()
   asset_id <- dsImaging:::.asset_register(
     db, "lung1", "feature_table", tempfile("features-"),
-    derivation_hash = "expected-hash", created_by_job = job_id,
-    visibility = "private")
+    derivation_hash = strrep("b", 64), created_by_job = job_id,
+    visibility = "global", collection_seal = strrep("a", 64))
   dsImaging:::.asset_db_close(db)
 
   session <- new.env(parent = globalenv())
   ref <- dsImaging:::.register_imaging_workflow(list(
     action = "job", dataset_id = "lung1",
     worker_context_id = paste0("dsctx_", strrep("a", 64)),
-    output_asset_kind = "feature_table", derivation_hash = "expected-hash",
+    output_asset_kind = "feature_table", derivation_hash = strrep("b", 64),
+    collection_seal = strrep("a", 64),
     job = list(job_id = job_id, .dshpc_capability = "secret")), session)
   assign("workflow", ref, envir = session)
   assign("imagingWorkflowStatusDS", dsImaging::imagingWorkflowStatusDS,

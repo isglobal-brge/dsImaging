@@ -105,6 +105,7 @@
   # Build processor identity for derivation hashing
   processor <- paste0(segmenter$provider, "_", segmenter$task %||% "default")
   profile_signature <- .radiomics_profile_signature(profile)
+  runtime_identity <- .imaging_runtime_identity(unit_selection)
 
   # Collection-level hash uses content_hashes (strong) when available
   hash_source <- if (length(fp_result$content_hashes) > 0)
@@ -124,11 +125,11 @@
     segmenter = segmenter,
     profile = profile,
     profile_signature = profile_signature,
+    runtime_identity = runtime_identity,
     mask_asset = segmenter$mask_asset %||% NULL,
     image_hashes = hash_source,
     execution_unit = unit_selection
   )
-
   # Claim or reuse generation
   # All sample IDs are candidates. The diff (new/changed/unchanged) is about
   # file content changes, not about processing status. Per-image dedup happens
@@ -142,6 +143,16 @@
   }
   all_sample_ids <- admission$sample_ids
   total_n <- length(all_sample_ids)
+  tracking <- .imaging_tracking_create(
+    "radiomics_collection", collection_hash)
+  tracking_id <- tracking$tracking_id
+  tracking_established <- FALSE
+  on.exit({
+    if (!tracking_established && !isTRUE(tracking$reused)) {
+      tryCatch(dsHPC::hpcTrackingFinishInternal(
+        tracking_id, success = FALSE), error = function(e) NULL)
+    }
+  }, add = TRUE)
 
   generation_spec <- list(
     processor = processor,
@@ -150,8 +161,10 @@
     profile_name = profile$name,
     segmenter = segmenter,
     dshpc_unit = unit_selection,
+    runtime_identity = runtime_identity,
     mask_hashes = mask_hashes,
     privacy_roster = admission$roster,
+    tracking_id = tracking_id,
     dataset_context = .dataset_context_from_resolved(
       resolved, manifest, admission$roster)
   )
@@ -171,9 +184,12 @@
   # Registered analyst methods project this structure to coarse state and never
   # return these counts or identifiers.
   if (gen_result$action == "reuse_asset") {
+    .imaging_tracking_reuse_asset(tracking, gen_result$asset_id)
+    tracking_established <- TRUE
     return(list(
       action = "reuse_asset",
       asset_id = gen_result$asset_id,
+      tracking_id = tracking_id,
       dataset_id = dataset_id,
       total = as.integer(total_n),
       done = as.integer(total_n),
@@ -182,6 +198,8 @@
   }
 
   generation_id <- gen_result$generation_id
+  .imaging_set_generation_tracking_id(generation_id, tracking_id)
+  tracking_established <- TRUE
 
   if (gen_result$action == "reuse_generation") {
     .ensure_generation_dataset_context(
@@ -210,6 +228,7 @@
     return(list(
       action = "resume",
       generation_id = generation_id,
+      tracking_id = tracking_id,
       dataset_id = dataset_id,
       total = as.integer(total_n),
       done = length(done_ids),
@@ -235,6 +254,7 @@
   list(
     action = "run_new",
     generation_id = generation_id,
+    tracking_id = tracking_id,
     dataset_id = dataset_id,
     total = as.integer(total_n),
     done = 0L,
@@ -326,8 +346,11 @@
       !is.list(gen_spec$profile)) {
     stop("Generation processing contract is unavailable.", call. = FALSE)
   }
+  tracking_id <- .imaging_tracking_id(
+    gen_spec$tracking_id %||% NULL, required = FALSE)
   segmenter <- .imaging_segmenter_spec(gen_spec$segmenter)
   profile <- .imaging_profile_spec(gen_spec$profile)
+  runtime_identity <- .imaging_generation_runtime_identity(gen_spec)
   resolved <- .resolve_ds_from_generation(generation_id, dataset_id)
   if (is.null(resolved))
     stop("Cannot resolve dataset for generation: ", dataset_id, call. = FALSE)
@@ -424,6 +447,7 @@
         profile = profile,
         profile_signature = profile_signature,
         mask_content_hash = mask_ch,
+        runtime_identity = runtime_identity,
         execution_unit = gen_spec$dshpc_unit %||% NULL
       )
     )
@@ -538,7 +562,8 @@
     tryCatch({
       spec_enc <- .dsr_encode(job_spec)
       result <- dsHPC::hpcSubmitInternal(spec_enc,
-        unit_selection = gen_spec$dshpc_unit %||% NULL)
+        unit_selection = gen_spec$dshpc_unit %||% NULL,
+        tracking_id = tracking_id)
       record_item_status(
         generation_id, sid, "running", job_token = job_token)
       submitted[[sid]] <- list(status = "submitted", job_id = result$job_id)
@@ -737,6 +762,7 @@
   update_generation(generation_id, state = "CANCELLED",
     error = paste("Cancelled:", reason))
   reconcile_generation_counters(generation_id)
+  .imaging_tracking_finish_generation(generation_id, success = FALSE)
 
   list(
     generation_id = generation_id,
@@ -778,7 +804,11 @@ imagingRadiomicsCancelCollectionDS <- function(reference_symbol,
   workflow$action <- "cancelled"
   .update_imaging_workflow(reference_symbol, workflow,
                            owner_env = owner_env)
-  list(state = "CANCELLED")
+  result <- list(state = "CANCELLED")
+  tracking_id <- .imaging_tracking_id(
+    workflow$tracking_id %||% NULL, required = FALSE)
+  if (!is.null(tracking_id)) result$tracking_id <- tracking_id
+  result
 }
 
 # ---------------------------------------------------------------------------
@@ -913,6 +943,7 @@ imagingRadiomicsCancelCollectionDS <- function(reference_symbol,
     stop("publish_generation returned NULL. Generation may be in PARTIAL state.",
          call. = FALSE)
   }
+  .imaging_tracking_publish_generation(generation_id, asset_id)
 
   list(
     asset_id = asset_id,

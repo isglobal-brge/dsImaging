@@ -103,6 +103,7 @@ imagingLoadAssetDS <- function(handle_symbol, asset_id_or_alias, columns = NULL,
                                include_metadata = FALSE,
                                syntactic_names = FALSE) {
   .dsimaging_require_literal_arguments()
+  asset_id_or_alias <- .imaging_resolve_asset_argument(asset_id_or_alias)
   columns <- .decode_imaging_columns_arg(columns)
   owner_env <- parent.frame()
   authorized <- .authorized_imaging_dataset(
