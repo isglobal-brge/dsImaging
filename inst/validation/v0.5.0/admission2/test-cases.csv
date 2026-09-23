@@ -1,0 +1,276 @@
+"file","context","test","nb","failed","skipped","error","warning","user","system","real","passed"
+"test-admission-inputs.R","admission-inputs","secondary source maps and every series file enter the collection seal",6,0,FALSE,FALSE,0,0.624,0.051,0.703,6
+"test-admission-inputs.R","admission-inputs","ambiguous, incomplete and unsealed source groups fail admission",7,0,FALSE,FALSE,0,0.329,0.136,0.502,7
+"test-admission-inputs.R","admission-inputs","secondary association files cannot escape the collection",1,0,FALSE,FALSE,0,0.0259999999999998,0.019,0.0459999999999998,1
+"test-admission-inputs.R","admission-inputs","series reject symlinked files even inside their own root",2,0,FALSE,FALSE,0,0.0409999999999999,0.02,0.0659999999999998,2
+"test-admission-inputs.R","admission-inputs","DataSHIELD clinical workflows bind exact assets to an authorized handle",30,0,FALSE,FALSE,0,0.89,0.103,1.037,30
+"test-admission-inputs.R","admission-inputs","capabilities list newly admitted runners without worker paths",2,0,FALSE,FALSE,0,0.012,0.001,0.0129999999999999,2
+"test-admission-publication.R","admission-publication","dose publication requires complete unique per-ROI sample mapping",12,0,FALSE,FALSE,0,0.261,0.012,0.28,12
+"test-admission-publication.R","admission-publication","dose rows are assigned privately and tile bodies never load as tables",19,0,FALSE,FALSE,0,0.353,0.027,0.403,19
+"test-admission-publication.R","admission-publication","dose CSV loading preserves numeric-looking canonical identifiers",1,0,FALSE,FALSE,0,0.00299999999999967,0.001,0.00499999999999989,1
+"test-admission-publication.R","admission-publication","DSLite assigns dose rows but refuses their aggregate extraction",5,0,FALSE,FALSE,0,0.786,0.024,0.856,5
+"test-admission-publication.R","admission-publication","WSI publication binds private slide manifests, counts and tile bodies",10,0,FALSE,FALSE,0,0.233,0.015,0.252999999999999,10
+"test-admission-publication.R","admission-publication","QC publication retains the complete roster when capped",6,0,FALSE,FALSE,0,0.0350000000000001,0.006,0.0430000000000001,6
+"test-admission-publication.R","admission-publication","WSI manifest-only publication keeps fan-out confined to private JSON",4,0,FALSE,FALSE,0,0.0260000000000007,0.005,0.0309999999999997,4
+"test-admission-publication.R","admission-publication","RT and MONAI publishers require exactly one mask for each sample",4,0,FALSE,FALSE,0,0.0330000000000004,0.006,0.0380000000000003,4
+"test-analysis-envs.R","analysis-envs","radiomics envs are listed",4,0,FALSE,FALSE,0,0.0150000000000006,0.002,0.0200000000000005,4
+"test-analysis-envs.R","analysis-envs","worker processes can recover administrator path configuration",3,0,FALSE,FALSE,0,0.00900000000000034,0.003,0.0129999999999999,3
+"test-analysis-envs.R","analysis-envs","runner registration pins environment paths for detached workers",2,0,FALSE,FALSE,0,0.102,0.024,0.13,2
+"test-analysis-envs.R","analysis-envs","runner health includes clinical imaging analysis runners",11,0,FALSE,FALSE,0,0.0280000000000005,0.00599999999999989,0.0369999999999999,11
+"test-analysis-envs.R","analysis-envs","radiomics runners declare scheduler resources",19,0,FALSE,FALSE,0,0.154,0.027,0.194999999999999,19
+"test-analysis-envs.R","analysis-envs","runner registration rejects symlinked and world-writable configs",3,0,FALSE,FALSE,0,0.0120000000000005,0.003,0.0149999999999997,3
+"test-analysis-envs.R","analysis-envs","radiomics runners can declare containerized execution metadata",6,0,FALSE,FALSE,0,0.0209999999999999,0.018,0.04,6
+"test-analysis-envs.R","analysis-envs","clinical runner images must be immutable",1,0,FALSE,FALSE,0,0.00600000000000023,0.001,0.00700000000000056,1
+"test-analysis-envs.R","analysis-envs","bundled profile paths are materialised outside the package tree",3,0,FALSE,FALSE,0,0.00800000000000001,0.006,0.0140000000000002,3
+"test-analysis-existing-masks.R","analysis-existing-masks","existing mask hashes are read from manifest asset indexes",2,0,FALSE,FALSE,0,0.00600000000000023,0.001,0.00599999999999934,2
+"test-analysis-existing-masks.R","analysis-existing-masks","S3 mask resolution prefers the manifest hash index URI",1,0,FALSE,FALSE,0,0.0249999999999995,0.002,0.0289999999999999,1
+"test-analysis-existing-masks.R","analysis-existing-masks","mask indexes cannot redirect into another collection",1,0,FALSE,FALSE,0,0.0329999999999995,0.001,0.0340000000000007,1
+"test-analysis-existing-masks.R","analysis-existing-masks","S3 mask resolution falls back to common mask filename stems",1,0,FALSE,FALSE,0,0.00300000000000011,0.001,0.00300000000000011,1
+"test-analysis-existing-masks.R","analysis-existing-masks","local mask resolution matches S1 without selecting S10",2,0,FALSE,FALSE,0,0.024,0.003,0.0270000000000001,2
+"test-analysis-existing-masks.R","analysis-existing-masks","local mask resolution rejects symlinks outside its root",1,0,FALSE,FALSE,0,0.00300000000000011,0.001,0.00399999999999956,1
+"test-analysis-existing-masks.R","analysis-existing-masks","local mask resolution fails closed on ambiguous exact stems",1,0,FALSE,FALSE,0,0.00499999999999989,0.002,0.00699999999999967,1
+"test-analysis-existing-masks.R","analysis-existing-masks","S3 mask resolution uses exact stems and detects ambiguity",2,0,FALSE,FALSE,0,0.00700000000000056,0.001,0.00700000000000056,2
+"test-analysis-existing-masks.R","analysis-existing-masks","mask indexes use their explicit sample mapping, not filenames",1,0,FALSE,FALSE,0,0.00300000000000011,0.001,0.00400000000000045,1
+"test-analysis-existing-masks.R","analysis-existing-masks","collection workflows reject an incomplete existing-mask index",1,0,FALSE,FALSE,0,0.0830000000000002,0.00900000000000001,0.093,1
+"test-analysis-existing-masks.R","analysis-existing-masks","S3 mask staging downloads into the dsHPC staging area",3,0,FALSE,FALSE,0,0.0100000000000007,0.003,0.0129999999999999,3
+"test-analysis-existing-masks.R","analysis-existing-masks","collection status works without a client-side dataset id",2,0,FALSE,FALSE,0,0.0910000000000002,0.017,0.108000000000001,2
+"test-analysis-existing-masks.R","analysis-existing-masks","transient submit errors are retryable",3,0,FALSE,FALSE,0,0.00800000000000001,0.002,0.0110000000000001,3
+"test-analysis-existing-masks.R","analysis-existing-masks","internal collection accounting retains exact full-roster counts",4,0,FALSE,FALSE,0,0.249000000000001,0.0259999999999999,0.283,4
+"test-analysis-existing-masks.R","analysis-existing-masks","segmentation manifests cannot reference masks outside an artifact",2,0,FALSE,FALSE,0,0.0360000000000005,0.002,0.0409999999999995,2
+"test-analysis-model-registry.R","analysis-model-registry","model registry works with temp dir",4,0,FALSE,FALSE,0,0.024,0.003,0.0270000000000001,4
+"test-analysis-profiles.R","analysis-profiles","bundled profiles are listed",7,0,FALSE,FALSE,0,0.0120000000000005,0.004,0.016,7
+"test-analysis-profiles.R","analysis-profiles","profiles can be read",5,0,FALSE,FALSE,0,0.0110000000000001,0.003,0.0150000000000006,5
+"test-analysis-profiles.R","analysis-profiles","Aerts signature profile is available",8,0,FALSE,FALSE,0,0.024,0.004,0.0270000000000001,8
+"test-analysis-profiles.R","analysis-profiles","reading nonexistent profile errors",1,0,FALSE,FALSE,0,0.00400000000000045,0.001,0.00600000000000023,1
+"test-analysis-profiles.R","analysis-profiles","published Aerts profile retains settings and exact feature metadata",13,0,FALSE,FALSE,0,0.0620000000000003,0.01,0.0720000000000001,13
+"test-analysis-profiles.R","analysis-profiles","extract runner config preserves selected feature vectors",1,0,FALSE,FALSE,0,0.00199999999999978,0,0.00300000000000011,1
+"test-analysis-profiles.R","analysis-profiles","published Aerts extraction yields exactly its four selected features",6,0,FALSE,FALSE,0,0.0359999999999996,0.038,2.345,6
+"test-analysis-publish-hooks.R","analysis-publish-hooks","publisher provenance captures runner summary versions",3,0,FALSE,FALSE,0,0.0229999999999997,0.00800000000000001,0.0309999999999988,3
+"test-analysis-publish-hooks.R","analysis-publish-hooks","feature publishers reject duplicate or partial collection rows",2,0,FALSE,FALSE,0,0.024,0.006,0.0300000000000011,2
+"test-analysis-publish-hooks.R","analysis-publish-hooks","non-tabular publishers require an exact confined sample map",5,0,FALSE,FALSE,0,0.0430000000000001,0.00800000000000001,0.0510000000000002,5
+"test-analysis-publish-hooks.R","analysis-publish-hooks","feature publishers reject ambiguous multiple output tables",1,0,FALSE,FALSE,0,0.00900000000000034,0.001,0.0109999999999992,1
+"test-analysis-publish-hooks.R","analysis-publish-hooks","drip feed resolves only the context sealed into its generation",3,0,FALSE,FALSE,0,0.0809999999999995,0.004,0.0890000000000004,3
+"test-analysis-publish-hooks.R","analysis-publish-hooks","generation contexts require exact dataset and privacy-roster binding",4,0,FALSE,FALSE,0,0.0350000000000001,0.002,0.0370000000000008,4
+"test-analysis-publish-hooks.R","analysis-publish-hooks","opaque job tags recover exactly one private sample",4,0,FALSE,FALSE,0,0.0140000000000002,0.002,0.0169999999999995,4
+"test-analysis-snapshot-resolution.R","analysis-snapshot-resolution","image resolution uses only the exact snapshot record",3,0,FALSE,FALSE,0,0.0410000000000004,0.006,0.0460000000000012,3
+"test-analysis-snapshot-resolution.R","analysis-snapshot-resolution","image resolution rejects cross-root records and symbolic links",2,0,FALSE,FALSE,0,0.016,0.004,0.0199999999999996,2
+"test-analysis-snapshot-resolution.R","analysis-snapshot-resolution","image snapshot records are unique and bytes remain pinned",2,0,FALSE,FALSE,0,0.032,0.004,0.0389999999999997,2
+"test-analysis-snapshot-resolution.R","analysis-snapshot-resolution","collection scans use snapshot IDs and persist the execution unit",16,0,FALSE,FALSE,0,0.422000000000001,0.065,0.509,16
+"test-analysis-snapshot-resolution.R","analysis-snapshot-resolution","collection derivations bind hashes to their exact sample IDs",2,0,FALSE,FALSE,0,0.0150000000000006,0.002,0.0169999999999995,2
+"test-analysis-snapshot-resolution.R","analysis-snapshot-resolution","per-image derivations bind reusable artifacts to an execution unit",1,0,FALSE,FALSE,0,0.00499999999999989,0.002,0.00799999999999912,1
+"test-analysis-snapshot-resolution.R","analysis-snapshot-resolution","generation profile and mask inputs cannot change between batches",4,0,FALSE,FALSE,0,0.0209999999999999,0.004,0.0259999999999998,4
+"test-analysis-snapshot-resolution.R","analysis-snapshot-resolution","generation resolution revalidates the pinned collection seal",2,0,FALSE,FALSE,0,0.0360000000000005,0.006,0.0440000000000005,2
+"test-analysis-snapshot-resolution.R","analysis-snapshot-resolution","artifact mask fallback uses exact stems with strict cardinality",3,0,FALSE,FALSE,0,0.00900000000000034,0.002,0.0180000000000007,3
+"test-analysis-snapshot-resolution.R","analysis-snapshot-resolution","artifact mask manifests are exact, authoritative, and confined",4,0,FALSE,FALSE,0,0.00900000000000034,0.004,0.0129999999999999,4
+"test-asset-catalog.R","asset-catalog","asset catalog database is created with correct schema",3,0,FALSE,FALSE,0,0.0169999999999995,0.005,0.0220000000000002,3
+"test-asset-catalog.R","asset-catalog","asset registration and retrieval works",4,0,FALSE,FALSE,0,0.0220000000000002,0.006,0.0280000000000005,4
+"test-asset-catalog.R","asset-catalog","deduplication by derivation_hash works",3,0,FALSE,FALSE,0,0.0180000000000007,0.006,0.0250000000000004,3
+"test-asset-catalog.R","asset-catalog","private assets are isolated from deduplication and aliases",4,0,FALSE,FALSE,0,0.0200000000000005,0.006,0.0269999999999992,4
+"test-asset-catalog.R","asset-catalog","multiple assets of same kind coexist",1,0,FALSE,FALSE,0,0.0209999999999999,0.006,0.027000000000001,1
+"test-asset-catalog.R","asset-catalog","aliases work",2,0,FALSE,FALSE,0,0.0250000000000004,0.006,0.032,2
+"test-asset-catalog.R","asset-catalog","the same alias is isolated across collection seals",2,0,FALSE,FALSE,0,0.0179999999999998,0.00599999999999989,0.0240000000000009,2
+"test-asset-catalog.R","asset-catalog","lineage tracking works",3,0,FALSE,FALSE,0,0.0220000000000002,0.005,0.0280000000000005,3
+"test-asset-catalog.R","asset-catalog","lineage cannot cross immutable collection seals",1,0,FALSE,FALSE,0,0.016,0.006,0.0229999999999997,1
+"test-asset-catalog.R","asset-catalog","compute_derivation_hash is deterministic",2,0,FALSE,FALSE,0,0.00699999999999967,0.001,0.00799999999999912,2
+"test-asset-catalog.R","asset-catalog","old pending and running global generations are reused",10,0,FALSE,FALSE,0,0.119,0.021,0.142999999999999,10
+"test-asset-catalog.R","asset-catalog","global generations are isolated by immutable collection seal",3,0,FALSE,FALSE,0,0.0249999999999995,0.00800000000000001,0.0339999999999989,3
+"test-asset-catalog.R","asset-catalog","content hashes are isolated by immutable collection seal",2,0,FALSE,FALSE,0,0.0510000000000002,0.01,0.0609999999999999,2
+"test-asset-catalog.R","asset-catalog","legacy stale-generation cleanup does not change active work",2,0,FALSE,FALSE,0,0.130999999999999,0.014,0.147,2
+"test-asset-catalog.R","asset-catalog","item completion is idempotent and completion wins late failures",7,0,FALSE,FALSE,0,0.132,0.024,0.158000000000001,7
+"test-asset-catalog.R","asset-catalog","generation counter reconciliation repairs stale counts",2,0,FALSE,FALSE,0,0.0449999999999999,0.01,0.0560000000000009,2
+"test-asset-catalog.R","asset-catalog","stale claimed items are requeued for recovery",4,0,FALSE,FALSE,0,0.0649999999999995,0.0129999999999999,0.0800000000000001,4
+"test-asset-catalog.R","asset-catalog","private item correlation is opaque, durable, and recoverable",6,0,FALSE,FALSE,0,0.069,0.0129999999999999,0.0840000000000014,6
+"test-asset-catalog.R","asset-catalog","active dsHPC jobs prevent stale claimed items from being duplicated",3,0,FALSE,FALSE,0,0.127000000000001,0.0209999999999999,0.15,3
+"test-asset-catalog.R","asset-catalog","active retry jobs override previous failed item state",2,0,FALSE,FALSE,0,0.134,0.0189999999999999,0.154,2
+"test-asset-catalog.R","asset-catalog","generation cancellation is admin-gated and cancels tagged jobs",7,0,FALSE,FALSE,0,0.149000000000001,0.0230000000000001,0.175000000000001,7
+"test-asset-catalog.R","asset-catalog","generation cancellation accepts admin key from environment",2,0,FALSE,FALSE,0,0.134,0.018,0.154,2
+"test-asset-catalog.R","asset-catalog","collection publish enforces generation selected features",4,0,FALSE,FALSE,0,0.0470000000000006,0.002,0.0499999999999989,4
+"test-asset-catalog.R","asset-catalog","collection feature publication enforces one row per roster sample",2,0,FALSE,FALSE,0,0.0129999999999999,0.00100000000000011,0.0150000000000006,2
+"test-asset-catalog.R","asset-catalog","invalid completed artifacts are requeued for recovery",5,0,FALSE,FALSE,0,0.104000000000001,0.02,0.125,5
+"test-asset-catalog.R","asset-catalog","per-image assets are never reused across workflows",4,0,FALSE,FALSE,0,0.0220000000000002,0.00700000000000012,0.0300000000000011,4
+"test-asset-catalog.R","asset-catalog","orphan running items are requeued",3,0,FALSE,FALSE,0,0.0690000000000008,0.014,0.0849999999999991,3
+"test-asset-db-concurrency.R","asset-db-concurrency","catalog connections wait for an active worker transaction",5,0,FALSE,FALSE,0,0.0339999999999989,0.024,1.582,5
+"test-asset-db-concurrency.R","asset-db-concurrency","legacy catalog lookup closes a partial connection on failure",2,0,FALSE,FALSE,0,0.00399999999999956,0.002,0.00599999999999845,2
+"test-asset-db-upgrade.R","asset-db-upgrade","legacy asset catalogs default every unproven asset to private",2,0,FALSE,FALSE,0,0.0170000000000012,0.0089999999999999,0.027000000000001,2
+"test-asset-db-upgrade.R","asset-db-upgrade","catalogs predating the visibility column upgrade as private",2,0,FALSE,FALSE,0,0.0180000000000007,0.00900000000000012,0.027000000000001,2
+"test-asset-db-upgrade.R","asset-db-upgrade","an unsealed visibility signal becomes private on upgrade",2,0,FALSE,FALSE,0,0.0239999999999991,0.01,0.0350000000000001,2
+"test-asset-db-upgrade.R","asset-db-upgrade","a legacy unsealed alias remains private",4,0,FALSE,FALSE,0,0.0220000000000002,0.0109999999999999,0.0349999999999984,4
+"test-asset-db-upgrade.R","asset-db-upgrade","reopening a sealed private aliased asset preserves privacy",3,0,FALSE,FALSE,0,0.0259999999999998,0.01,0.0380000000000003,3
+"test-asset-db-upgrade.R","asset-db-upgrade","new global assets persist only with explicit provenance",3,0,FALSE,FALSE,0,0.0269999999999992,0.00800000000000001,0.0359999999999996,3
+"test-asset-db-upgrade.R","asset-db-upgrade","legacy generation items gain durable private job correlation",3,0,FALSE,FALSE,0,0.0329999999999995,0.01,0.0440000000000005,3
+"test-collection-snapshot.R","collection-snapshot","collection snapshots pin metadata, routes, and image bytes",2,0,FALSE,FALSE,0,0.0340000000000007,0.006,0.0410000000000004,2
+"test-collection-snapshot.R","collection-snapshot","snapshot materialization verifies every object hash and size",3,0,FALSE,FALSE,0,0.0340000000000007,0.00800000000000001,0.043000000000001,3
+"test-collection-snapshot.R","collection-snapshot","S3 snapshot materialization fetches the admitted object version",2,0,FALSE,FALSE,0,0.004999999999999,0.002,0.00600000000000023,2
+"test-collection-snapshot.R","collection-snapshot","collection snapshots require exact artifact rosters",1,0,FALSE,FALSE,0,0.0119999999999987,0.004,0.0169999999999995,1
+"test-collection-snapshot.R","collection-snapshot","worker contexts carry only the admitted image sample map",4,0,FALSE,FALSE,0,0.0280000000000005,0.00800000000000001,0.0350000000000001,4
+"test-collection-snapshot.R","collection-snapshot","same-URI mask roots use their exact validated mask index",3,0,FALSE,FALSE,0,0.0370000000000008,0.00800000000000001,0.0449999999999999,3
+"test-content-hash-store.R","content-hash-store","MinIO webhook events upsert resource content hashes",4,0,FALSE,FALSE,0,0.0269999999999992,0.00800000000000001,0.0349999999999984,4
+"test-content-hash-store.R","content-hash-store","internal content hashing returns stable indexed values",2,0,FALSE,FALSE,0,0.0490000000000013,0.00900000000000012,0.0589999999999993,2
+"test-content-hash-store.R","content-hash-store","mutating an object changes the indexed content hash",2,0,FALSE,FALSE,0,0.0540000000000003,0.00999999999999979,0.0640000000000001,2
+"test-content-hash-store.R","content-hash-store","internal content hashing rejects direct S3 object probes",2,0,FALSE,FALSE,0,0.0190000000000001,0.00700000000000012,0.027000000000001,2
+"test-content-hash-store.R","content-hash-store","hash computation prefers checksum and streams multipart ETags",4,0,FALSE,FALSE,0,0.00699999999999967,0.002,0.00900000000000034,4
+"test-content-hash-store.R","content-hash-store","unsupported resources return non-error NA metadata",3,0,FALSE,FALSE,0,0.032,0.00800000000000001,0.0410000000000004,3
+"test-count-samples.R","count-samples","sample count honors a local absolute metadata.uri",1,0,FALSE,FALSE,0,0.00600000000000023,0.00100000000000011,0.00699999999999967,1
+"test-count-samples.R","count-samples","sample count guesses csv format from a metadata.uri extension",1,0,FALSE,FALSE,0,0.0169999999999995,0.00099999999999989,0.0179999999999989,1
+"test-count-samples.R","count-samples","sample count still prefers metadata.file when both are present",1,0,FALSE,FALSE,0,0.00199999999999889,0.00100000000000011,0.00300000000000011,1
+"test-count-samples.R","count-samples","sample count remains NA for an s3 metadata.uri without backend",1,0,FALSE,FALSE,0,0.00200000000000067,0,0.00300000000000011,1
+"test-descriptor.R","descriptor","imaging_dataset_descriptor creates valid object",4,0,FALSE,FALSE,0,0.00500000000000078,0.00099999999999989,0.00699999999999967,4
+"test-descriptor.R","descriptor","dsImaging declares no dependency on dsFlower",1,0,FALSE,FALSE,0,0.00300000000000011,0.00100000000000011,0.00300000000000011,1
+"test-descriptor.R","descriptor","imaging_dataset_descriptor errors without dataset_id",1,0,FALSE,FALSE,0,0.00399999999999956,0.00099999999999989,0.004999999999999,1
+"test-descriptor.R","descriptor","print method works for ImagingDatasetDescriptor",2,0,FALSE,FALSE,0,0.00400000000000134,0.00100000000000011,0.00400000000000134,2
+"test-disclosure-contract.R","disclosure-contract","imaging admission counts distinct patients, not image rows",6,0,FALSE,FALSE,0,0.0139999999999993,0.002,0.016,6
+"test-disclosure-contract.R","disclosure-contract","an admitted handle fails closed if the patient roster changes",5,0,FALSE,FALSE,0,0.0280000000000005,0.002,0.0289999999999999,5
+"test-disclosure-contract.R","disclosure-contract","legacy manifests without a patient privacy contract fail closed",1,0,FALSE,FALSE,0,0.00600000000000023,0,0.0080000000000009,1
+"test-disclosure-contract.R","disclosure-contract","sample, patient, and label roles must use distinct columns",4,0,FALSE,FALSE,0,0.0200000000000014,0.00100000000000011,0.0220000000000002,4
+"test-disclosure-contract.R","disclosure-contract","exact roster validation checks the sample-to-patient mapping",2,0,FALSE,FALSE,0,0.0080000000000009,0.00099999999999989,0.00900000000000034,2
+"test-disclosure-contract.R","disclosure-contract","privacy metadata rejects reserved missing-value tokens",5,0,FALSE,FALSE,0,0.0269999999999992,0.002,0.0380000000000003,5
+"test-disclosure-contract.R","disclosure-contract","sample identifiers must already be canonical",1,0,FALSE,FALSE,0,0.00799999999999912,0,0.00900000000000034,1
+"test-disclosure-contract.R","disclosure-contract","handle lookup is session-local and never falls back by name",3,0,FALSE,FALSE,0,0.0119999999999987,0.00100000000000011,0.0139999999999993,3
+"test-disclosure-contract.R","disclosure-contract","label distributions use only the declared label and patient units",4,0,FALSE,FALSE,0,0.0389999999999997,0.00299999999999989,0.043000000000001,4
+"test-disclosure-contract.R","disclosure-contract","label distributions require an administrator-declared public vocabulary",3,0,FALSE,FALSE,0,0.0150000000000006,0.002,0.0169999999999995,3
+"test-disclosure-contract.R","disclosure-contract","unobserved approved label levels suppress the full distribution",2,0,FALSE,FALSE,0,0.0250000000000004,0.002,0.0259999999999998,2
+"test-disclosure-contract.R","disclosure-contract","public label vocabularies cannot contain private identifiers",2,0,FALSE,FALSE,0,0.011000000000001,0.00099999999999989,0.0120000000000005,2
+"test-disclosure-contract.R","disclosure-contract","registered aggregates exclude row-level and hash oracles",3,0,FALSE,FALSE,0,0.00399999999999956,0.00100000000000011,0.004999999999999,3
+"test-disclosure-contract.R","disclosure-contract","stale allowlists cannot execute legacy low-level DS methods",18,0,FALSE,FALSE,0,0.0699999999999985,0.002,0.0739999999999998,18
+"test-disclosure-contract.R","disclosure-contract","portable generation context rejects raw credentials",3,0,FALSE,FALSE,0,0.0109999999999992,0.002,0.0129999999999999,3
+"test-disclosure-contract.R","disclosure-contract","session resources stay private and are never persisted implicitly",4,0,FALSE,FALSE,0,0.0080000000000009,0.00100000000000011,0.0109999999999992,4
+"test-disclosure-contract.R","disclosure-contract","worker contexts use only administrator-managed credential refs",3,0,FALSE,FALSE,0,0.0220000000000002,0.002,0.0259999999999998,3
+"test-disclosure-contract.R","disclosure-contract","dataset registry rejects session and inline credentials",3,0,FALSE,FALSE,0,0.00900000000000034,0.00099999999999989,0.00999999999999979,3
+"test-disclosure-contract.R","disclosure-contract","handle and workflow capabilities are bound to one session",5,0,FALSE,FALSE,0,0.0509999999999984,0.00900000000000012,0.0609999999999999,5
+"test-disclosure-contract.R","disclosure-contract","session resolvers never fall back to process-global references",2,0,FALSE,FALSE,0,0.00999999999999979,0.00099999999999989,0.0109999999999992,2
+"test-disclosure-contract.R","disclosure-contract","imagingDestroyDS removes only a session-owned handle capability",12,0,FALSE,FALSE,0,0.0540000000000003,0.00500000000000012,0.0620000000000012,12
+"test-disclosure-contract.R","disclosure-contract","collection status exposes no roster or exact progress counters",2,0,FALSE,FALSE,0,0.00500000000000078,0.00100000000000011,0.00600000000000023,2
+"test-disclosure-contract.R","disclosure-contract","registered metadata methods keep node storage diagnostics private",11,0,FALSE,FALSE,0,0.0330000000000013,0.00499999999999989,0.0380000000000003,11
+"test-disclosure-contract.R","disclosure-contract","handle refresh never warns with the private manifest path",3,0,FALSE,FALSE,0,0.0229999999999997,0.006,0.0289999999999999,3
+"test-disclosure-contract.R","disclosure-contract","registered metadata projects only canonical public identifiers",11,0,FALSE,FALSE,0,0.0350000000000001,0.00500000000000012,0.0409999999999986,11
+"test-disclosure-contract.R","disclosure-contract","partial collection publication is rejected at the domain boundary",1,0,FALSE,FALSE,0,0.00599999999999845,0.00099999999999989,0.00699999999999967,1
+"test-disclosure-contract.R","disclosure-contract","worker contexts never promote the Opal dataset id",8,0,FALSE,FALSE,0,0.0169999999999995,0.00499999999999989,0.0220000000000002,8
+"test-disclosure-contract.R","disclosure-contract","publish locks block dataset admission",2,0,FALSE,FALSE,0,0.0150000000000006,0.002,0.0180000000000007,2
+"test-disclosure-contract.R","disclosure-contract","capability metadata omits server paths and scheduler diagnostics",8,0,FALSE,FALSE,0,0.0229999999999997,0.00300000000000011,0.0259999999999998,8
+"test-disclosure-contract.R","disclosure-contract","model installation never reflects non-canonical identifiers",9,0,FALSE,FALSE,0,0.0129999999999999,0.00299999999999989,0.0169999999999995,9
+"test-disclosure.R","disclosure","public identifiers accept only bounded non-path tokens",10,0,FALSE,FALSE,0,0.016,0.00300000000000011,0.0199999999999996,10
+"test-disclosure.R","disclosure","dsImaging privacy profile is independent with a safe legacy fallback",2,0,FALSE,FALSE,0,0.00399999999999956,0.002,0.004999999999999,2
+"test-disclosure.R","disclosure","bucketed metadata never returns exact low counts",6,0,FALSE,FALSE,0,0.00900000000000034,0.002,0.0120000000000005,6
+"test-disclosure.R","disclosure","invalid nfilter options cannot weaken the privacy floor",8,0,FALSE,FALSE,0,0.0120000000000005,0.002,0.0150000000000006,8
+"test-disclosure.R","disclosure","trusted profiles never bypass the DataSHIELD minimum cell size",6,0,FALSE,FALSE,0,0.0109999999999992,0.002,0.0149999999999988,6
+"test-domain-workflows.R","domain-workflows","radiomics domain method composes a labelled dsHPC job",10,0,FALSE,FALSE,0,0.0419999999999998,0.006,0.0469999999999988,10
+"test-domain-workflows.R","domain-workflows","exact asset map hashes are ordered and cover immutable identity",5,0,FALSE,FALSE,0,0.016,0.00299999999999989,0.0180000000000007,5
+"test-domain-workflows.R","domain-workflows","changed source masks cannot reuse a direct radiomics asset",14,0,FALSE,FALSE,0,0.182,0.0190000000000001,0.242000000000001,14
+"test-domain-workflows.R","domain-workflows","derived alias promotion changes radiomics input identity",6,0,FALSE,FALSE,0,0.111000000000001,0.0170000000000001,0.169,6
+"test-domain-workflows.R","domain-workflows","workflow configs reject analyst paths and orchestration controls",7,0,FALSE,FALSE,0,0.0280000000000005,0,0.0289999999999999,7
+"test-domain-workflows.R","domain-workflows","new workflows expose only exact bounded contracts",11,0,FALSE,FALSE,0,0.027000000000001,0.002,0.0289999999999999,11
+"test-domain-workflows.R","domain-workflows","segmenter and profile specifications cannot select server paths",4,0,FALSE,FALSE,0,0.0150000000000006,0.00099999999999989,0.0150000000000006,4
+"test-domain-workflows.R","domain-workflows","generic workflows build publication fields server-side",10,0,FALSE,FALSE,0,0.032,0.006,0.0489999999999995,10
+"test-domain-workflows.R","domain-workflows","analytical workflow requests cannot select global visibility",7,0,FALSE,FALSE,0,0.0530000000000008,0.002,0.054000000000002,7
+"test-domain-workflows.R","domain-workflows","profile aggregate methods expose safe profile metadata",3,0,FALSE,FALSE,0,0.00699999999999967,0.00100000000000011,0.00900000000000034,3
+"test-domain-workflows.R","domain-workflows","domain submissions reject missing labels before dsHPC submit",1,0,FALSE,FALSE,0,0.004999999999999,0,0.004999999999999,1
+"test-domain-workflows.R","domain-workflows","domain submissions pass the owning session to dsHPC",4,0,FALSE,FALSE,0,0.043000000000001,0.00300000000000011,0.046999999999997,4
+"test-domain-workflows.R","domain-workflows","job workflows expose only coarse status and their exact shared asset",7,0,FALSE,FALSE,0,0.106,0.0109999999999999,0.119,7
+"test-domain-workflows.R","domain-workflows","a successful job without its exact published asset fails closed",3,0,FALSE,FALSE,0,0.0360000000000014,0.0069999999999999,0.0440000000000005,3
+"test-domain-workflows.R","domain-workflows","active workflows cannot be destroyed and terminal cleanup is exact",4,0,FALSE,FALSE,0,0.0129999999999999,0.002,0.0160000000000018,4
+"test-domain-workflows.R","domain-workflows","workflow destroy returns an idempotent transport tombstone",6,0,FALSE,FALSE,0,0.0400000000000009,0.002,0.0420000000000016,6
+"test-domain-workflows.R","domain-workflows","worker context cleanup removes only its exact registry entry",5,0,FALSE,FALSE,0,0.0289999999999999,0.00499999999999989,0.0339999999999989,5
+"test-dose-roi-admission.R","dose-roi-admission","RT config admits public segment and dose selections without ambiguity",27,0,FALSE,FALSE,0,0.106,0.006,0.111999999999998,27
+"test-dose-roi-admission.R","dose-roi-admission","labelled dose publication binds a fixed public cross-product",22,0,FALSE,FALSE,0,0.212999999999999,0.02,0.235999999999997,22
+"test-dose-roi-admission.R","dose-roi-admission","DSLite ASSIGN retains labelled dose missing rows and checks public provenance",13,0,FALSE,FALSE,0,0.592,0.02,0.620999999999999,13
+"test-dose-roi-aliases.R","dose-roi-aliases","dose ROI aliases cannot repeat a resolved mask and voxel value",13,0,FALSE,FALSE,0,0.159000000000001,0.02,0.183,13
+"test-expression-boundary.R","expression-boundary","every registered dsImaging method validates lazy arguments first",87,0,FALSE,FALSE,0,0.282,0.0290000000000001,0.317,87
+"test-expression-boundary.R","expression-boundary","DSLite nesting cannot invoke the dsImaging publisher ABI",2,0,FALSE,FALSE,0,0.402000000000001,0.0389999999999999,0.451999999999998,2
+"test-expression-boundary.R","expression-boundary","publisher ABI accepts only a dsImaging namespace caller",2,0,FALSE,FALSE,0,0.0259999999999998,0.0069999999999999,0.0339999999999989,2
+"test-expression-boundary.R","expression-boundary","registered dsImaging outer calls reject nested calls in DSLite",1,0,FALSE,FALSE,0,0.389000000000001,0.0349999999999999,0.434999999999999,1
+"test-feature-view.R","feature-view","opaque feature views retain the exact patient roster",10,0,FALSE,FALSE,0,0.116,0.014,0.138999999999999,10
+"test-feature-view.R","feature-view","encoded multi-column feature selections cross the expression boundary",2,0,FALSE,FALSE,0,0.117999999999999,0.01,0.134,2
+"test-feature-view.R","feature-view","feature views safely join an external same-session clinical table",16,0,FALSE,FALSE,0,0.0739999999999998,0.0129999999999999,0.088000000000001,16
+"test-feature-view.R","feature-view","external clinical linkage is total and keeps the imaging roster",37,0,FALSE,FALSE,0,0.283,0.032,0.322999999999997,37
+"test-feature-view.R","feature-view","external patient values never control the imaging privacy unit",5,0,FALSE,FALSE,0,0.101999999999999,0.012,0.117000000000001,5
+"test-feature-view.R","feature-view","external clinical linkage rejects unsafe or ambiguous schemas",9,0,FALSE,FALSE,0,0.118,0.012,0.132000000000001,9
+"test-feature-view.R","feature-view","external target levels are explicit public policy, never inferred",9,0,FALSE,FALSE,0,0.16,0.0149999999999999,0.178000000000001,9
+"test-feature-view.R","feature-view","clinical covariates are authorized by role, not private values",1,0,FALSE,FALSE,0,0.0380000000000003,0.00900000000000012,0.0489999999999995,1
+"test-feature-view.R","feature-view","external linkage rejects matrix-shaped clinical columns",3,0,FALSE,FALSE,0,0.0389999999999997,0.00800000000000001,0.0480000000000018,3
+"test-feature-view.R","feature-view","external clinical tables must be bound in the handle session",2,0,FALSE,FALSE,0,0.0300000000000011,0.0069999999999999,0.0380000000000003,2
+"test-feature-view.R","feature-view","encoded multi-column selections survive DSLite deparse and parse",3,0,FALSE,FALSE,0,0.378,0.0129999999999999,0.410999999999998,3
+"test-feature-view.R","feature-view","external clinical linkage survives the DSLite expression boundary",4,0,FALSE,FALSE,0,0.341000000000001,0.0109999999999999,0.356999999999999,4
+"test-feature-view.R","feature-view","feature views reject incomplete assets and cross-session copies",3,0,FALSE,FALSE,0,0.0779999999999994,0.0150000000000001,0.0950000000000024,3
+"test-feature-view.R","feature-view","destroying or rebinding authority invalidates a feature view",4,0,FALSE,FALSE,0,0.0739999999999998,0.0109999999999999,0.0850000000000009,4
+"test-feature-view.R","feature-view","naked feature export permanently taints its owner session",4,0,FALSE,FALSE,0,0.0570000000000004,0.00900000000000012,0.065999999999999,4
+"test-feature-view.R","feature-view","private session state is hidden, locked, and collectable",4,0,FALSE,FALSE,0,0.113,0.004,0.117000000000001,4
+"test-load-feature-asset.R","load-feature-asset","imagingLoadAssetDS loads radiomics collection feature tables",5,0,FALSE,FALSE,0,0.0850000000000009,0.0119999999999998,0.105,5
+"test-load-feature-asset.R","load-feature-asset","imagingLoadAssetDS can join dataset metadata",4,0,FALSE,FALSE,0,0.138,0.0169999999999999,0.155000000000001,4
+"test-load-feature-asset.R","load-feature-asset","imagingLoadAssetDS can repair non-syntactic radiomics names",1,0,FALSE,FALSE,0,0.0310000000000006,0.00699999999999967,0.0400000000000027,1
+"test-load-feature-asset.R","load-feature-asset","feature loading rejects arbitrary subsets and cross-dataset assets",2,0,FALSE,FALSE,0,0.0449999999999999,0.00800000000000001,0.054000000000002,2
+"test-load-feature-asset.R","load-feature-asset","feature asset roots resolve one confined non-symlinked table",3,0,FALSE,FALSE,0,0.0129999999999999,0.00200000000000022,0.0150000000000006,3
+"test-load-feature-asset.R","load-feature-asset","feature loading rejects duplicate rows even with the full roster",1,0,FALSE,FALSE,0,0.0269999999999992,0.00599999999999978,0.0339999999999989,1
+"test-load-feature-asset.R","load-feature-asset","inactive feature assets cannot be loaded by raw ID",1,0,FALSE,FALSE,0,0.0259999999999998,0.00600000000000023,0.032,1
+"test-load-feature-asset.R","load-feature-asset","private assets require a session grant even for the same OS user",4,0,FALSE,FALSE,0,0.0649999999999995,0.0089999999999999,0.0750000000000028,4
+"test-load-feature-asset.R","load-feature-asset","asset catalogs and loads are isolated by immutable collection seal",4,0,FALSE,FALSE,0,0.0619999999999994,0.00900000000000034,0.0720000000000027,4
+"test-load-feature-asset.R","load-feature-asset","feature schemas and catalog kinds cannot carry private strings",4,0,FALSE,FALSE,0,0.0560000000000009,0.0089999999999999,0.065999999999999,4
+"test-load-feature-asset.R","load-feature-asset","metadata loading exposes only the manifest-declared label",4,0,FALSE,FALSE,0,0.0790000000000006,0.00999999999999979,0.0899999999999999,4
+"test-load-feature-asset.R","load-feature-asset","the analyst catalog discovers only global assets",3,0,FALSE,FALSE,0,0.0280000000000005,0.00700000000000012,0.0359999999999978,3
+"test-manifest.R","manifest","parse_manifest validates required fields",1,0,FALSE,FALSE,0,0.00399999999999956,0.00100000000000033,0.004999999999999,1
+"test-manifest.R","manifest","parse_manifest rejects invalid schema version",1,0,FALSE,FALSE,0,0.00399999999999956,0.00099999999999989,0.004999999999999,1
+"test-manifest.R","manifest","parse_manifest rejects invalid dataset_id",1,0,FALSE,FALSE,0,0.00300000000000011,0.00099999999999989,0.00400000000000134,1
+"test-manifest.R","manifest","parse_manifest rejects non-absolute metadata path",1,0,FALSE,FALSE,0,0.00399999999999956,0.00099999999999989,0.00400000000000134,1
+"test-manifest.R","manifest","parse_manifest rejects path traversal",1,0,FALSE,FALSE,0,0.00399999999999956,0.00100000000000033,0.004999999999999,1
+"test-manifest.R","manifest","parse_manifest accepts valid manifest",2,0,FALSE,FALSE,0,0.00399999999999956,0.00099999999999989,0.004999999999999,2
+"test-manifest.R","manifest","validate_asset rejects missing uri",1,0,FALSE,FALSE,0,0.00399999999999956,0.00099999999999989,0.00400000000000134,1
+"test-manifest.R","manifest","validate_asset rejects unknown asset kind",1,0,FALSE,FALSE,0,0.00399999999999956,0,0.00400000000000134,1
+"test-manifest.R","manifest","validate_asset accepts supported imaging asset kinds",16,0,FALSE,FALSE,0,0.0109999999999992,0.00100000000000033,0.0109999999999992,16
+"test-manifest.R","manifest","parse_manifest accepts advanced asset kinds",3,0,FALSE,FALSE,0,0.00500000000000078,0.00099999999999989,0.00700000000000145,3
+"test-python-admission.R","python-admission","synthetic DICOM groups verify every admitted byte and exact file set",4,0,FALSE,FALSE,0,0.0120000000000005,0.0289999999999999,1.352,4
+"test-python-admission.R","python-admission","versioned S3 series verify each slice and the exact paginated listing",5,0,FALSE,FALSE,0,0.100999999999999,0.0430000000000001,1.14,5
+"test-python-admission.R","python-admission","synthetic series convert only with exact patient and geometry association",3,0,FALSE,FALSE,0,0.0110000000000028,0.0220000000000002,1.78,3
+"test-python-admission.R","python-admission","pydicom RTSTRUCT fixtures produce one exact mask for each sample",3,0,FALSE,FALSE,0,0.0210000000000008,0.024,6.619,3
+"test-python-admission.R","python-admission","pydicom dose and plan fixtures produce complete per-ROI tables",4,0,FALSE,FALSE,0,0.0219999999999985,0.0270000000000001,5.492,4
+"test-python-admission.R","python-admission","synthetic Pillow slides retain private exact tile fan-out",5,0,FALSE,FALSE,0,0.0139999999999993,0.0269999999999997,1.555,5
+"test-python-admission.R","python-admission","MONAI fake provider refuses missing extra or misplaced sample outputs",3,0,FALSE,FALSE,0,0.0150000000000006,0.0250000000000004,3.417,3
+"test-python-admission.R","python-admission","DataSHIELD routes execute and publish the same sealed synthetic inputs",31,0,FALSE,FALSE,0,0.306000000000001,0.163,3.701,31
+"test-python-dose-labels.R","python-dose-labels","labelled dose rows use only the complete public ROI vocabulary",7,0,FALSE,FALSE,0,0.0199999999999996,0.0270000000000001,4.044,7
+"test-python-dose-labels.R","python-dose-labels","sets of independently mapped masks retain exact dose association",5,0,FALSE,FALSE,0,0.111999999999998,0.0449999999999999,3.878,5
+"test-python-dose-labels.R","python-dose-labels","labelled dose refuses ambiguous schemas associations and mask geometry",3,0,FALSE,FALSE,0,0.0339999999999989,0.028,16.031,3
+"test-python-qc-cap.R","python-qc-cap","QC caps thumbnails while retaining and validating the complete roster",24,0,FALSE,FALSE,0,0.0420000000000016,0.085,1.882,24
+"test-python-seg.R","python-seg","binary SEG selects exact segments and refuses ambiguous references or geometry",7,0,FALSE,FALSE,0,0.0620000000000012,0.0329999999999999,29.644,7
+"test-python-seg.R","python-seg","SEG verifies every mapped byte and the exact patient roster",4,0,FALSE,FALSE,0,0.0960000000000001,0.0379999999999998,3.333,4
+"test-python-worker-context.R","python-worker-context","runner format gates admit TIFF and reject detached containers",13,0,FALSE,FALSE,0,0.0139999999999993,0.0150000000000001,0.063999999999993,13
+"test-python-worker-context.R","python-worker-context","Python runners ignore global registries and arbitrary asset paths",7,0,FALSE,FALSE,0,0.0150000000000006,0.0339999999999998,0.191999999999993,7
+"test-python-worker-context.R","python-worker-context","Python runners consume only the exact snapshot sample map",7,0,FALSE,FALSE,0,0.0139999999999993,0.036,0.221000000000004,7
+"test-python-worker-context.R","python-worker-context","worker contexts map source masks by the exact admitted roster",9,0,FALSE,FALSE,0,0.0380000000000003,0.0410000000000004,0.253,9
+"test-python-worker-context.R","python-worker-context","worker contexts resolve catalog mask aliases from output manifests",5,0,FALSE,FALSE,0,0.0360000000000014,0.0339999999999998,0.161000000000001,5
+"test-python-worker-context.R","python-worker-context","versioned S3 source maps use isolated cache entries",4,0,FALSE,FALSE,0,0.00799999999999912,0.0180000000000002,0.11399999999999,4
+"test-python-worker-context.R","python-worker-context","PyRadiomics consumes exact source image and mask maps",7,0,FALSE,FALSE,0,0.0160000000000018,0.0349999999999997,1.524,7
+"test-python-worker-context.R","python-worker-context","Python artifact maps reject subsets and cross-sample reuse",5,0,FALSE,FALSE,0,0.0129999999999981,0.0339999999999998,0.208999999999989,5
+"test-python-worker-context.R","python-worker-context","Python operational names and logs do not expose private ids",11,0,FALSE,FALSE,0,0.0169999999999995,0.0300000000000002,0.536000000000001,11
+"test-registry.R","registry",".load_registry errors when registry file not found",1,0,FALSE,FALSE,0,0.00300000000000011,0.00099999999999989,0.00400000000000489,1
+"test-registry.R","registry","resolve_dataset errors for missing dataset",1,0,FALSE,FALSE,0,0.00700000000000145,0.00300000000000011,0.00799999999999557,1
+"test-registry.R","registry","resolve_dataset errors for disabled dataset",1,0,FALSE,FALSE,0,0.00299999999999656,0.00099999999999989,0.00400000000000489,1
+"test-registry.R","registry","list_datasets returns only enabled entries",2,0,FALSE,FALSE,0,0.00300000000000011,0.00099999999999989,0.00399999999999068,2
+"test-registry.R","registry","admin dataset listing reads manifest_uri registry entries",4,0,FALSE,FALSE,0,0.00600000000000023,0.00199999999999978,0.007000000000005,4
+"test-registry.R","registry","resolve_dataset exposes an explicit NULL manifest element",3,0,FALSE,FALSE,0,0.00400000000000134,0.00200000000000022,0.00600000000000023,3
+"test-resource-client.R","resource-client","resource clients and imaging handles retain their storage context",13,0,FALSE,FALSE,0,0.0289999999999999,0.0110000000000001,0.0400000000000063,13
+"test-resource-client.R","resource-client","Armadillo format locators use only the server registry",17,0,FALSE,FALSE,0,0.0210000000000008,0.00999999999999979,0.0300000000000011,17
+"test-resource-client.R","resource-client","imaging Resource locators reject malformed and conflicting forms",20,0,FALSE,FALSE,0,0.0440000000000005,0.00300000000000011,0.046999999999997,20
+"test-resource-client.R","resource-client","S3 resource clients retain the Resource without copying credentials",7,0,FALSE,FALSE,0,0.00799999999999912,0.00300000000000011,0.0099999999999909,7
+"test-resource-client.R","resource-client","imagingInitDS rejects forged lists and in-session descriptors",2,0,FALSE,FALSE,0,0.004999999999999,0.00099999999999989,0.00499999999999545,2
+"test-resource-client.R","resource-client","resource URL location fields are validated before backend access",4,0,FALSE,FALSE,0,0.0109999999999992,0.00099999999999989,0.0109999999999957,4
+"test-resource-client.R","resource-client","resource manifest must match the URL dataset exactly",1,0,FALSE,FALSE,0,0.00400000000000134,0.00099999999999989,0.00499999999999545,1
+"test-resource-client.R","resource-client","S3 resource manifests cannot reference another collection prefix",7,0,FALSE,FALSE,0,0.0229999999999997,0.00200000000000022,0.0240000000000009,7
+"test-resource-client.R","resource-client","local resource manifests are confined to their collection root",2,0,FALSE,FALSE,0,0.0069999999999979,0.00199999999999978,0.00799999999999557,2
+"test-rt-admission2.R","rt-admission2","SEG and labelled-dose DataSHIELD requests execute from sealed maps",56,0,FALSE,FALSE,0,0.562999999999999,0.288,5.223,56
+"test-s3-diagnostics.R","s3-diagnostics","S3 wrappers discard backend diagnostics and preserve results",8,0,FALSE,FALSE,0,0.00600000000000023,0.00200000000000022,0.00699999999999079,8
+"test-s3-diagnostics.R","s3-diagnostics","missing S3 HEAD checks do not print object diagnostics",3,0,FALSE,FALSE,0,0.00199999999999889,0.00099999999999989,0.00400000000000489,3
+"test-s3-diagnostics.R","s3-diagnostics","asset metadata joins hide storage and path diagnostics",3,0,FALSE,FALSE,0,0.00300000000000011,0.00199999999999978,0.00499999999999545,3
+"test-s3-minio.R","s3-minio","S3 backend works against a MinIO-compatible endpoint",1,0,TRUE,FALSE,0,0.00100000000000122,0.00100000000000033,0.00100000000000477,0
+"test-shared-tracking.R","shared-tracking","validated global assets are published as opaque tracking references",5,0,FALSE,FALSE,0,0.0279999999999987,0.00599999999999978,0.0369999999999919,5
+"test-shared-tracking.R","shared-tracking","second and third asset reuse do not republish a sealed root",5,0,FALSE,FALSE,0,0.00400000000000134,0.00100000000000033,0.00499999999999545,5
+"test-shared-tracking.R","shared-tracking","sealed scoped roots retain local asset reuse",1,0,FALSE,FALSE,0,0.00100000000000122,0.00099999999999989,0.00199999999999534,1
+"test-shared-tracking.R","shared-tracking","direct publisher defers root sealing until the primary is terminal",2,0,FALSE,FALSE,0,0.00300000000000011,0.00099999999999989,0.00300000000000011,2
+"test-shared-tracking.R","shared-tracking","opaque dsHPC references resolve only to active dsImaging assets",2,0,FALSE,FALSE,0,0.0279999999999987,0.00499999999999989,0.0349999999999966,2
+"test-shared-tracking.R","shared-tracking","direct workflows submit one idempotent primary under a logical root",7,0,FALSE,FALSE,0,0.00799999999999912,0.00200000000000022,0.0109999999999957,7
+"test-shared-tracking.R","shared-tracking","shared imaging reuse changes with the installed runtime contract",2,0,FALSE,FALSE,0,0.00300000000000011,0.00099999999999989,0.00400000000000489,2
+"test-shared-tracking.R","shared-tracking","a new session recovers a collection only through its admitted handle",6,0,FALSE,FALSE,0,0.0410000000000004,0.00800000000000001,0.0510000000000019,6
+"test-validation.R","validation",".validate_safe_path rejects empty paths",2,0,FALSE,FALSE,0,0.00400000000000134,0.00099999999999989,0.00499999999999545,2
+"test-validation.R","validation",".validate_safe_path rejects relative paths",1,0,FALSE,FALSE,0,0.00500000000000256,0,0.00600000000000023,1
+"test-validation.R","validation",".validate_safe_path rejects traversal",1,0,FALSE,FALSE,0,0.00300000000000011,0,0.00300000000000011,1
+"test-validation.R","validation",".validate_safe_path accepts valid absolute paths",1,0,FALSE,FALSE,0,0.00100000000000122,0,0.000999999999990564,1
+"test-validation.R","validation","validate_imaging_dataset returns structured results",3,0,FALSE,FALSE,0,0.00199999999999889,0,0.00400000000000489,3
+"test-validation.R","validation","validate_imaging_dataset passes for structurally valid manifest",2,0,FALSE,FALSE,0,0.00899999999999679,0.00099999999999989,0.0099999999999909,2
+"test-validation.R","validation","validate_imaging_dataset validates S3 assets through backend",5,0,FALSE,FALSE,0,0.0140000000000029,0.00200000000000022,0.0160000000000053,5

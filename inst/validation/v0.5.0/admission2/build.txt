@@ -1,0 +1,6 @@
+* checking for file ‘checkout/DESCRIPTION’ ... OK
+* preparing ‘dsImaging’:
+* checking DESCRIPTION meta-information ... OK
+* checking for LF line-endings in source and make files and shell scripts
+* checking for empty or unneeded directories
+* building ‘dsImaging_0.5.0.tar.gz’

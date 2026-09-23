@@ -1,0 +1,19 @@
+R version 4.5.2 (2025-10-31)
+ sysname  release  machine
+"Darwin" "24.4.0"  "arm64"
+testthat 3.3.2
+DSI 1.8.0
+DSLite 1.4.1
+dsHPC 0.3.0
+dsHPCClient 0.4.0
+arrow 22.0.0
+roxygen2 7.3.3
+3.11.14 (main, Oct  9 2025, 16:16:55) [Clang 17.0.0 (clang-1700.4.4.1)]
+numpy 1.26.4
+pydicom 3.0.1
+SimpleITK 2.5.3
+nibabel 5.4.2
+rt-utils 1.2.7
+PyRadiomics 3.0.1
+Pillow 12.0.0
+PyYAML 6.0.3

@@ -88,3 +88,17 @@ The historical `aerts_signature_v1.yaml` is unchanged from `v0.4.0`
 (SHA-256 `1cc5d18d45b885e96641e8dd202d54a80aed7416c7f97d06b44d7d4f051ed623`).
 No historical demonstration artifacts were changed, no tag was created and
 no push was performed.
+
+## Second admission receipt: SEG and labelled dose ROIs
+
+Task `DSIMAGING_RAISE2_2026-09-23`, recorded 2026-09-23. The new
+[admission2 receipt](admission2/README.md) preserves the initial results above
+and records source `743673eec3254cc152312bf96db08e9843fc41f2` on the same branch at version 0.5.0.
+Its complete clean-checkout suite passed 1465 expectations in 275 cases,
+with 0 failures, 0 errors, 0 warnings and 1 optional live-MinIO skip.
+The clean-checkout package check reports **Status: OK**, with 0 errors,
+0 warnings and 0 notes; installed-package tests reproduce the pass/skip counts.
+The new receipt supersedes the earlier SEG and arbitrary multi-label dose
+limitations only for the exact binary-SEG and declared-public-ROI contracts.
+Earlier evidence files are unchanged; `admission2/` contains the new logs,
+per-case results, environment, commands and source-commit records.
