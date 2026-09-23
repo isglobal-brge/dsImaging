@@ -193,7 +193,7 @@
   image_kind <- image_asset$kind %||% image_asset$type %||% NULL
   if (!is.list(image_asset) || !.snapshot_scalar(image_root) ||
       !image_kind %in% c("image_root", "dicom_series_root", "wsi_root",
-                         "rt_struct_root", "rt_dose_file", "rt_plan_file",
+                         "rt_struct_root", "rt_seg_root", "rt_dose_file", "rt_plan_file",
                          "mask_root")) {
     .snapshot_fail()
   }

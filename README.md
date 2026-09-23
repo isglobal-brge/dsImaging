@@ -25,7 +25,7 @@ external/HPC backend configured in `dsHPC`.
 - Image preprocessing runners for resampling, normalization, clamping/windowing,
   and float32 casting.
 - Exact single-file and complete multi-slice DICOM-to-NIfTI conversion.
-- RTSTRUCT-to-mask conversion and per-ROI RTDOSE/RTPLAN tables.
+- RTSTRUCT/binary DICOM SEG conversion and labelled per-ROI RTDOSE/RTPLAN tables.
 - Whole-slide tiling with private per-slide manifests and bounded tile output.
 - Spatial runners for resampling, registration, cropping, and N4 bias
   correction.
@@ -97,13 +97,28 @@ slice matching the exact file count. Missing counts, gaps, duplicate instances,
 mixed series and unsupported geometry are refused. Convert DICOM to a mapped
 NIfTI asset before generic image segmentation/radiomics. RTSTRUCT conversion
 checks its reference series and SOP instances and unions selected ROIs into one
-binary mask per sample. Dose analysis checks the dose-to-plan association and
-optional masks in physical coordinates; `whole_grid` and optional `mask` rows
-remain individual-level data.
+binary mask per sample. Binary DICOM SEG additionally verifies patient, study,
+frame, complete referenced series and each frame's source slice and grid.
+Select segment labels with `rois` or numbers with `segment_numbers`: one
+selection creates a segment mask asset; multiple selections create a union.
+Use separate requests to publish separate segment masks. Fractional/LABELMAP
+SEG and regridded or ambiguous SEG remain refused.
+
+Dose analysis checks dose-to-plan association and mask geometry. Declare public
+`roi_labels = c("tumour", "organ_at_risk")` with `mask_labels = c(1, 2)` for one
+`mask_asset`, or supply aligned `mask_assets` for a set of mapped masks (binary
+masks typically use `mask_labels = c(1, 1)`). The complete private table has one
+`(sample_id, roi_label)` row per declared region with `dose_min`, `dose_max`,
+`dose_mean`, population `dose_std`, `dose_voxels` and plan counts. Absent labels
+retain rows with missing dose measurements and zero voxels. Undeclared labels
+are ignored. The public vocabulary is bound to private request provenance and
+validated again by authorized server-side ASSIGN, under the same controls as
+radiomics. No raw table is returned by an aggregate method. Without a declared
+ROI schema the existing `roi`/`whole_grid`/positive-union `mask` table is retained.
 
 WSI accepts self-contained SVS/NDPI/TIFF or raster slides. `max_tiles` is a
 per-slide bound (default 2048); slides yielding zero accepted tiles still have
-a private manifest. Sidecar slide formats and DICOM SEG remain refused.
+a private manifest. Sidecar slide formats remain refused.
 MONAI bundles must be locally installed by the administrator, bind `image` and
 `output_dir` in their inference configuration, and produce exactly one mask
 matching each input geometry. Arbitrary Model Zoo bundles may need a site-owned

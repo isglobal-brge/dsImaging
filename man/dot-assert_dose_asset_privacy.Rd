@@ -4,7 +4,7 @@
 \alias{.assert_dose_asset_privacy}
 \title{Validate the bounded long-form dose table without changing other tables.}
 \usage{
-.assert_dose_asset_privacy(df, authorized)
+.assert_dose_asset_privacy(df, authorized, config = list())
 }
 \description{
 Validate the bounded long-form dose table without changing other tables.

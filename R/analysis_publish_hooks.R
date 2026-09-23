@@ -171,10 +171,10 @@
     stop("Feature publication output is unavailable.", call. = FALSE)
   }
   if (identical(asset_type, "dose_table")) {
-    .assert_dose_asset_privacy(feature_data, authorized)
+    .assert_dose_asset_privacy(feature_data, authorized, config)
     has_masks <- any(feature_data$roi == "mask")
-    if (!identical(has_masks, !is.null(config$mask_asset) &&
-        nzchar(config$mask_asset))) {
+    if (is.null(config$roi_labels) &&
+        !identical(has_masks, !is.null(config$mask_asset) && nzchar(config$mask_asset))) {
       stop("Imaging dose asset ROI mapping is unavailable.", call. = FALSE)
     }
   } else {

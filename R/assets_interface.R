@@ -163,8 +163,14 @@ imagingLoadAssetDS <- function(handle_symbol, asset_id_or_alias, columns = NULL,
     .read_feature_asset(asset, dataset_id, resolved = authorized),
     error = function(e) stop("Imaging feature asset is unavailable.",
                              call. = FALSE))
+  dose_config <- list()
   if (identical(asset$kind, "dose_table")) {
-    .assert_dose_asset_privacy(df, authorized)
+    provenance <- tryCatch(jsonlite::fromJSON(asset$provenance_json,
+      simplifyVector = FALSE), error = function(e) NULL)
+    if (is.list(provenance) && identical(provenance$runner, "rt_dose_plan")) {
+      dose_config <- provenance$config %||% list()
+    }
+    .assert_dose_asset_privacy(df, authorized, dose_config)
   } else {
     .assert_feature_asset_privacy(df, authorized,
       context = "imaging feature asset")
@@ -172,7 +178,7 @@ imagingLoadAssetDS <- function(handle_symbol, asset_id_or_alias, columns = NULL,
   if (isTRUE(include_metadata)) {
     df <- tryCatch(
       .join_feature_asset_metadata(df, dataset_id, resolved = authorized,
-        dose_table = identical(asset$kind, "dose_table")),
+        dose_table = identical(asset$kind, "dose_table"), dose_config = dose_config),
       error = function(e) stop("Imaging dataset metadata is unavailable.",
                                call. = FALSE))
   }
@@ -365,14 +371,14 @@ promote_asset_alias <- function(dataset_id, alias, asset_id) {
     # The fixed dose schema starts with canonical sample and ROI identifiers.
     # Do not let CSV type inference rewrite numeric-looking sample IDs.
     return(utils::read.csv(path, stringsAsFactors = FALSE, check.names = FALSE,
-      colClasses = c("character", "character", rep("numeric", 8L))))
+      na.strings = "", colClasses = c("character", "character", rep("numeric", 8L))))
   }
   .read_table_file(path)
 }
 
 #' @keywords internal
 .join_feature_asset_metadata <- function(df, dataset_id, resolved = NULL,
-                                         dose_table = FALSE) {
+                                         dose_table = FALSE, dose_config = list()) {
   meta <- .read_dataset_metadata(dataset_id, resolved = resolved)
   if (is.null(meta)) {
     stop("Dataset metadata could not be resolved for dataset '", dataset_id,
@@ -412,7 +418,7 @@ promote_asset_alias <- function(dataset_id, alias, asset_id) {
 
   feature_ids <- .canonical_imaging_privacy_ids(df[[id_col]])
   if (isTRUE(dose_table)) {
-    .assert_dose_asset_privacy(df, resolved)
+    .assert_dose_asset_privacy(df, resolved, dose_config)
   } else {
     .assert_exact_imaging_roster(feature_ids, resolved$privacy_roster,
       context = "Imaging feature asset")
@@ -533,35 +539,53 @@ promote_asset_alias <- function(dataset_id, alias, asset_id) {
 
 #' Validate the bounded long-form dose table without changing other tables.
 #' @keywords internal
-.assert_dose_asset_privacy <- function(df, authorized) {
+.assert_dose_asset_privacy <- function(df, authorized, config = list()) {
   id_col <- authorized$privacy$id_col
+  schema <- tryCatch(.imaging_dose_roi_schema(config), error = function(e) {
+    stop("Imaging dose asset schema is unavailable.", call. = FALSE)
+  })
+  labelled <- !is.null(schema)
+  roi_col <- if (labelled) "roi_label" else "roi"
+  labels <- if (labelled) schema$labels else c("whole_grid", "mask")
   numeric_fields <- c("dose_min", "dose_max", "dose_mean", "dose_std",
     "dose_voxels", "n_beams", "n_fraction_groups", "n_fractions")
-  expected <- c(id_col, "roi", numeric_fields)
+  expected <- c(id_col, roi_col, numeric_fields)
   if (!is.data.frame(df) || !identical(names(df), expected) ||
-      !is.character(df[[id_col]]) || !is.character(df$roi) ||
-      anyNA(df[[id_col]]) || anyNA(df$roi) ||
+      !is.character(df[[id_col]]) || !is.character(df[[roi_col]]) ||
+      anyNA(df[[id_col]]) || anyNA(df[[roi_col]]) ||
       !identical(df[[id_col]], .canonical_imaging_privacy_ids(df[[id_col]])) ||
-      any(!df$roi %in% c("whole_grid", "mask")) ||
-      anyDuplicated(df[c(id_col, "roi")]) ||
-      !all(vapply(df[numeric_fields], function(x) {
-        is.numeric(x) && all(is.finite(x)) && all(x >= 0)
-      }, logical(1)))) {
+      any(!df[[roi_col]] %in% labels) ||
+      anyDuplicated(df[c(id_col, roi_col)]) ||
+      !all(vapply(df[numeric_fields], is.numeric, logical(1)))) {
     stop("Imaging dose asset schema is unavailable.", call. = FALSE)
   }
   counts <- c("dose_voxels", "n_beams", "n_fraction_groups", "n_fractions")
-  if (any(df$dose_voxels < 1) ||
-      any(df$dose_min > df$dose_mean) ||
-      any(df$dose_mean > df$dose_max) ||
-      any(vapply(df[counts], function(x) any(x %% 1 != 0), logical(1)))) {
+  measurements <- c("dose_min", "dose_max", "dose_mean", "dose_std")
+  if (!all(vapply(df[counts], function(x) {
+        all(is.finite(x) & x >= 0 & x %% 1 == 0)
+      }, logical(1)))) {
     stop("Imaging dose asset values are unavailable.", call. = FALSE)
   }
-  whole <- df[df$roi == "whole_grid", , drop = FALSE]
-  .assert_feature_asset_privacy(whole, authorized,
+  missing <- labelled & df$dose_voxels == 0
+  if (!all(vapply(df[measurements], function(x) {
+        all(is.na(x[missing]) & !is.nan(x[missing])) &&
+          all(is.finite(x[!missing]) & x[!missing] >= 0)
+      }, logical(1)))) {
+    stop("Imaging dose asset schema is unavailable.", call. = FALSE)
+  }
+  present <- df[!missing, , drop = FALSE]
+  if (any(present$dose_voxels < 1) ||
+      any(present$dose_min > present$dose_mean) ||
+      any(present$dose_mean > present$dose_max)) {
+    stop("Imaging dose asset values are unavailable.", call. = FALSE)
+  }
+  first_label <- if (labelled) labels[[1L]] else "whole_grid"
+  .assert_feature_asset_privacy(df[df[[roi_col]] == first_label, , drop = FALSE], authorized,
     context = "imaging dose asset")
-  if (any(df$roi == "mask")) {
-    .assert_exact_imaging_roster(df[[id_col]][df$roi == "mask"],
-      authorized$privacy_roster, context = "Imaging dose mask rows")
+  groups <- if (labelled) labels else unique(df$roi)
+  for (label in groups) {
+    .assert_exact_imaging_roster(df[[id_col]][df[[roi_col]] == label],
+      authorized$privacy_roster, context = "Imaging dose ROI rows")
   }
   invisible(TRUE)
 }

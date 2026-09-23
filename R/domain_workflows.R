@@ -1181,6 +1181,51 @@ imagingListProfilesDS <- function() {
   paste(unique(values), collapse = ",")
 }
 
+#' Read a bounded ROI option without dropping empty or repeated values
+#' @keywords internal
+.imaging_roi_values <- function(x, name) {
+  values <- unlist(x, use.names = FALSE)
+  if (length(values) == 1L && is.character(values)) {
+    if (grepl(",$", values)) stop(name, " contains an empty value.", call. = FALSE)
+    values <- strsplit(values, ",", fixed = TRUE)[[1L]]
+  }
+  values <- trimws(as.character(values))
+  if (!length(values) || length(values) > 128L || anyNA(values) ||
+      any(!nzchar(values)) || any(grepl("[,\r\n]", values))) {
+    stop(name, " has invalid values.", call. = FALSE)
+  }
+  values
+}
+
+#' Validate the analyst-declared public dose ROI schema
+#' @keywords internal
+.imaging_dose_roi_schema <- function(config) {
+  fields <- c("roi_labels", "mask_labels", "mask_assets")
+  if (!any(fields %in% names(config))) return(NULL)
+  mask_asset <- config[["mask_asset"]]
+  if (is.null(config$roi_labels) || is.null(config$mask_labels) ||
+      (is.null(mask_asset) == is.null(config$mask_assets))) {
+    stop("Dose ROIs require roi_labels, mask_labels and exactly one mask source option.",
+         call. = FALSE)
+  }
+  labels <- .imaging_roi_values(config$roi_labels, "roi_labels")
+  values <- suppressWarnings(as.numeric(
+    .imaging_roi_values(config$mask_labels, "mask_labels")))
+  assets <- if (!is.null(mask_asset)) {
+    rep(.imaging_safe_name(mask_asset, "mask_asset"), length(labels))
+  } else .imaging_roi_values(config$mask_assets, "mask_assets")
+  assets <- unname(vapply(assets, .imaging_safe_name, character(1), name = "mask_assets"))
+  if (anyDuplicated(labels) ||
+      any(!grepl("^[A-Za-z][A-Za-z0-9_.-]{0,63}$", labels)) ||
+      length(values) != length(labels) || length(assets) != length(labels) ||
+      anyNA(values) || any(!is.finite(values)) ||
+      any(values < 1 | values > 2147483647 | values %% 1 != 0) ||
+      anyDuplicated(paste(assets, values, sep = ":"))) {
+    stop("Dose ROI schema is invalid or ambiguous.", call. = FALSE)
+  }
+  list(labels = labels, values = as.integer(values), assets = assets)
+}
+
 #' Validate and canonicalise an analyst-selected segmentation specification
 #' @keywords internal
 .imaging_segmenter_spec <- function(segmenter) {
@@ -1294,10 +1339,11 @@ imagingListProfilesDS <- function() {
 #' @keywords internal
 .imaging_runner_contract <- function(runner) {
   contracts <- list(
-    rt_convert = list(fields = c("rt_asset", "dicom_asset", "rois"),
+    rt_convert = list(fields = c("rt_asset", "dicom_asset", "rois", "segment_numbers"),
       assets = c("rt_asset", "dicom_asset"), asset_type = "mask_root",
       tag = "rt_convert"),
-    rt_dose_plan = list(fields = c("dose_asset", "plan_asset", "mask_asset"),
+    rt_dose_plan = list(fields = c("dose_asset", "plan_asset", "mask_asset",
+      "mask_assets", "roi_labels", "mask_labels"),
       assets = c("dose_asset", "plan_asset", "mask_asset"),
       asset_type = "dose_table", tag = "rt_dose_plan"),
     wsi_tile = list(fields = c("wsi_asset", "tile_size", "stride", "max_tiles",
@@ -1363,7 +1409,31 @@ imagingListProfilesDS <- function() {
     out$converter <- match.arg(as.character(out$converter), "simpleitk")
   }
   if (identical(runner, "rt_convert") && !is.null(out$rois)) {
+    if (!is.null(out$segment_numbers)) {
+      stop("rois and segment_numbers are mutually exclusive.", call. = FALSE)
+    }
+    if (anyDuplicated(.imaging_roi_values(out$rois, "rois"))) {
+      stop("rois must be unique.", call. = FALSE)
+    }
     out$rois <- .imaging_csv_values(out$rois, "rois")
+  }
+  if (identical(runner, "rt_convert") && !is.null(out$segment_numbers)) {
+    values <- .imaging_roi_values(out$segment_numbers, "segment_numbers")
+    if (anyDuplicated(suppressWarnings(as.numeric(values)))) {
+      stop("segment_numbers must be unique.", call. = FALSE)
+    }
+    out$segment_numbers <- .imaging_csv_values(values, "segment_numbers",
+      numeric = TRUE, integer = TRUE, min = 1, max = 65535, max_items = 128L)
+  }
+  if (identical(runner, "rt_dose_plan")) {
+    schema <- .imaging_dose_roi_schema(out)
+    if (!is.null(schema)) {
+      out$roi_labels <- paste(schema$labels, collapse = ",")
+      out$mask_labels <- paste(schema$values, collapse = ",")
+      if (!is.null(out$mask_assets)) {
+        out$mask_assets <- paste(schema$assets, collapse = ",")
+      }
+    }
   }
   if (identical(runner, "wsi_tile")) {
     out$write_tiles <- .imaging_scalar_logical(out$write_tiles, "write_tiles")
@@ -1605,6 +1675,10 @@ imagingListProfilesDS <- function() {
   input_assets <- unlist(config[intersect(contract$assets, names(config))],
                          use.names = FALSE)
   input_assets <- unique(as.character(input_assets))
+  if (identical(runner, "rt_dose_plan") && !is.null(config$mask_assets)) {
+    input_assets <- unique(c(input_assets,
+      .imaging_roi_values(config$mask_assets, "mask_assets")))
+  }
   collection_seal <- .imaging_authorized_collection_seal(context$authorized)
   worker_manifest <- .imaging_worker_manifest(
     context$authorized, asset_names = input_assets)
@@ -1613,6 +1687,23 @@ imagingListProfilesDS <- function() {
   input_identities <- stats::setNames(lapply(input_assets, function(asset) {
     .imaging_worker_asset_identity(collection_map, worker_manifest, asset)
   }), input_assets)
+  if (identical(runner, "rt_dose_plan")) {
+    schema <- .imaging_dose_roi_schema(config)
+    if (!is.null(schema)) {
+      resolved_masks <- vapply(schema$assets, function(asset) {
+        records <- collection_map$records_by_asset[[asset]]
+        if (is.null(records)) return(input_identities[[asset]])
+        # Source map identities include the public asset name. Use one fixed
+        # name to compare resolved files while retaining their URIs and hashes.
+        .imaging_worker_asset_map_hash(
+          list(records_by_asset = list(mask = records)), "mask")
+      }, character(1))
+      if (anyDuplicated(paste(resolved_masks, schema$values, sep = ":"))) {
+        stop("Dose ROI schema resolves to an ambiguous mask and label pair.",
+             call. = FALSE)
+      }
+    }
+  }
   derivation_hash <- compute_derivation_hash(
     dataset_id = dataset_id,
     collection_seal = collection_seal,
@@ -1679,6 +1770,9 @@ imagingListProfilesDS <- function() {
     if (field %in% fields && is.character(value) && length(value) == 1L &&
         !is.na(value) && nzchar(value)) {
       out <<- c(out, value)
+    }
+    if (identical(field, "mask_assets")) {
+      out <<- c(out, .imaging_roi_values(value, "mask_assets"))
     }
     invisible(NULL)
   }

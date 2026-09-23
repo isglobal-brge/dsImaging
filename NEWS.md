@@ -1,5 +1,13 @@
 # dsImaging 0.5.0
 
+* Admit binary DICOM SEG voxels through `rt_convert` with exact mapped reference
+  series, patient/study/frame/SOP and per-frame grid checks. Select segment
+  labels or numbers for individual masks or unions, retaining one mask/sample.
+* Admit labelled dose ROIs from one mapped mask or a set of masks. The analyst
+  declares public ROI names and integer values; absent labels retain missing
+  measurement rows with zero voxels. Publication and authorized ASSIGN bind
+  the full sample/ROI table to that schema and the sealed patient roster.
+  Individual dose values and mask bytes remain server-side.
 * Admit complete multi-slice DICOM, RTSTRUCT, RTDOSE/RTPLAN, whole-slide tiling
   and conforming administrator-installed MONAI bundles through the DataSHIELD
   surface. Secondary source maps and every series file are bound to the sealed

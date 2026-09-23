@@ -3,7 +3,7 @@
 .RADIOMICS_PYTHON_DEPS <- list(
   radiomics = c("pyradiomics>=3.0.1,<3.1", "SimpleITK>=2.0.0", "pandas>=1.3.0",
                 "numpy>=1.23.0,<2", "pyyaml>=5.0", "pyarrow>=10.0.0",
-                "pydicom>=2.4.0", "rt-utils>=1.2.0",
+                "pydicom>=2.4.0", "rt-utils>=1.2.0", "nibabel>=4.0.0",
                 "highdicom>=0.23.0", "Pillow>=9.0.0",
                 "openslide-python>=1.4.0", "openslide-bin>=4.0.0",
                 "boto3>=1.28.0", "botocore>=1.31.0"),

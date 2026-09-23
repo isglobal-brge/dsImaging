@@ -393,7 +393,7 @@
     allowed_params = c("dataset_id", "worker_context", "rt_asset", "rt_struct_asset",
                         "rt_root", "rt_file", "dicom_asset", "dicom_root",
                         "reference_asset", "reference_image", "image_asset",
-                        "rois")
+                        "rois", "segment_numbers")
   ), "rt_convert", list(
     "-m", "dsimaging_rt_convert",
     "--input", "{input_dir}",
@@ -422,7 +422,8 @@
     env = rosetta_mkl_env,
     allowed_params = c("dataset_id", "worker_context", "dose_asset", "dose_file",
                         "dose_root", "plan_asset", "plan_file",
-                        "plan_root", "mask_asset", "mask_root")
+                        "plan_root", "mask_asset", "mask_root", "mask_assets",
+                        "roi_labels", "mask_labels")
   ), "rt_dose_plan", list(
     "-m", "dsimaging_rt_dose",
     "--input", "{input_dir}",

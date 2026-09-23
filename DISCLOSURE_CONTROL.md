@@ -80,22 +80,31 @@ and does not pass it a raw manifest, bucket path, credential, or image table.
 10. Collection runners consume the exact admitted sample map. Radiomics, QC
     metrics and embedding tables require exactly one row per admitted sample.
     RT dose tables have a dedicated long-table contract: unique `(sample_id,
-    roi)` keys, the complete distinct sample roster and a fixed numeric schema.
-    Each supported ROI group covers that roster; ROI multiplicity never counts
+    roi_label)` keys for an analyst-declared public label vocabulary (legacy
+    tables retain `roi`), the complete distinct sample roster and a fixed
+    numeric schema. Each declared ROI covers that roster, with missing
+    measurements and zero voxels for absent labels. Publication and ASSIGN
+    verify the vocabulary against private request provenance. ROI multiplicity never counts
     toward the patient threshold. File outputs require a complete confined
     per-sample artifact manifest. Publication rejects missing, duplicate, extra,
     cross-attributed, symlinked, or hash/size-mismatched outputs. Bounded QC
     previews retain explicit no-file entries for samples omitted by the cap;
     this does not admit or publish a partial patient cohort.
 11. Raster images, single-file NIfTI/DICOM, complete multi-slice DICOM series,
-    RTSTRUCT conversion, RTDOSE/RTPLAN analysis, self-contained slides and
+    RTSTRUCT and binary DICOM SEG conversion, RTDOSE/RTPLAN analysis with
+    labelled masks or mapped sets of masks, self-contained slides and
     conforming administrator-installed MONAI bundles are admitted through exact
     source and output maps. Series list every file with SHA-256 and size, have
     one canonical patient/study/series/frame and require consistent geometry,
     contiguous slices and an expected instance count. RT inputs join by sealed
-    sample ID and verify patient and DICOM references. RT conversion and MONAI
-    publish one mask per sample. WSI publishes one private tile manifest per
-    slide, including zero-tile slides. DICOM SEG, sidecar slides, Analyze
+    sample ID and verify patient and DICOM references. SEG requires one mapped
+    object referencing the complete mapped series, exact per-frame source-slice
+    and segment identity, and matching patient/study/frame/grid. Selected labels
+    or numbers yield one binary mask per sample, individually or as a union;
+    separate selections publish separate segment assets. MONAI also publishes
+    one mask per sample. WSI publishes one private tile manifest per
+    slide, including zero-tile slides. Fractional/LABELMAP SEG, resampled SEG
+    grids, multiframe reference series, sidecar slides, Analyze
     `.img/.hdr` pairs, missing expected series counts and unsupported geometry
     remain fail-closed. See `DESIGN_ADMISSION.md` for exact contracts.
 
@@ -121,7 +130,12 @@ resolution and cannot select or authenticate an object-store backend.
   aggregate response. Only the declared label can be joined automatically;
   downstream packages must handle repeated observations and their own
   disclosure controls. Opaque feature views that require one row per sample
-  refuse dose-table fan-out.
+  refuse dose-table fan-out. The analyst supplies the public ROI vocabulary and
+  integer mask values; labels are never discovered from private masks. Every
+  declared sample/label pair is retained, including absent labels with missing
+  measurements and zero voxels. Presence cannot alter workflow success or
+  public row counts. Undeclared mask values are ignored. Labelled masks and
+  every member of a mask set retain exact sample coverage and dose-grid checks.
 - Slides, tiles, coordinates, per-slide tile counts, ROI values, local manifests,
   thumbnails, DICOM headers and all paths remain server-side. Asset catalogues
   expose only opaque identifiers and bounded kind/modality fields. No new

@@ -114,8 +114,8 @@ Implemented server-side capabilities:
 | TotalSegmentator runner | Registered; supports optional GPU/container execution. |
 | nnU-Net v2 runner | Registered; requires admin-registered model pack. |
 | MONAI bundle runner | Admitted conforming admin-installed bundle; isolated per-sample execution and exactly one geometry-checked mask. |
-| RTSTRUCT conversion | Admitted mapped RTSTRUCT/reference series; one union mask per sample; DICOM SEG remains refused. |
-| RT dose/plan | Admitted mapped dose/plan pairs and optional masks; complete private per-ROI derived table. |
+| RTSTRUCT and DICOM SEG conversion | Admitted mapped RTSTRUCT or binary SEG/reference series; exact patient/study/frame/SOP and voxel-grid agreement. Select SEG labels or numbers; one segment or union mask per sample, separate requests for separate segment assets. |
+| RT dose/plan | Admitted mapped dose/plan pairs with labelled masks or mapped mask sets; analyst-declared public ROI vocabulary, complete private sample/ROI table, missing rows for absent regions, radiomics-equivalent ASSIGN. |
 | WSI tiling | Admitted mapped self-contained slides; private per-slide JSON manifests and tiles, with bounded private fan-out. |
 | QC previews | Complete sample association, at most 64 thumbnails by default (configurable 1–1024), pseudonymous filenames and private local CSV. |
 | Mask/ROI operations | Implemented for label selection, binary/set operations, morphology, connected components, and resampling. |
@@ -230,6 +230,7 @@ that can broaden coverage without changing the public design are:
 
 - Replace remaining radiomics-oriented internal names where doing so does not
   reduce compatibility.
-- Add DICOM SEG only after an exact per-frame source and output association is implemented and tested.
+- Extend the admitted binary SEG profile to additional encodings only with
+  equally exact source and output association tests.
 - Add an external backend demo that verifies path mapping and GPU capability
   discovery through dsHPC.

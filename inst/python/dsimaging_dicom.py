@@ -23,7 +23,9 @@ def read_object(path, sample_id, modality=None):
     expected_class = {"CT": "1.2.840.10008.5.1.4.1.1.2", "MR": "1.2.840.10008.5.1.4.1.1.4",
                       "RTSTRUCT": "1.2.840.10008.5.1.4.1.1.481.3",
                       "RTDOSE": "1.2.840.10008.5.1.4.1.1.481.2",
-                      "RTPLAN": "1.2.840.10008.5.1.4.1.1.481.5"}.get(modality)
+                      "RTPLAN": "1.2.840.10008.5.1.4.1.1.481.5",
+                      "SEG": "1.2.840.10008.5.1.4.1.1.66.4"}.get(
+                          modality or str(getattr(obj, "Modality", "")))
     if expected_class and str(obj.SOPClassUID) != expected_class:
         raise RuntimeError("DICOM SOP class does not match the admitted object modality")
     return obj
@@ -58,30 +60,30 @@ def read_series(paths, sample_id):
     spacing = np.asarray(first.PixelSpacing, dtype=float)
     if (orientation.shape != (6,) or spacing.shape != (2,) or
             not np.all(np.isfinite(orientation)) or not np.all(np.isfinite(spacing)) or not np.all(spacing > 0) or
-            not np.allclose(np.linalg.norm(orientation.reshape(2, 3), axis=1), 1) or
-            not np.isclose(np.dot(orientation[:3], orientation[3:]), 0)):
+            not np.allclose(np.linalg.norm(orientation.reshape(2, 3), axis=1), 1, atol=1e-5, rtol=0) or
+            not np.isclose(np.dot(orientation[:3], orientation[3:]), 0, rtol=0)):
         raise RuntimeError("An admitted DICOM series has unsupported geometry")
     normal = np.cross(orientation[:3], orientation[3:])
     positions = []
     for obj in objects:
         position = np.asarray(obj.ImagePositionPatient, dtype=float)
         if (position.shape != (3,) or not np.all(np.isfinite(position)) or
-                not np.allclose(obj.ImageOrientationPatient, orientation, atol=1e-6) or
-                not np.allclose(obj.PixelSpacing, spacing, atol=1e-6)):
+                not np.allclose(obj.ImageOrientationPatient, orientation, atol=1e-6, rtol=0) or
+                not np.allclose(obj.PixelSpacing, spacing, atol=1e-6, rtol=0)):
             raise RuntimeError("An admitted DICOM series has inconsistent geometry")
         positions.append(position)
     positions = np.asarray(positions)
     offsets = positions @ normal
     order = np.argsort(offsets)
     increments = np.diff(offsets[order])
-    if (np.any(increments <= 0) or not np.allclose(increments, increments[0], atol=1e-4) or
+    if (np.any(increments <= 0) or not np.allclose(increments, increments[0], atol=1e-4, rtol=0) or
             not np.allclose(positions[order] - positions[order][0],
-                np.outer(offsets[order] - offsets[order][0], normal), atol=1e-4)):
+                np.outer(offsets[order] - offsets[order][0], normal), atol=1e-4, rtol=0)):
         raise RuntimeError("An admitted DICOM series has duplicate or noncontiguous geometry")
     for obj in objects:
         declared_spacing = getattr(obj, "SpacingBetweenSlices", None)
         if declared_spacing is not None and not np.isclose(
-                abs(float(declared_spacing)), increments[0], atol=1e-4):
+                abs(float(declared_spacing)), increments[0], atol=1e-4, rtol=0):
             raise RuntimeError("An admitted DICOM series has missing slices")
     ordered = [objects[int(i)] for i in order]
     return [paths[int(i)] for i in order], ordered
@@ -156,9 +158,137 @@ def validate_rtstruct(obj, series):
                 raise RuntimeError("RTSTRUCT contour leaves the admitted image grid")
             if not np.allclose((points.reshape(-1, 3) -
                                 np.asarray(source.ImagePositionPatient, float)) @ normal,
-                               0, atol=1e-4):
+                               0, atol=1e-4, rtol=0):
                 raise RuntimeError("RTSTRUCT contour is outside its referenced slice")
     return names
+
+
+def seg_mask(obj, series, labels=None, segment_numbers=None):
+    """Decode source-grid binary SEG frames after exact source/segment association.
+
+    Complete explicit series references permit omitted empty segment/slice frames;
+    present frames must each identify one unique segment and source slice.
+    """
+    first = series[0]
+    if (str(getattr(obj, "Modality", "")) != "SEG" or
+            str(obj.SOPClassUID) != "1.2.840.10008.5.1.4.1.1.66.4" or
+            str(obj.StudyInstanceUID) != str(first.StudyInstanceUID) or
+            str(getattr(obj, "FrameOfReferenceUID", "")) != str(first.FrameOfReferenceUID)):
+        raise RuntimeError("SEG does not share the admitted study and frame")
+    if (str(getattr(obj, "SegmentationType", "")) != "BINARY" or
+            int(obj.BitsAllocated) != 1 or int(obj.BitsStored) != 1 or
+            int(obj.HighBit) != 0 or int(obj.PixelRepresentation) != 0 or
+            int(obj.SamplesPerPixel) != 1 or str(obj.PhotometricInterpretation) != "MONOCHROME2" or
+            int(obj.Rows) != int(first.Rows) or int(obj.Columns) != int(first.Columns)):
+        raise RuntimeError("Only binary SEG on the admitted source grid is supported")
+    if getattr(obj, "StudiesContainingOtherReferencedInstancesSequence", []):
+        raise RuntimeError("SEG references another study")
+    sources = {str(item.SOPInstanceUID): (index, item) for index, item in enumerate(series)}
+    refs = list(getattr(obj, "ReferencedSeriesSequence", []))
+    if len(refs) != 1 or str(refs[0].SeriesInstanceUID) != str(first.SeriesInstanceUID):
+        raise RuntimeError("SEG series association is ambiguous")
+    instances = list(getattr(refs[0], "ReferencedInstanceSequence", []))
+    referenced = [str(item.ReferencedSOPInstanceUID) for item in instances]
+    if len(referenced) != len(sources) or set(referenced) != set(sources):
+        raise RuntimeError("SEG does not reference the complete admitted series")
+    # Check every nested reference, including optional general source references.
+    def check_references(dataset):
+        if hasattr(dataset, "ReferencedSOPInstanceUID") != hasattr(dataset, "ReferencedSOPClassUID"):
+            raise RuntimeError("SEG source instance reference is incomplete")
+        if dataset is not obj:
+            for field in ("PatientID", "StudyInstanceUID", "SeriesInstanceUID", "FrameOfReferenceUID"):
+                if hasattr(dataset, field) and str(getattr(dataset, field)) != str(getattr(first, field)):
+                    raise RuntimeError("SEG contains a conflicting source identity")
+        if hasattr(dataset, "ReferencedSOPInstanceUID"):
+            source = sources.get(str(dataset.ReferencedSOPInstanceUID))
+            frame = getattr(dataset, "ReferencedFrameNumber", 1)
+            if (source is None or str(getattr(dataset, "ReferencedSOPClassUID", "")) !=
+                    str(source[1].SOPClassUID) or str(frame) != "1"):
+                raise RuntimeError("SEG source instance association is ambiguous")
+        for element in dataset:
+            if element.VR == "SQ":
+                for item in element.value:
+                    check_references(item)
+    check_references(obj)
+    segments = list(getattr(obj, "SegmentSequence", []))
+    numbers = [int(item.SegmentNumber) for item in segments]
+    names = [str(item.SegmentLabel) for item in segments]
+    if (not numbers or any(number < 1 or number > 65535 for number in numbers) or
+            len(set(numbers)) != len(numbers) or len(set(names)) != len(names) or
+            not all(name.strip() for name in names)):
+        raise RuntimeError("SEG segment identity is ambiguous")
+    labels, segment_numbers = labels or [], segment_numbers or []
+    if (labels and segment_numbers or len(set(labels)) != len(labels) or
+            len(set(segment_numbers)) != len(segment_numbers)):
+        raise RuntimeError("SEG selection is ambiguous")
+    selected = set(segment_numbers or [number for number, name in zip(numbers, names)
+                                     if not labels or name in labels])
+    if not selected.issubset(numbers) or not set(labels).issubset(names):
+        raise RuntimeError("A selected SEG segment is unavailable")
+    shared = list(getattr(obj, "SharedFunctionalGroupsSequence", []))
+    frames = list(getattr(obj, "PerFrameFunctionalGroupsSequence", []))
+    if len(shared) > 1 or not frames or len(frames) != int(obj.NumberOfFrames):
+        raise RuntimeError("SEG functional groups are incomplete")
+    shared_group = shared[0] if shared else None
+
+    def functional_group(frame, name):
+        shared_items, frame_items = getattr(shared_group, name, None), getattr(frame, name, None)
+        if shared_items is not None and frame_items is not None:
+            raise RuntimeError("SEG functional group is duplicated")
+        items = list(shared_items if shared_items is not None else frame_items or [])
+        if len(items) != 1:
+            raise RuntimeError("SEG functional group is ambiguous")
+        return items[0]
+
+    def geometry_equal(value, expected, tolerance):
+        values, expected = np.asarray(value, dtype=float), np.asarray(expected, dtype=float)
+        return (values.shape == expected.shape and np.all(np.isfinite(values)) and
+                np.allclose(values, expected, atol=tolerance, rtol=0))
+
+    associations, seen = [], set()
+    for frame in frames:
+        number = int(functional_group(frame, "SegmentIdentificationSequence").ReferencedSegmentNumber)
+        derivation = functional_group(frame, "DerivationImageSequence")
+        source_refs = list(getattr(derivation, "SourceImageSequence", []))
+        if len(source_refs) != 1 or number not in numbers:
+            raise RuntimeError("SEG frame source or segment is ambiguous")
+        source_ref = source_refs[0]
+        index, source = sources[str(source_ref.ReferencedSOPInstanceUID)]
+        if str(getattr(source_ref, "SpatialLocationsPreserved", "YES")) != "YES":
+            raise RuntimeError("SEG frame does not preserve its source grid")
+        key = (number, index)
+        if key in seen:
+            raise RuntimeError("SEG has duplicate frames for a segment and source slice")
+        seen.add(key)
+        position = functional_group(frame, "PlanePositionSequence")
+        orientation = functional_group(frame, "PlaneOrientationSequence")
+        measures = functional_group(frame, "PixelMeasuresSequence")
+        if (not geometry_equal(position.ImagePositionPatient, source.ImagePositionPatient, 1e-4) or
+                not geometry_equal(orientation.ImageOrientationPatient, source.ImageOrientationPatient, 1e-6) or
+                not geometry_equal(measures.PixelSpacing, source.PixelSpacing, 1e-6) or
+                (hasattr(measures, "SpacingBetweenSlices") and not geometry_equal(
+                    measures.SpacingBetweenSlices,
+                    np.linalg.norm(np.asarray(series[1].ImagePositionPatient, float) -
+                                   np.asarray(first.ImagePositionPatient, float)), 1e-4)) or
+                (hasattr(measures, "SliceThickness") and (
+                    not np.isfinite(float(measures.SliceThickness)) or float(measures.SliceThickness) <= 0 or
+                    (hasattr(source, "SliceThickness") and not geometry_equal(
+                        measures.SliceThickness, source.SliceThickness, 1e-4))))):
+            raise RuntimeError("SEG frame geometry differs from its admitted source")
+        associations.append(key)
+    if {number for number, _ in seen} != set(numbers):
+        raise RuntimeError("SEG frames do not identify every declared segment")
+    pixels = np.asarray(obj.pixel_array)
+    if len(frames) == 1 and pixels.ndim == 2:
+        pixels = pixels[np.newaxis, ...]
+    if (pixels.shape != (len(frames), int(first.Rows), int(first.Columns)) or
+            not np.all(np.isin(pixels, [0, 1]))):
+        raise RuntimeError("SEG pixel data do not match the declared binary frames")
+    union = np.zeros((len(series), int(first.Rows), int(first.Columns)), dtype="uint8")
+    for pixels_frame, (number, index) in zip(pixels, associations):
+        if number in selected:
+            union[index] |= pixels_frame.astype("uint8")
+    return union
 
 
 def validate_dose_plan(dose, plan):
@@ -183,14 +313,14 @@ def dose_image(dose):
     spacing = np.asarray(dose.PixelSpacing, dtype=float)
     origin = np.asarray(dose.ImagePositionPatient, dtype=float)
     if (pixels.ndim != 3 or len(offsets) != pixels.shape[0] or len(offsets) < 2 or
-            not np.isclose(offsets[0], 0) or np.any(np.diff(offsets) <= 0) or
-            not np.allclose(np.diff(offsets), np.diff(offsets)[0], atol=1e-4) or
+            not np.isclose(offsets[0], 0, rtol=0) or np.any(np.diff(offsets) <= 0) or
+            not np.allclose(np.diff(offsets), np.diff(offsets)[0], atol=1e-4, rtol=0) or
             orientation.shape != (6,) or spacing.shape != (2,) or origin.shape != (3,) or
             not np.isfinite(scale) or scale <= 0 or not np.all(np.isfinite(pixels)) or
             not np.all(np.isfinite(origin)) or not np.all(np.isfinite(orientation)) or
             not np.all(np.isfinite(offsets)) or not np.all(np.isfinite(spacing)) or not np.all(spacing > 0) or
-            not np.allclose(np.linalg.norm(orientation.reshape(2, 3), axis=1), 1) or
-            not np.isclose(np.dot(orientation[:3], orientation[3:]), 0)):
+            not np.allclose(np.linalg.norm(orientation.reshape(2, 3), axis=1), 1, atol=1e-5, rtol=0) or
+            not np.isclose(np.dot(orientation[:3], orientation[3:]), 0, rtol=0)):
         raise RuntimeError("RTDOSE geometry is unsupported")
     scaled = pixels * scale
     if not np.all(np.isfinite(scaled)):
@@ -205,7 +335,7 @@ def dose_image(dose):
 
 def require_same_geometry(left, right):
     if (left.GetSize() != right.GetSize() or
-            not np.allclose(left.GetSpacing(), right.GetSpacing(), atol=1e-5) or
-            not np.allclose(left.GetOrigin(), right.GetOrigin(), atol=1e-4) or
-            not np.allclose(left.GetDirection(), right.GetDirection(), atol=1e-5)):
+            not np.allclose(left.GetSpacing(), right.GetSpacing(), atol=1e-5, rtol=0) or
+            not np.allclose(left.GetOrigin(), right.GetOrigin(), atol=1e-4, rtol=0) or
+            not np.allclose(left.GetDirection(), right.GetDirection(), atol=1e-5, rtol=0)):
         raise RuntimeError("Derived mask geometry does not match its admitted image")
