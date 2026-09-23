@@ -14,7 +14,8 @@
   seg_nnunetv2 = c("nnunetv2>=2.0.0", "torch>=2.0.0",
                     "SimpleITK>=2.0.0", "nibabel>=4.0.0"),
   seg_monai = c("monai>=1.3.0", "torch>=2.0.0",
-                 "SimpleITK>=2.0.0", "nibabel>=4.0.0", "pyyaml>=5.0")
+                 "SimpleITK>=2.0.0", "nibabel>=4.0.0", "pyyaml>=5.0",
+                 "pydicom>=2.4.0", "boto3>=1.28.0", "botocore>=1.31.0")
 )
 
 .RADIOMICS_HEALTH_IMPORTS <- list(
@@ -22,7 +23,7 @@
   seg_lungmask = "lungmask",
   seg_totalseg = "totalsegmentator",
   seg_nnunetv2 = "nnunetv2",
-  seg_monai = "monai"
+  seg_monai = c("monai", "pydicom", "boto3")
 )
 
 #' List available imaging analysis environments

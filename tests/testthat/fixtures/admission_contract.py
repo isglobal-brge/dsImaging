@@ -328,6 +328,85 @@ def case_mapping(root, context, path, env):
     return {"samples": 3, "verified_files": 9, "negative_cases": 4}
 
 
+def case_s3_mapping(root, context, path, env):
+    import dsimaging_utils as utils
+
+    bucket, prefix = "synthetic-imaging", "sealed/dicom/"
+    objects = {}
+    expected_downloads = []
+    for sample_index, sample in enumerate(context["collection_map"]["records_by_asset"]["dicom"]):
+        sample["uri"] = f"s3://{bucket}/{prefix}{sample['relative_path']}"
+        for file_index, item in enumerate(sample["files"]):
+            key = prefix + item["path"]
+            version = f"version-{sample_index}-{file_index}"
+            item["version_id"] = version
+            objects[(key, version)] = (root / "dicom" / item["path"]).read_bytes()
+            expected_downloads.append((bucket, key, version))
+    context["backend"] = {"type": "s3", "config": {}}
+    context["manifest"]["assets"]["dicom"]["uri"] = f"s3://{bucket}/{prefix}"
+    save_context(context, path)
+    env["DSIMAGING_CACHE_DIR"] = str(root / "s3-cache")
+    os.environ.update(env)
+
+    class FakeS3:
+        def __init__(self):
+            self.downloads = []
+            self.listings = []
+            self.listing_mode = "exact"
+
+        def download_file(self, requested_bucket, key, dest, ExtraArgs=None):
+            version = (ExtraArgs or {}).get("VersionId")
+            self.downloads.append((requested_bucket, key, version))
+            assert requested_bucket == bucket
+            Path(dest).write_bytes(objects[(key, version)])
+
+        def get_paginator(self, operation):
+            assert operation == "list_objects_v2"
+            return self
+
+        def paginate(self, Bucket, Prefix):
+            assert Bucket == bucket
+            self.listings.append(Prefix)
+            entries = [{"Key": key, "Size": len(body)}
+                       for (key, _), body in objects.items() if key.startswith(Prefix)]
+            if self.listing_mode == "extra":
+                entries.append({"Key": Prefix + "unexpected.dcm", "Size": 1})
+            elif self.listing_mode == "missing":
+                entries = entries[:-1]
+            yield {"Contents": entries[:1]}
+            yield {"Contents": entries[1:]}
+
+    fake = FakeS3()
+    utils.s3_client_for_entry = lambda entry: fake
+    groups = collection_sample_groups("dicom", extensions=(".dcm",))
+    assert [sid for _, sid in groups] == IDS
+    assert all(len(paths) == 3 for paths, _ in groups)
+    assert fake.downloads == expected_downloads
+    assert fake.listings == [prefix + f"source_{index}/" for index in range(3)]
+    for (paths, _), sample in zip(groups, context["collection_map"]["records_by_asset"]["dicom"]):
+        for local, item in zip(paths, sample["files"]):
+            assert Path(local).read_bytes() == objects[(prefix + item["path"], item["version_id"])]
+    for mode in ("extra", "missing"):
+        fake.listing_mode = mode
+        try:
+            collection_sample_groups("dicom", extensions=(".dcm",))
+            raise AssertionError("Inexact S3 series listing accepted")
+        except RuntimeError as error:
+            assert "file set" in str(error)
+    fake.listing_mode = "exact"
+    _, key, version = expected_downloads[0]
+    original = objects[(key, version)]
+    objects[(key, version)] = bytes([original[0] ^ 1]) + original[1:]
+    os.environ["DSIMAGING_CACHE_DIR"] = str(root / "s3-tampered-cache")
+    try:
+        collection_sample_groups("dicom", extensions=(".dcm",))
+        raise AssertionError("Tampered versioned S3 slice accepted")
+    except RuntimeError as error:
+        assert "integrity verification" in str(error)
+    return {"samples": 3, "verified_files": 9, "versioned_downloads": 9,
+            "negative_cases": 3}
+
+
 def case_dicom(root, context, path, env):
     env["DSHPC_CFG_DICOM_ASSET"] = "dicom"
     output = root / "converted"
@@ -495,7 +574,7 @@ def case_monai(root, context, path, env):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True)
-    parser.add_argument("--case", choices=("fixture", "mapping", "dicom", "rt", "dose", "wsi", "monai"), required=True)
+    parser.add_argument("--case", choices=("fixture", "mapping", "s3_mapping", "dicom", "rt", "dose", "wsi", "monai"), required=True)
     args = parser.parse_args()
     root = Path(args.root).resolve()
     context, path, env = build_fixture(root)

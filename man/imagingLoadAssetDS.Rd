@@ -31,8 +31,8 @@ A data.frame for assignment in the DataSHIELD session.
 }
 \description{
 DataSHIELD ASSIGN method. Loads a published feature-table-like imaging
-asset into the server session as a data.frame, after applying the same
-minimum-row disclosure guard used for imaging resources.
+asset into the server session as a data.frame, after validating the complete
+sample roster and distinct-patient threshold used for imaging resources.
 }
 \details{
 Supported asset kinds are \code{radiomics_collection},

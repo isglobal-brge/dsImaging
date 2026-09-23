@@ -50,7 +50,9 @@ expected count. Unsupported geometry and ambiguous references are refused.
 Dose-table fan-out is a dedicated validation branch, not a relaxation of the
 one-row-per-sample invariant for radiomics, QC or embedding tables. It verifies
 the distinct sample roster, each sample's canonical patient mapping, unique ROI
-keys and a fixed numeric schema. The minimum cohort threshold uses distinct
+keys and a fixed numeric schema. Supported ROI keys are `whole_grid` and one
+optional `mask`, the union of positive voxels in the mapped mask; arbitrary
+multi-label ROI export is not admitted. The minimum cohort threshold uses distinct
 patients, never ROI rows. Only the declared training label may be joined.
 Repeated-observation analysis remains the responsibility of the downstream
 trusted DataSHIELD package. Raw dose-table assignment cannot make rows public.

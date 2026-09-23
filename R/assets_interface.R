@@ -82,8 +82,8 @@ imagingLineageDS <- function(asset_id) {
 #' Load a Feature Asset as a DataSHIELD Table
 #'
 #' DataSHIELD ASSIGN method. Loads a published feature-table-like imaging
-#' asset into the server session as a data.frame, after applying the same
-#' minimum-row disclosure guard used for imaging resources.
+#' asset into the server session as a data.frame, after validating the complete
+#' sample roster and distinct-patient threshold used for imaging resources.
 #'
 #' Supported asset kinds are \code{radiomics_collection},
 #' \code{feature_table}, \code{qc_table}, \code{dose_table}, and

@@ -30,6 +30,14 @@ test_that("synthetic DICOM groups verify every admitted byte and exact file set"
   expect_gte(result$negative_cases, 4L)
 })
 
+test_that("versioned S3 series verify each slice and the exact paginated listing", {
+  result <- run_python_admission_case("s3_mapping")
+  expect_identical(result$samples, 3L)
+  expect_identical(result$verified_files, 9L)
+  expect_identical(result$versioned_downloads, 9L)
+  expect_identical(result$negative_cases, 3L)
+})
+
 test_that("synthetic series convert only with exact patient and geometry association", {
   result <- run_python_admission_case("dicom")
   expect_identical(result$samples, 3L)
