@@ -1,6 +1,6 @@
 # dsImaging disclosure-control contract
 
-Reviewed: 2026-09-05. This document defines the analyst-facing DataSHIELD
+Reviewed: 2026-09-23. This document defines the analyst-facing DataSHIELD
 boundary for imaging resources. It is a release invariant; it does not make the
 object store, node filesystem, or server-administrator interfaces public.
 
@@ -77,16 +77,27 @@ and does not pass it a raw manifest, bucket path, credential, or image table.
    authorized imaging handle. Their complete patient roster is revalidated;
    only the manifest-declared label may be joined automatically, and no other
    clinical metadata is copied implicitly.
-10. Collection runners consume the exact admitted sample map. Tabular outputs
-   require exactly one row per admitted sample; file outputs require a complete
-   confined per-sample artifact manifest. Publication rejects missing,
-   duplicate, extra, cross-attributed, symlinked, or hash/size-mismatched
-   outputs.
-11. Raster images, single-file NIfTI, and single-file DICOM can follow this
-    exact mapping. Multi-file DICOM series, RT, WSI, and MONAI analyst workflows
-    remain fail-closed until their complete input/output patient association is
-    represented and verified. Analyze `.img/.hdr` pairs are not a supported
-    single-file NIfTI substitute.
+10. Collection runners consume the exact admitted sample map. Radiomics, QC
+    metrics and embedding tables require exactly one row per admitted sample.
+    RT dose tables have a dedicated long-table contract: unique `(sample_id,
+    roi)` keys, the complete distinct sample roster and a fixed numeric schema.
+    Each supported ROI group covers that roster; ROI multiplicity never counts
+    toward the patient threshold. File outputs require a complete confined
+    per-sample artifact manifest. Publication rejects missing, duplicate, extra,
+    cross-attributed, symlinked, or hash/size-mismatched outputs. Bounded QC
+    previews retain explicit no-file entries for samples omitted by the cap;
+    this does not admit or publish a partial patient cohort.
+11. Raster images, single-file NIfTI/DICOM, complete multi-slice DICOM series,
+    RTSTRUCT conversion, RTDOSE/RTPLAN analysis, self-contained slides and
+    conforming administrator-installed MONAI bundles are admitted through exact
+    source and output maps. Series list every file with SHA-256 and size, have
+    one canonical patient/study/series/frame and require consistent geometry,
+    contiguous slices and an expected instance count. RT inputs join by sealed
+    sample ID and verify patient and DICOM references. RT conversion and MONAI
+    publish one mask per sample. WSI publishes one private tile manifest per
+    slide, including zero-tile slides. DICOM SEG, sidecar slides, Analyze
+    `.img/.hdr` pairs, missing expected series counts and unsupported geometry
+    remain fail-closed. See `DESIGN_ADMISSION.md` for exact contracts.
 
 ## Store boundary and multiple collections
 
@@ -105,6 +116,21 @@ resolution and cannot select or authenticate an object-store backend.
 
 ## Trust boundary and residual signals
 
+- RT per-ROI rows are individual-level derived data. The complete table may be
+  assigned to an authorized server session, as with radiomics, but is never an
+  aggregate response. Only the declared label can be joined automatically;
+  downstream packages must handle repeated observations and their own
+  disclosure controls. Opaque feature views that require one row per sample
+  refuse dose-table fan-out.
+- Slides, tiles, coordinates, per-slide tile counts, ROI values, local manifests,
+  thumbnails, DICOM headers and all paths remain server-side. Asset catalogues
+  expose only opaque identifiers and bounded kind/modality fields. No new
+  per-slide count channel is introduced. Existing metadata uses distinct
+  patients and its threshold/bucket policy; fan-out cannot inflate that count.
+- QC thumbnails are pseudonymous derived assets, not anonymized public images.
+  `max_tiles` defaults to 64 (range 1–1024); `max_size` defaults to 192 pixels
+  (range 16–4096). The unchanged local CSV schema lists rendered previews and
+  remains private. Pseudonymous names do not authorize image disclosure.
 - The node operator and trusted server packages can access private storage and
   exact state by design. Installing or registering an unreviewed server package
   can invalidate this contract; the effective Opal/Rock method allowlist must

@@ -1,6 +1,30 @@
 # Module: Radiomics Profile Registry
 # Manages PyRadiomics extraction profiles (YAML settings files).
 
+# Fixed public metadata is separate from the immutable historical YAML.
+# The 2014 supplement (ncomms5006-s1.pdf, Figure 1 and feature 16) specifies
+# Compactness2. The replication documents its sphericity-cubed equivalence:
+# https://pmc.ncbi.nlm.nih.gov/articles/PMC6805885/ (Data processing).
+.aerts_profile_metadata <- function(profile_name) {
+  switch(profile_name,
+    aerts_signature_v1 = list(
+      description = paste("Aerts-inspired historical four-feature client selection:",
+        "Energy, Compactness1, original and wavelet-HLH GLRLM",
+        "RunLengthNonUniformity. The unchanged YAML also enables other",
+        "wavelet candidates when no selected_features filter is supplied."),
+      selected_features = c("original_firstorder_Energy",
+        "original_shape_Compactness1", "original_glrlm_RunLengthNonUniformity",
+        "wavelet-HLH_glrlm_RunLengthNonUniformity")),
+    aerts_signature_v2 = list(
+      description = paste("Published Aerts four-feature selection: Energy,",
+        "Compactness2 (sphericity cubed), original and wavelet-HLH GLRLM",
+        "GrayLevelNonUniformity; historical PyRadiomics settings retained."),
+      selected_features = c("original_firstorder_Energy",
+        "original_shape_Compactness2", "original_glrlm_GrayLevelNonUniformity",
+        "wavelet-HLH_glrlm_GrayLevelNonUniformity")),
+    NULL)
+}
+
 #' List available radiomics profiles bundled with dsImaging
 #' @export
 list_imaging_radiomics_profiles <- function() {

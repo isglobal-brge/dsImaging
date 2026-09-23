@@ -2,7 +2,7 @@
 % Please edit documentation in R/domain_workflows.R
 \name{imagingConvertCollectionDS}
 \alias{imagingConvertCollectionDS}
-\title{Submit an exact single-file DICOM conversion workflow}
+\title{Submit an exactly mapped DICOM conversion workflow}
 \usage{
 imagingConvertCollectionDS(request_encoded)
 }
@@ -13,7 +13,6 @@ imagingConvertCollectionDS(request_encoded)
 A job handle assigned server-side.
 }
 \description{
-Enhanced or ordinary single-file DICOM samples are mapped through the
-admitted collection snapshot. Multi-file DICOM series remain fail-closed
-until a volumetric reader preserves that same exact sample association.
+Single-file DICOM and complete multi-slice series are mapped through the
+admitted collection snapshot and validated before conversion.
 }

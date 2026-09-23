@@ -77,7 +77,9 @@ validate_asset_roots <- function(manifest, backend = NULL) {
     asset_type <- asset$kind %||% asset$type %||% "unknown"
     uri <- asset$uri %||% asset$root %||% asset$file %||% asset$manifest
 
-    if (asset_type %in% dir_types) {
+    indexed_rt_root <- asset_type %in% c("rt_dose_file", "rt_plan_file") &&
+      !is.null(asset$sample_manifests) && !is.null(asset$content_hash_index)
+    if (asset_type %in% dir_types || indexed_rt_root) {
       root <- uri
       exists <- .backend_uri_exists(root, backend, directory = TRUE)
       results[[name]] <- list(

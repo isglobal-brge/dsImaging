@@ -450,7 +450,7 @@
     timeout_secs = 1800L,
     env = rosetta_mkl_env,
     allowed_params = c("dataset_id", "worker_context", "image_asset", "image_root",
-                        "mask_asset", "mask_root", "max_size")
+                        "mask_asset", "mask_root", "max_size", "max_tiles")
   ), "imaging_qc_visuals", list(
     "-m", "dsimaging_qc_visuals",
     "--input", "{input_dir}",

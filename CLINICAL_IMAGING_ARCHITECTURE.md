@@ -107,13 +107,17 @@ Implemented server-side capabilities:
 | Capability | Status |
 | --- | --- |
 | Existing mask asset use | Implemented. |
-| DICOM series conversion | Implemented as a dsHPC runner with dcm2niix/SimpleITK paths. |
+| DICOM conversion | Admitted single files and complete hashed series, canonical patient/UID/geometry checks, SimpleITK, exactly one NIfTI per sample. |
 | Image preprocessing | Implemented for resampling, normalization, clamping, and float32 casting. |
 | Lightweight CT lung threshold segmenter | Implemented for demos/QC. |
 | LungMask runner | Registered; requires Python deps/model cache. |
 | TotalSegmentator runner | Registered; supports optional GPU/container execution. |
 | nnU-Net v2 runner | Registered; requires admin-registered model pack. |
-| MONAI bundle runner | Registered; requires admin-installed bundle. |
+| MONAI bundle runner | Admitted conforming admin-installed bundle; isolated per-sample execution and exactly one geometry-checked mask. |
+| RTSTRUCT conversion | Admitted mapped RTSTRUCT/reference series; one union mask per sample; DICOM SEG remains refused. |
+| RT dose/plan | Admitted mapped dose/plan pairs and optional masks; complete private per-ROI derived table. |
+| WSI tiling | Admitted mapped self-contained slides; private per-slide JSON manifests and tiles, with bounded private fan-out. |
+| QC previews | Complete sample association, at most 64 thumbnails by default (configurable 1–1024), pseudonymous filenames and private local CSV. |
 | Mask/ROI operations | Implemented for label selection, binary/set operations, morphology, connected components, and resampling. |
 | QC metrics | Implemented for image geometry/intensity and optional mask volumes/intensity. |
 | PyRadiomics extraction | Registered with bundled IBSI/demo/Aerts profiles. |
@@ -133,9 +137,9 @@ families under one package namespace:
 | Format support | NIfTI, NRRD, MHA/MHD, DICOM series, DICOM SEG, RTSTRUCT/RTDOSE/RTPLAN references, PNG/JPEG masks for 2D workflows. |
 | Preprocessing | DICOM-to-NIfTI conversion hooks, resampling, intensity normalization, clamping/windowing, float32 casting; orientation canonicalization, cropping, bias correction, and registration are extension runner targets. |
 | Segmentation | Existing masks, CT threshold, LungMask, TotalSegmentator, nnU-Net, MONAI bundles, multi-label masks, ROI selection, and mask post-processing; external/custom runner registration is handled through dsHPC runner YAML. |
-| Mask/ROI operations | Label selection, binary extraction, union/intersection/difference, connected components, morphology, resampling-to-image; contour/RTSTRUCT conversion remains an extension runner target. |
+| Mask/ROI operations | Label selection, binary extraction, union/intersection/difference, connected components, morphology, resampling-to-image; RTSTRUCT conversion follows the exact admitted reference-series contract. |
 | Radiomics | IBSI PyRadiomics profiles, lightweight demo profiles, Aerts signature profile, force-2D, voxel maps, selected features, profile registry, reproducibility metadata. |
-| Derived analytics | Feature tables, embeddings, image-level QC metrics, mask volumes/shape summaries, thumbnails/overlays as non-disclosive QC artifacts where allowed. |
+| Derived analytics | Feature tables, embeddings, image-level QC metrics, mask volumes/shape summaries, bounded thumbnails/overlays as server-side derived assets. |
 | Provenance | Content hashes, model/profile signatures, runner/container versions, lineage graph, deduplication, immutable assets and aliases. |
 | DataSHIELD safety | Disclosure-safe counts, no raw sample ids unless explicitly server-side, no client-side image paths, permission-aware assets. |
 | HPC integration | Runner resources, adaptive backpressure, shared scheduler, container images, optional GPU use, external backend path mapping. |
@@ -226,6 +230,6 @@ that can broaden coverage without changing the public design are:
 
 - Replace remaining radiomics-oriented internal names where doing so does not
   reduce compatibility.
-- Add RTSTRUCT/SEG contour conversion helpers.
+- Add DICOM SEG only after an exact per-frame source and output association is implemented and tested.
 - Add an external backend demo that verifies path mapping and GPU capability
   discovery through dsHPC.

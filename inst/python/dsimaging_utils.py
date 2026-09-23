@@ -400,8 +400,8 @@ def _verify_mapped_file(path, record, extensions):
     return path
 
 
-def collection_sample_files(asset_name="images", role="images", extensions=IMAGE_EXTS):
-    """Resolve the exact snapshot roster without scanning an asset directory."""
+def collection_sample_groups(asset_name="images", role="images", extensions=IMAGE_EXTS):
+    """Resolve and verify every file in each exact snapshot sample group."""
     context = worker_context()
     if not context:
         raise RuntimeError("The admitted collection mapping is unavailable")
@@ -441,12 +441,7 @@ def collection_sample_files(asset_name="images", role="images", extensions=IMAGE
     if not isinstance(root_uri, str) or not root_uri:
         raise RuntimeError("The requested imaging asset is unavailable")
 
-    resolved = []
-    for sid in sample_ids:
-        record = by_id[sid]
-        if (record.get("source_kind") not in ("single_file", "mask_file") or
-                record.get("n_files") != 1):
-            raise RuntimeError("Multi-file imaging samples are not supported by this runner")
+    def resolve_file(record):
         uri = record.get("uri")
         relative = _safe_relative_path(record.get("relative_path"))
         version_id = record.get("version_id")
@@ -476,6 +471,11 @@ def collection_sample_files(asset_name="images", role="images", extensions=IMAGE
         elif backend_type == "file":
             root = os.path.realpath(root_uri)
             path = os.path.realpath(uri)
+            current = root_uri
+            for component in [""] + relative.split("/"):
+                current = os.path.join(current, component) if component else current
+                if os.path.islink(current):
+                    raise RuntimeError("An admitted imaging sample contains a symlink")
             try:
                 if os.path.commonpath([root, path]) != root:
                     raise RuntimeError("An admitted imaging sample leaves its collection")
@@ -487,8 +487,99 @@ def collection_sample_files(asset_name="images", role="images", extensions=IMAGE
         else:
             raise RuntimeError("The admitted imaging backend is unavailable")
 
-        resolved.append((_verify_mapped_file(path, record, extensions), sid))
+        return _verify_mapped_file(path, record, extensions)
+
+    resolved = []
+    used_paths = set()
+    for sid in sample_ids:
+        record = by_id[sid]
+        kind = record.get("source_kind")
+        if kind in ("single_file", "mask_file") and record.get("n_files") == 1:
+            paths = [resolve_file(record)]
+        elif kind == "dicom_series":
+            files = record.get("files")
+            if (not isinstance(files, list) or len(files) < 2 or
+                    record.get("n_files") != len(files)):
+                raise RuntimeError("An admitted DICOM series is incomplete")
+            prefix = _safe_relative_path(record.get("relative_path")) + "/"
+            file_records = []
+            for item in files:
+                if not isinstance(item, dict):
+                    raise RuntimeError("An admitted DICOM series mapping is invalid")
+                relative = _safe_relative_path(item.get("path"))
+                if not relative.startswith(prefix):
+                    raise RuntimeError("An admitted DICOM series leaves its sample")
+                file_records.append(dict(item, relative_path=relative,
+                    uri=root_uri.rstrip("/") + "/" + relative))
+            file_records.sort(key=lambda item: item["relative_path"])
+            payload = "".join(
+                "{}\t{}\t{}\n".format(item["relative_path"], int(item["size"]),
+                    item["content_hash"]) for item in file_records)
+            if (sum(int(item["size"]) for item in file_records) != record.get("size") or
+                    hashlib.sha256(payload.encode("utf-8")).hexdigest() !=
+                    record.get("content_hash")):
+                raise RuntimeError("An admitted DICOM series has invalid integrity metadata")
+            paths = [resolve_file(item) for item in file_records]
+            expected = {item["relative_path"] for item in file_records}
+            if len(expected) != len(files):
+                raise RuntimeError("An admitted DICOM series mapping is ambiguous")
+            if backend_type == "file":
+                series_root = os.path.join(root_uri, prefix.rstrip("/"))
+                actual = set()
+                for base, directories, names in os.walk(series_root):
+                    if any(os.path.islink(os.path.join(base, name))
+                           for name in directories + names):
+                        raise RuntimeError("An admitted DICOM series contains a symlink")
+                    actual.update(os.path.relpath(os.path.join(base, name), root_uri)
+                                  .replace(os.sep, "/") for name in names)
+            else:
+                _, root_key = parse_s3_uri(root_uri)
+                _, _, keys = s3_list_keys(entry, root_uri.rstrip("/") + "/" + prefix)
+                actual = {key[len(root_key.rstrip("/") + "/"):] for key, _ in keys}
+            if actual != expected:
+                raise RuntimeError("An admitted DICOM series has an incomplete or extra file set")
+        else:
+            raise RuntimeError("An admitted imaging sample mapping is unsupported")
+        if any(path in used_paths for path in paths) or len(set(paths)) != len(paths):
+            raise RuntimeError("An imaging input is attributed to multiple samples")
+        used_paths.update(paths)
+        resolved.append((paths, sid))
     return resolved
+
+
+def collection_sample_files(asset_name="images", role="images", extensions=IMAGE_EXTS):
+    """Resolve exactly one file per admitted sample; groups require a series reader."""
+    context = worker_context()
+    mapping = context.get("collection_map", {}) if context else {}
+    records = (mapping.get("records_by_asset") or {}).get(asset_name, mapping.get("records", []))
+    if any(isinstance(record, dict) and record.get("source_kind") == "dicom_series"
+           for record in records):
+        raise RuntimeError("Multi-file imaging samples are not supported by this runner")
+    groups = collection_sample_groups(asset_name, role, extensions)
+    if any(len(paths) != 1 for paths, _ in groups):
+        raise RuntimeError("Multi-file imaging samples are not supported by this runner")
+    return [(paths[0], sid) for paths, sid in groups]
+
+
+def sample_patient_id(sample_id):
+    context = worker_context()
+    ids = _privacy_sample_ids(context)
+    roster = context["manifest"][".dsimaging_privacy_roster"]
+    patients = roster.get("privacy_ids")
+    if not isinstance(patients, list) or len(patients) != len(ids):
+        raise RuntimeError("The admitted patient mapping is unavailable")
+    value = patients[ids.index(sample_id)]
+    if not isinstance(value, str) or not value or value != value.strip(" \t\r\n"):
+        raise RuntimeError("The admitted patient mapping is invalid")
+    return value
+
+
+def mapped_sample_groups(asset_name, role="images", extensions=IMAGE_EXTS):
+    context = worker_context()
+    mapping = context.get("collection_map", {}) if context else {}
+    if asset_name not in (mapping.get("asset_names") or []):
+        raise RuntimeError("The requested asset has no exact source mapping")
+    return collection_sample_groups(asset_name, role, extensions)
 
 
 def artifact_sample_files(root, artifact_types=None, extensions=None):
@@ -541,6 +632,11 @@ def artifact_sample_files(root, artifact_types=None, extensions=None):
         used_files.update(files)
         primary_path = None
         for relative in files:
+            current = root
+            for component in [""] + relative.split("/"):
+                current = os.path.join(current, component) if component else current
+                if os.path.islink(current):
+                    raise RuntimeError("A mapped imaging artifact contains a symlink")
             path = os.path.realpath(os.path.join(root_real, relative))
             try:
                 if os.path.commonpath([root_real, path]) != root_real or not os.path.isfile(path):
@@ -590,6 +686,11 @@ def write_collection_output_manifest(output_dir, artifact_type, samples):
             raise RuntimeError("Runner output sample mapping is invalid")
         primary = sample.get("primary")
         files = sample.get("files") or ([primary] if primary else [])
+        if (artifact_type == "qc_visual_asset" and not primary and not files and
+                sample.get("status") == "omitted_by_cap"):
+            encoded.append({"sample_id": sid, "primary": None, "files": [],
+                            "file_integrity": [], "status": "omitted_by_cap"})
+            continue
         relative_files = []
         integrity = []
         relative_primary = None

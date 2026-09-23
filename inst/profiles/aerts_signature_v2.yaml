@@ -1,0 +1,26 @@
+setting:
+  binWidth: 25
+  resampledPixelSpacing: null
+  interpolator: sitkBSpline
+  normalize: false
+  force2D: false
+  label: 1
+  geometryTolerance: 1e-6
+  preCrop: true
+  padDistance: 5
+  additionalInfo: true
+
+featureClass:
+  firstorder:
+    - Energy
+  shape:
+    - Compactness2
+  glrlm:
+    - GrayLevelNonUniformity
+
+imageType:
+  Original: {}
+  Wavelet:
+    wavelet: coif1
+    start_level: 0
+    level: 1

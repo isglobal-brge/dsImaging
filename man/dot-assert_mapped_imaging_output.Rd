@@ -4,7 +4,13 @@
 \alias{.assert_mapped_imaging_output}
 \title{Validate a runner's exact per-sample output map and artifact confinement.}
 \usage{
-.assert_mapped_imaging_output(output_dir, asset_type, roster)
+.assert_mapped_imaging_output(
+  output_dir,
+  asset_type,
+  roster,
+  config = list(),
+  runner = NULL
+)
 }
 \description{
 Validate a runner's exact per-sample output map and artifact confinement.

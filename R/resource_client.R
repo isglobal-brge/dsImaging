@@ -312,7 +312,8 @@ ImagingDatasetResourceClient <- R6::R6Class(
   for (name in names(manifest$assets %||% list())) {
     asset <- manifest$assets[[name]]
     for (field in c("uri", "file", "path", "root", "manifest",
-                    "content_hash_index", "hash_index", "index_uri")) {
+                    "content_hash_index", "hash_index", "index_uri",
+                    "sample_manifests")) {
       remember(asset[[field]] %||% NULL,
                paste0("assets.", name, ".", field))
     }

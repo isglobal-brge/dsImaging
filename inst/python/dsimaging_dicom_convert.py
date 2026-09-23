@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exact single-file DICOM to NIfTI conversion runner for dsImaging."""
+"""Exact single-file or series DICOM to NIfTI conversion runner for dsImaging."""
 
 import argparse
 import os
@@ -7,7 +7,7 @@ import sys
 
 from dsimaging_utils import (
     cfg,
-    mapped_sample_files,
+    mapped_sample_groups,
     package_versions,
     sample_token,
     write_collection_output_manifest,
@@ -28,15 +28,14 @@ def main():
               file=sys.stderr)
         sys.exit(1)
     try:
-        samples = mapped_sample_files(
-            asset_name, "images", artifact_types=("image_root",),
-            extensions=(".dcm",),
+        samples = mapped_sample_groups(
+            asset_name, "images", extensions=(".dcm",),
         )
     except RuntimeError:
         print("ERROR: Admitted imaging inputs are unavailable", file=sys.stderr)
         sys.exit(1)
     if not samples:
-        print("ERROR: No admitted single-file DICOM samples found",
+        print("ERROR: No admitted DICOM samples found",
               file=sys.stderr)
         sys.exit(1)
 
@@ -44,9 +43,15 @@ def main():
     failures = 0
     output_samples = {}
     import SimpleITK as sitk
-    for src, sid in samples:
+    from dsimaging_dicom import read_object, read_series, series_image
+    for sources, sid in samples:
         try:
-            image = sitk.ReadImage(src)
+            if len(sources) == 1:
+                read_object(sources[0], sid)
+                image = sitk.ReadImage(sources[0])
+            else:
+                sources, _ = read_series(sources, sid)
+                image = series_image(sources)
             out_path = os.path.join(args.output, sample_token(sid) + ".nii.gz")
             sitk.WriteImage(image, out_path)
             manifest["samples"][sid] = {

@@ -1,3 +1,25 @@
+# dsImaging 0.5.0
+
+* Admit complete multi-slice DICOM, RTSTRUCT, RTDOSE/RTPLAN, whole-slide tiling
+  and conforming administrator-installed MONAI bundles through the DataSHIELD
+  surface. Secondary source maps and every series file are bound to the sealed
+  sample/patient roster, sizes and SHA-256. Ambiguous or incomplete inputs fail.
+* Publish one mask per sample for RT/MONAI, a controlled per-ROI dose table,
+  and private per-slide tile manifests and bodies. Public workflow/catalogue
+  responses expose no raw rows, paths or fan-out. Patient thresholds count
+  distinct canonical patients throughout.
+* Add QC `max_tiles` (default 64, range 1–1024), alongside `max_size` (default
+  192). Account for omitted thumbnails in the complete output map; keep the
+  unchanged local CSV and pseudonymous thumbnails server-side.
+* Preserve `aerts_signature_v1.yaml` byte-for-byte and describe it as
+  Aerts-inspired. Add `aerts_signature_v2` with the published Energy,
+  Compactness2 and original/wavelet-HLH GLRLM GrayLevelNonUniformity selection,
+  retaining the historical PyRadiomics settings.
+* Correct worker manifest asset-name comparison so real authorized workflow
+  submissions accept their exact maps. Synthetic admission, publication,
+  disclosure, QC and profile tests cover these contracts. No historical demo
+  was rerun.
+
 # dsImaging 0.4.0
 
 * Every collection or direct derivation now has one durable, public dsHPC

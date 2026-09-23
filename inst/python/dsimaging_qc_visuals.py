@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create low-resolution QC thumbnails and overlays for local review."""
+"""Create count-bounded QC thumbnails and a server-only local manifest."""
 
 import argparse
 import csv
@@ -11,7 +11,6 @@ from dsimaging_utils import (
     IMAGE_EXTS,
     MASK_EXTS,
     cfg,
-    cfg_int,
     mapped_sample_files,
     package_versions,
     write_collection_output_manifest,
@@ -81,7 +80,16 @@ def main():
 
     image_asset = cfg("image_asset", "images")
     mask_asset = cfg("mask_asset", "")
-    max_size = cfg_int("max_size", 192)
+    try:
+        max_size = float(cfg("max_size", 192))
+        max_tiles = float(cfg("max_tiles", 64))
+    except (TypeError, ValueError):
+        max_size = max_tiles = 0.0
+    if (not max_size.is_integer() or not max_tiles.is_integer()
+            or not 16 <= max_size <= 4096 or not 1 <= max_tiles <= 1024):
+        print("ERROR: QC thumbnail bounds are invalid", file=sys.stderr)
+        sys.exit(1)
+    max_size, max_tiles = int(max_size), int(max_tiles)
     try:
         images = dict((sid, path) for path, sid in mapped_sample_files(
             image_asset, "images", artifact_types=("image_root",),
@@ -100,7 +108,13 @@ def main():
 
     rows = []
     output_samples = {}
-    for idx, (sample_id, image_path) in enumerate(images.items(), start=1):
+    for idx, sample_id in enumerate(sorted(images), start=1):
+        if idx > max_tiles:
+            output_samples[sample_id] = {
+                "status": "omitted_by_cap", "primary": None, "files": []
+            }
+            continue
+        image_path = images[sample_id]
         arr = middle_slice(image_path)
         marr = mask_slice(masks[sample_id], arr.shape) if sample_id in masks else None
         name = public_name(sample_id, idx, anonymize=True) + ".png"
@@ -125,6 +139,7 @@ def main():
     write_json(os.path.join(args.output, "qc_visual_summary.json"), {
         "n_images": len(rows),
         "max_size": max_size,
+        "max_tiles": max_tiles,
         "anonymized_names": True,
         "versions": package_versions(["SimpleITK", "numpy", "PIL"]),
     })

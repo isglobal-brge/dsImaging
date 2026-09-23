@@ -24,17 +24,21 @@ external/HPC backend configured in `dsHPC`.
 - Immutable derivation hashes, aliases, lineage, and per-image generation state.
 - Image preprocessing runners for resampling, normalization, clamping/windowing,
   and float32 casting.
-- Exact single-file DICOM-to-NIfTI conversion through the admitted sample map.
+- Exact single-file and complete multi-slice DICOM-to-NIfTI conversion.
+- RTSTRUCT-to-mask conversion and per-ROI RTDOSE/RTPLAN tables.
+- Whole-slide tiling with private per-slide manifests and bounded tile output.
 - Spatial runners for resampling, registration, cropping, and N4 bias
   correction.
 - Segmentation runners: existing masks, CT lung threshold, LungMask,
-  TotalSegmentator, and nnU-Net v2.
+  TotalSegmentator, nnU-Net v2, and conforming administrator-installed MONAI bundles.
 - Mask/ROI operations: label selection, binarization, union, intersection,
   difference, morphology, connected components, and mask-to-image resampling.
 - QC metrics for images and masks, including size, spacing, intensity summaries,
   and mask volumes.
-- Collection-complete QC thumbnail/overlay artifacts with anonymized filenames
-  and size caps.
+- Server-side QC thumbnails/overlays with pseudonymous filenames, a size cap
+  (`max_size = 192`) and a count cap (`max_tiles = 64`, maximum 1024). The local
+  CSV lists rendered thumbnails and stays server-side; the output association
+  manifest accounts for every admitted sample, including cap omissions.
 - Image embedding tables using a deterministic local baseline, scheduled as
   GPU-optional so external HPC units can accelerate future model-backed
   embedding runners.
@@ -51,13 +55,74 @@ external/HPC backend configured in `dsHPC`.
   the client.
 - dsHPC publisher hooks that register job outputs as `dsImaging` assets.
 
-Multi-file DICOM-series conversion, RTSTRUCT/DICOM SEG conversion,
-RTDOSE/RTPLAN analysis, WSI tiling, and MONAI bundle inference remain available
-as site-maintained runner code but are deliberately unavailable through the
-analyst-facing DataSHIELD workflow. Those formats do not yet carry a verified
-one-to-one sample mapping through every input and output. They must remain
-fail-closed until that association is represented in the collection manifest
-and tested.
+Clinical workflows use the same complete sealed sample-to-patient roster as
+radiomics. Analysts receive opaque workflow/asset references and coarse status;
+images, masks, tiles, per-slide tile counts, ROI rows, local manifests and paths
+stay on the node. The complete dose table can be assigned to the authorized
+DataSHIELD session for analysis under downstream packages' disclosure controls.
+
+### Source association for DICOM, RT and slides
+
+The top-level `sample_manifests` and `content_hash_index` describe `images`.
+Each additional source asset (`dicom`, `rt_struct`, `rt_dose`, `rt_plan`, `wsi`)
+declares both tables under its asset entry, with one row for every admitted
+sample. For example:
+
+```yaml
+assets:
+  rt_dose:
+    kind: rt_dose_file
+    uri: /srv/store/datasets/study/source/rt_dose
+    sample_manifests:
+      uri: /srv/store/datasets/study/metadata/rt_dose_samples.csv
+      format: csv
+    content_hash_index:
+      uri: /srv/store/datasets/study/indexes/rt_dose.csv
+      format: csv
+```
+
+An indexed RTDOSE/RTPLAN asset URI is a directory/prefix of per-sample files.
+The sample table columns are `sample_id,source_kind,primary_uri,files_json,
+content_hash,n_files`; the content index columns are `sample_id,source_kind,uri,
+content_hash,size`. Single-file samples retain the existing mapping. A
+`dicom_series` row has empty `primary_uri`, a sample-directory `uri`, and
+`files_json` entries containing `path,role,content_hash,size` for **every** slice.
+Group sizes and hashes follow [DESIGN_ADMISSION.md](DESIGN_ADMISSION.md).
+All source association tables enter the collection seal. S3 files can also pin
+`version_id`. No filename-to-patient inference is permitted.
+
+Multi-slice DICOM requires canonical PatientID agreement, a single study/series/
+frame, consistent slice geometry and `NumberOfSeriesRelatedInstances` on every
+slice matching the exact file count. Missing counts, gaps, duplicate instances,
+mixed series and unsupported geometry are refused. Convert DICOM to a mapped
+NIfTI asset before generic image segmentation/radiomics. RTSTRUCT conversion
+checks its reference series and SOP instances and unions selected ROIs into one
+binary mask per sample. Dose analysis checks the dose-to-plan association and
+optional masks in physical coordinates; `whole_grid` and optional `mask` rows
+remain individual-level data.
+
+WSI accepts self-contained SVS/NDPI/TIFF or raster slides. `max_tiles` is a
+per-slide bound (default 2048); slides yielding zero accepted tiles still have
+a private manifest. Sidecar slide formats and DICOM SEG remain refused.
+MONAI bundles must be locally installed by the administrator, bind `image` and
+`output_dir` in their inference configuration, and produce exactly one mask
+matching each input geometry. Arbitrary Model Zoo bundles may need a site-owned
+adapter to meet this contract; missing or multiple masks fail publication.
+
+### Aerts profiles
+
+`aerts_signature_v1.yaml` is unchanged historical evidence: an Aerts-inspired
+four-feature profile selecting Energy, Compactness1 and original/wavelet-HLH
+GLRLM RunLengthNonUniformity. `aerts_signature_v2` selects the published four
+features: original Energy, Compactness2, original GLRLM GrayLevelNonUniformity
+and wavelet-HLH GLRLM GrayLevelNonUniformity, using the same bundled PyRadiomics
+settings. Compactness2 is sphericity cubed, as documented in the
+[original supplementary material](https://www.ebi.ac.uk/europepmc/webservices/rest/PMC4059926/supplementaryFiles)
+(Figure 1 and feature 16) and the
+[author-coauthored replication](https://pmc.ncbi.nlm.nih.gov/articles/PMC6805885/).
+The server applies the exact four-column selection for v2; the client selects
+it with `ds.imaging.radiomics.profile.aerts_signature(version = "v2")`.
+No historical demonstration or result has been rerun.
 
 ## Runtime Setup
 

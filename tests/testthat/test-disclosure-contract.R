@@ -808,9 +808,9 @@ test_that("capability metadata omits server paths and scheduler diagnostics", {
       "safe_profile", "s3://private/profile", "file:private-profile",
       "private profile"),
     .imaging_runner_health = function() data.frame(
-      runner = c("image_embeddings", "rt_dose_plan"),
-      path = c("/private/safe.yml", "/private/disabled.yml"),
-      present = c(TRUE, TRUE),
+      runner = c("image_embeddings", "rt_dose_plan", "unapproved_runner"),
+      path = c("/private/safe.yml", "/private/rt.yml", "/private/disabled.yml"),
+      present = c(TRUE, TRUE, TRUE),
       stringsAsFactors = FALSE),
     .package = "dsImaging"
   )
@@ -822,7 +822,8 @@ test_that("capability metadata omits server paths and scheduler diagnostics", {
   expect_equal(capabilities$models$task, c("task", "unknown"))
   expect_identical(capabilities$profiles, "safe_profile")
   expect_named(capabilities$runners, c("runner", "present"))
-  expect_identical(capabilities$runners$runner, "image_embeddings")
+  expect_identical(capabilities$runners$runner,
+                   c("image_embeddings", "rt_dose_plan"))
   expect_false(grepl("/private/", jsonlite::toJSON(capabilities), fixed = TRUE))
 })
 

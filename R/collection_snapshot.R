@@ -65,7 +65,8 @@
   }
   if (cleanup) on.exit(unlink(local, force = TRUE), add = TRUE)
   if (!file.exists(local) || dir.exists(local) ||
-      file.access(local, 4L) != 0L) {
+      file.access(local, 4L) != 0L ||
+      isTRUE(nzchar(Sys.readlink(local)))) {
     .snapshot_fail()
   }
   hash <- tryCatch(
@@ -82,6 +83,21 @@
   list(name = label, uri = uri, format = format, sha256 = hash, data = data)
 }
 
+# Check lexical components before normalization can hide a symbolic link.
+.snapshot_no_symlinks <- function(uri, root) {
+  root <- sub("/+$", "", root)
+  if (!startsWith(uri, paste0(root, "/"))) .snapshot_fail()
+  relative <- substring(uri, nchar(root) + 2L)
+  relative <- .snapshot_safe_relative_path(relative, directory = endsWith(uri, "/"))
+  current <- root
+  for (part in c("", strsplit(relative, "/", fixed = TRUE)[[1L]])) {
+    if (nzchar(part)) current <- file.path(current, part)
+    target <- suppressWarnings(Sys.readlink(current))
+    if (length(target) == 1L && !is.na(target) && nzchar(target)) .snapshot_fail()
+  }
+  invisible(TRUE)
+}
+
 .snapshot_relative_object <- function(uri, root, backend_type) {
   if (!.snapshot_scalar(uri) || !.snapshot_scalar(root)) .snapshot_fail()
   if (identical(backend_type, "s3")) {
@@ -95,6 +111,7 @@
     if (!startsWith(parsed$key, root_key)) .snapshot_fail()
     relative <- substring(parsed$key, nchar(root_key) + 1L)
   } else {
+    .snapshot_no_symlinks(uri, root)
     canonical <- function(path, must_work) {
       tryCatch(normalizePath(path, winslash = "/", mustWork = must_work),
                error = function(e) NULL)
@@ -125,7 +142,25 @@
         !grepl("^[a-z][a-z0-9_-]*$", role)) {
       .snapshot_fail()
     }
-    list(path = path, role = role)
+    record <- list(path = path, role = role)
+    if (!is.null(item$content_hash) || !is.null(item$size)) {
+      hash <- item$content_hash
+      size <- suppressWarnings(as.numeric(item$size))
+      if (!.snapshot_scalar(hash, max_bytes = 64L) ||
+          !grepl("^[0-9a-f]{64}$", hash) || length(size) != 1L ||
+          is.na(size) || !is.finite(size) || size < 0 || size %% 1 != 0) {
+        .snapshot_fail()
+      }
+      record$content_hash <- hash
+      record$size <- size
+    }
+    if (!is.null(item$version_id)) {
+      if (!.snapshot_scalar(item$version_id, max_bytes = 1024L)) {
+        .snapshot_fail()
+      }
+      record$version_id <- item$version_id
+    }
+    record
   })
   paths <- vapply(parsed, `[[`, character(1), "path")
   if (anyDuplicated(paths)) .snapshot_fail()
@@ -133,23 +168,43 @@
 }
 
 .new_imaging_collection_snapshot <- function(manifest, backend, admission) {
+  snapshot <- .snapshot_source_asset(manifest, backend, admission, "images")
+  sources <- list(images = snapshot)
+  for (name in setdiff(names(manifest$assets), "images")) {
+    asset <- manifest$assets[[name]]
+    if (is.null(asset$sample_manifests)) next
+    sources[[name]] <- .snapshot_source_asset(manifest, backend, admission, name)
+  }
+  if (length(sources) > 1L) {
+    snapshot$seal <- digest::digest(lapply(sources, `[[`, "seal"),
+                                     algo = "sha256", serialize = TRUE)
+  }
+  snapshot$records_by_asset <- lapply(sources, `[[`, "records")
+  snapshot
+}
+
+.snapshot_source_asset <- function(manifest, backend, admission, asset_name) {
   if (!is.list(manifest) || !inherits(backend, "dsimaging_backend") ||
       !is.list(admission)) {
     .snapshot_fail()
   }
-  image_asset <- (manifest$assets %||% list())$images
+  image_asset <- (manifest$assets %||% list())[[asset_name]]
   image_root <- image_asset$uri %||% NULL
   image_kind <- image_asset$kind %||% image_asset$type %||% NULL
   if (!is.list(image_asset) || !.snapshot_scalar(image_root) ||
-      !identical(image_kind, "image_root")) {
+      !image_kind %in% c("image_root", "dicom_series_root", "wsi_root",
+                         "rt_struct_root", "rt_dose_file", "rt_plan_file",
+                         "mask_root")) {
     .snapshot_fail()
   }
 
   metadata <- .snapshot_read_table(manifest$metadata, backend, "metadata")
   sample_manifests <- .snapshot_read_table(
-    manifest$sample_manifests, backend, "sample_manifests")
+    if (identical(asset_name, "images")) manifest$sample_manifests else
+      image_asset$sample_manifests, backend, "sample_manifests")
   content_index <- .snapshot_read_table(
-    manifest$content_hash_index, backend, "content_hash_index")
+    if (identical(asset_name, "images")) manifest$content_hash_index else
+      image_asset$content_hash_index, backend, "content_hash_index")
 
   meta <- metadata$data
   sm <- sample_manifests$data
@@ -165,8 +220,9 @@
   }
   ids <- admission$roster$sample_ids
   normalize_ids <- function(values) {
-    values <- .canonical_imaging_privacy_ids(values)
-    if (length(values) != length(ids) || anyNA(values) ||
+    original <- as.character(values)
+    values <- .canonical_imaging_privacy_ids(original)
+    if (!identical(original, values) || length(values) != length(ids) || anyNA(values) ||
         any(!nzchar(values)) || anyDuplicated(values) ||
         !identical(sort(unname(values), method = "radix"), ids)) {
       .snapshot_fail()
@@ -203,7 +259,7 @@
       any(!grepl("^[0-9a-f]{64}$", hashes))) {
     .snapshot_fail()
   }
-  if ("source_kind" %in% names(meta) &&
+  if (identical(asset_name, "images") && "source_kind" %in% names(meta) &&
       !identical(as.character(meta$source_kind), sm_kind)) {
     .snapshot_fail()
   }
@@ -227,7 +283,7 @@
       any(!is.finite(n_files)) || any(n_files < 1) || any(n_files %% 1 != 0)) {
     .snapshot_fail()
   }
-  if ("n_files" %in% names(meta) &&
+  if (identical(asset_name, "images") && "n_files" %in% names(meta) &&
       !identical(as.numeric(meta$n_files), n_files)) {
     .snapshot_fail()
   }
@@ -254,11 +310,39 @@
     } else {
       prefix <- paste0(relative[[i]], "/")
       if ((!is.na(primary[[i]]) && nzchar(primary[[i]])) ||
-          any(!startsWith(paths, prefix))) {
+          any(!startsWith(paths, prefix)) ||
+          any(!vapply(files[[i]], function(file) {
+            !is.null(file$content_hash) && !is.null(file$size)
+          }, logical(1)))) {
         .snapshot_fail()
       }
+      ordered <- files[[i]][order(paths, method = "radix")]
+      group_size <- sum(vapply(ordered, `[[`, numeric(1), "size"))
+      payload <- paste0(vapply(ordered, function(file) paste0(
+        file$path, "\t", format(file$size, scientific = FALSE, trim = TRUE,
+                                 digits = 22L),
+        "\t", file$content_hash, "\n"), character(1)), collapse = "")
+      group_hash <- digest::digest(enc2utf8(payload), algo = "sha256",
+                                    serialize = FALSE)
+      if (sizes[[i]] != group_size || !identical(hashes[[i]], group_hash)) {
+        .snapshot_fail()
+      }
+      files[[i]] <- ordered
+      expected <- vapply(ordered, `[[`, character(1), "path")
+      actual <- if (identical(backend$type, "file")) {
+        if (!dir.exists(index_uris[[i]])) .snapshot_fail()
+        list.files(index_uris[[i]], recursive = TRUE, full.names = TRUE,
+                   all.files = TRUE, no.. = TRUE)
+      } else backend_list(backend, paste0(sub("/+$", "", index_uris[[i]]), "/"))
+      actual <- vapply(actual, .snapshot_relative_object, character(1),
+        root = image_root, backend_type = backend$type)
+      if (!setequal(expected, actual)) .snapshot_fail()
     }
   }
+  all_paths <- unlist(lapply(files, function(group) {
+    vapply(group, `[[`, character(1), "path")
+  }), use.names = FALSE)
+  if (anyDuplicated(all_paths)) .snapshot_fail()
 
   artifacts <- list(
     metadata = metadata[c("uri", "format", "sha256")],
@@ -267,7 +351,8 @@
   )
   manifest_hash <- digest::digest(manifest, algo = "sha256", serialize = TRUE)
   records <- lapply(seq_along(ids), function(i) list(
-    sample_id = ids[[i]], source_kind = sm_kind[[i]],
+    sample_id = ids[[i]], privacy_id = privacy_ids[[i]],
+    source_kind = sm_kind[[i]],
     uri = index_uris[[i]], relative_path = relative[[i]],
     content_hash = hashes[[i]], size = as.numeric(sizes[[i]]),
     version_id = if (is.na(version_ids[[i]])) NULL else version_ids[[i]],

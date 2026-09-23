@@ -2,14 +2,16 @@
 """Basic WSI/pathology tiling runner."""
 
 import argparse
-import csv
 import os
 import sys
 
-from dsimaging_utils import cfg, cfg_bool, cfg_float, cfg_int, image_files, package_versions, resolve_asset_path, safe_id, write_json
+from dsimaging_utils import (
+    cfg, cfg_bool, cfg_float, cfg_int, mapped_sample_files, package_versions,
+    sample_token, write_collection_output_manifest, write_json,
+)
 
 
-WSI_EXTS = (".svs", ".tif", ".tiff", ".ndpi", ".mrxs", ".png", ".jpg", ".jpeg")
+WSI_EXTS = (".svs", ".tif", ".tiff", ".ndpi", ".png", ".jpg", ".jpeg")
 
 
 def open_slide(path):
@@ -49,79 +51,61 @@ def main():
     args = parser.parse_args()
     os.makedirs(args.output, exist_ok=True)
 
-    wsi_root = resolve_asset_path(cfg("wsi_asset", "wsi"), "wsi", cfg("wsi_root"))
-    tile_size = cfg_int("tile_size", 512)
-    stride = cfg_int("stride", tile_size)
-    max_tiles = cfg_int("max_tiles", 2048)
-    tissue_threshold = cfg_float("tissue_threshold", 0.10)
-    write_tiles = cfg_bool("write_tiles", True)
-    tiles_dir = os.path.join(args.output, "tiles")
-    if write_tiles:
-        os.makedirs(tiles_dir, exist_ok=True)
-
-    slides = image_files(wsi_root, extensions=WSI_EXTS)
-    if not slides:
-        print("ERROR: No WSI/pathology images found", file=sys.stderr)
+    try:
+        slides = mapped_sample_files(cfg("wsi_asset", "wsi"), "wsi",
+            extensions=WSI_EXTS)
+        tile_size = cfg_int("tile_size", 512)
+        stride = cfg_int("stride", tile_size)
+        max_tiles = cfg_int("max_tiles", 2048)
+        tissue_threshold = cfg_float("tissue_threshold", 0.10)
+        write_tiles = cfg_bool("write_tiles", True)
+        if (not 16 <= tile_size <= 4096 or not 1 <= stride <= 4096 or
+                not 1 <= max_tiles <= 100000 or not 0 <= tissue_threshold <= 1):
+            raise RuntimeError("Invalid tiling options")
+        outputs = {}
+        total_tiles = 0
+        for slide_path, sid in slides:
+            token = sample_token(sid)
+            slide_dir = os.path.join(args.output, token)
+            os.mkdir(slide_dir)
+            handle = open_slide(slide_path)
+            rows = []
+            files = []
+            try:
+                width, height = dimensions(handle)
+                for y in range(0, max(1, height - tile_size + 1), stride):
+                    for x in range(0, max(1, width - tile_size + 1), stride):
+                        if len(rows) >= max_tiles:
+                            break
+                        tile = read_region(handle, x, y, tile_size)
+                        frac = tissue_fraction(tile)
+                        if frac < tissue_threshold:
+                            continue
+                        tile_name = f"tile_{len(rows):06d}.png"
+                        tile_path = os.path.join(slide_dir, tile_name)
+                        if write_tiles:
+                            tile.save(tile_path, format="PNG", optimize=True)
+                            files.append(tile_path)
+                        rows.append({"x": x, "y": y, "tile_size": tile_size,
+                            "tissue_fraction": frac,
+                            "tile_file": token + "/" + tile_name if write_tiles else ""})
+                    if len(rows) >= max_tiles:
+                        break
+            finally:
+                handle[1].close()
+            manifest = os.path.join(slide_dir, "tile_manifest.json")
+            write_json(manifest, {"sample_id": sid, "n_tiles": len(rows), "tiles": rows})
+            outputs[sid] = {"primary": manifest, "files": [manifest] + files}
+            total_tiles += len(rows)
+        write_collection_output_manifest(args.output, "wsi_tile_root", outputs)
+        write_json(os.path.join(args.output, "wsi_tiling_summary.json"), {
+            "n_slides": len(slides), "n_tiles": total_tiles,
+            "max_tiles_per_slide": max_tiles, "tile_size": tile_size, "stride": stride,
+            "write_tiles": write_tiles, "versions": package_versions(["openslide", "PIL", "numpy"]),
+        })
+    except Exception:
+        print("ERROR: Exact slide association or tiling failed", file=sys.stderr)
         sys.exit(1)
-
-    rows = []
-    for slide_path in slides:
-        slide_id = safe_id(slide_path)
-        handle = open_slide(slide_path)
-        width, height = dimensions(handle)
-        n_for_slide = 0
-        for y in range(0, max(1, height - tile_size + 1), stride):
-            for x in range(0, max(1, width - tile_size + 1), stride):
-                if len(rows) >= max_tiles:
-                    break
-                tile = read_region(handle, x, y, tile_size)
-                frac = tissue_fraction(tile)
-                if frac < tissue_threshold:
-                    continue
-                tile_name = f"{slide_id}_x{x}_y{y}.png"
-                tile_path = os.path.join(tiles_dir, tile_name)
-                if write_tiles:
-                    tile.save(tile_path, format="PNG", optimize=True)
-                rows.append({
-                    "slide_id": slide_id,
-                    "x": x,
-                    "y": y,
-                    "tile_size": tile_size,
-                    "tissue_fraction": frac,
-                    "tile_file": os.path.join("tiles", tile_name) if write_tiles else "",
-                })
-                n_for_slide += 1
-            if len(rows) >= max_tiles:
-                break
-        if n_for_slide == 0:
-            tile = read_region(handle, 0, 0, min(tile_size, width, height))
-            tile_name = f"{slide_id}_thumbnail.png"
-            tile_path = os.path.join(tiles_dir, tile_name)
-            if write_tiles:
-                tile.save(tile_path, format="PNG", optimize=True)
-            rows.append({
-                "slide_id": slide_id,
-                "x": 0,
-                "y": 0,
-                "tile_size": min(tile_size, width, height),
-                "tissue_fraction": tissue_fraction(tile),
-                "tile_file": os.path.join("tiles", tile_name) if write_tiles else "",
-            })
-
-    manifest = os.path.join(args.output, "tile_manifest.csv")
-    with open(manifest, "w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=[
-            "slide_id", "x", "y", "tile_size", "tissue_fraction", "tile_file"])
-        writer.writeheader()
-        writer.writerows(rows)
-    write_json(os.path.join(args.output, "wsi_tiling_summary.json"), {
-        "n_slides": len(slides),
-        "n_tiles": len(rows),
-        "tile_size": tile_size,
-        "stride": stride,
-        "write_tiles": write_tiles,
-        "versions": package_versions(["openslide", "PIL", "numpy"]),
-    })
 
 
 if __name__ == "__main__":

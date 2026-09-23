@@ -311,16 +311,15 @@ test_that("workflow configs reject analyst paths and orchestration controls", {
     "unsupported field", fixed = TRUE)
 })
 
-test_that("workflows without exact patient association fail closed", {
+test_that("new workflows expose only exact bounded contracts", {
   for (runner in c("rt_convert", "rt_dose_plan", "wsi_tile")) {
-    expect_error(
-      dsImaging:::.imaging_runner_contract(runner),
-      "exact admitted sample mapping", fixed = TRUE)
+    expect_type(dsImaging:::.imaging_runner_contract(runner), "list")
+    expect_error(dsImaging:::.imaging_runner_config(runner,
+      list(sample_id = "patient-a")), "unsupported field", fixed = TRUE)
   }
-  expect_error(
-    dsImaging:::.imaging_segmenter_spec(list(
-      provider = "monai", bundle_name = "example")),
-    "exact per-sample contract", fixed = TRUE)
+  expect_identical(dsImaging:::.imaging_segmenter_spec(list(
+    provider = "monai", bundle_name = "example")),
+    list(provider = "monai", bundle_name = "example"))
   expect_error(
     dsImaging:::.imaging_runner_config(
       "imaging_qc_visuals",

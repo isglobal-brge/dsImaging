@@ -234,6 +234,7 @@
   project_record <- function(record) {
     projected <- list(
       sample_id = record$sample_id,
+      privacy_id = record$privacy_id,
       source_kind = record$source_kind,
       uri = record$uri,
       relative_path = record$relative_path,
@@ -241,6 +242,9 @@
       size = record$size,
       n_files = record$n_files
     )
+    if (identical(record$source_kind, "dicom_series")) {
+      projected$files <- record$files
+    }
     if (!is.null(record$version_id) && !is.na(record$version_id) &&
         nzchar(as.character(record$version_id))) {
       projected$version_id <- as.character(record$version_id)
@@ -249,16 +253,25 @@
   }
 
   records_by_asset <- list()
+  source_records <- snapshot$records_by_asset %||%
+    list(images = snapshot$records)
+  for (asset_name in intersect(names(worker_assets), names(source_records))) {
+    asset <- worker_assets[[asset_name]]
+    source <- source_assets[[asset_name]]
+    if (is.list(asset) && is.list(source) &&
+        identical(asset$uri, source$uri)) {
+      records_by_asset[[asset_name]] <- lapply(
+        source_records[[asset_name]], project_record)
+    }
+  }
+  # Preserve documented aliases of the primary source root.
   image_uri <- (source_assets$images %||% list())$uri %||% NULL
-  image_records <- lapply(snapshot$records, project_record)
-  for (asset_name in names(worker_assets)) {
+  for (asset_name in setdiff(names(worker_assets), names(records_by_asset))) {
     asset <- worker_assets[[asset_name]]
     kind <- if (is.list(asset)) asset$kind %||% asset$type %||% NULL else NULL
-    if (is.list(asset) && is.character(asset$uri) &&
-        length(asset$uri) == 1L && !is.na(asset$uri) &&
-        identical(kind, "image_root") &&
-        identical(asset$uri, image_uri)) {
-      records_by_asset[[asset_name]] <- image_records
+    if (is.list(asset) && identical(kind, "image_root") &&
+        !is.null(image_uri) && identical(asset$uri, image_uri)) {
+      records_by_asset[[asset_name]] <- lapply(snapshot$records, project_record)
     }
   }
 
@@ -451,9 +464,9 @@
     unlist(asset_names, use.names = FALSE)))
   normalized_asset_names <- normalized_asset_names[
     !is.na(normalized_asset_names) & nzchar(normalized_asset_names)]
-  normalized_asset_names <- vapply(
+  normalized_asset_names <- unname(vapply(
     normalized_asset_names, .imaging_safe_name, character(1),
-    name = "asset name")
+    name = "asset name"))
   if (is.null(worker_manifest)) {
     context_manifest <- .imaging_worker_manifest(
       authorized, normalized_asset_names)

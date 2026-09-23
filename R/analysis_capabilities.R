@@ -20,7 +20,8 @@ imagingCapabilitiesDS <- function() {
   })
   exposed_runners <- c(
     "pyradiomics_extract", "lungmask_infer", "ct_lung_threshold",
-    "totalsegmentator_infer", "nnunetv2_predict", "dicom_convert",
+    "totalsegmentator_infer", "nnunetv2_predict", "monai_bundle_infer",
+    "dicom_convert", "rt_convert", "rt_dose_plan", "wsi_tile",
     "dsimaging_image_preprocess",
     "mask_ops", "imaging_qc_metrics", "imaging_qc_visuals",
     "image_spatial", "image_embeddings")

@@ -7,7 +7,8 @@
 .assert_publishable_imaging_feature_asset(
   output_dir,
   asset_type,
-  config = list()
+  config = list(),
+  runner = NULL
 )
 }
 \description{

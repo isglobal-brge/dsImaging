@@ -381,11 +381,10 @@ imagingProcessQcCollectionDS <- function(request_encoded) {
     owner_env = owner_env)
 }
 
-#' Submit an exact single-file DICOM conversion workflow
+#' Submit an exactly mapped DICOM conversion workflow
 #'
-#' Enhanced or ordinary single-file DICOM samples are mapped through the
-#' admitted collection snapshot. Multi-file DICOM series remain fail-closed
-#' until a volumetric reader preserves that same exact sample association.
+#' Single-file DICOM and complete multi-slice series are mapped through the
+#' admitted collection snapshot and validated before conversion.
 #' @param request_encoded B64/JSON request payload.
 #' @return A job handle assigned server-side.
 #' @export
@@ -997,11 +996,13 @@ imagingDescribeProfileDS <- function(profile_name) {
   }
   # Admin YAML is configuration, not public metadata. Project only a fixed
   # structural schema and never echo arbitrary keys, paths, or secret hints.
-  list(
+  out <- list(
     name = profile_name,
     feature_classes = safe_names(feature_classes),
     image_types = safe_names(image_types)
   )
+  out$metadata <- .aerts_profile_metadata(profile_name)
+  out
 }
 
 #' List radiomics profiles
@@ -1197,12 +1198,8 @@ imagingListProfilesDS <- function() {
                           "min_voxels"),
     nnunetv2 = c("provider", "model_name", "fold"),
     nnunetv2_predict = c("provider", "model_name", "fold"),
-    monai = stop(paste(
-      "MONAI segmentation is unavailable through DataSHIELD until its",
-      "output path has an exact per-sample contract."), call. = FALSE),
-    monai_bundle_infer = stop(paste(
-      "MONAI segmentation is unavailable through DataSHIELD until its",
-      "output path has an exact per-sample contract."), call. = FALSE),
+    monai = c("provider", "bundle_name"),
+    monai_bundle_infer = c("provider", "bundle_name"),
     stop("Unknown segmentation provider.", call. = FALSE))
   segmenter <- .imaging_allowed_list(segmenter, allowed, "segmenter")
   out <- list(provider = provider)
@@ -1278,6 +1275,15 @@ imagingListProfilesDS <- function() {
       profile$selected_features, "selected_features", max_items = 512L),
       ",", fixed = TRUE)[[1L]]
   }
+  if (identical(name, "aerts_signature_v2")) {
+    selected <- .aerts_profile_metadata(name)$selected_features
+    if (!is.null(out$selected_features) &&
+        !identical(out$selected_features, selected)) {
+      stop("aerts_signature_v2 requires its published four-feature selection.",
+           call. = FALSE)
+    }
+    out$selected_features <- selected
+  }
   if (!is.null(profile$kernel_radius)) out$kernel_radius <-
     .imaging_scalar_number(profile$kernel_radius, "kernel_radius",
       min = 1, max = 100, integer = TRUE)
@@ -1287,12 +1293,16 @@ imagingListProfilesDS <- function() {
 #' Server contracts for the generic clinical runner entry point
 #' @keywords internal
 .imaging_runner_contract <- function(runner) {
-  if (runner %in% c("rt_convert", "rt_dose_plan", "wsi_tile")) {
-    stop(paste(
-      "Runner is unavailable through DataSHIELD until its inputs have an",
-      "exact admitted sample mapping."), call. = FALSE)
-  }
   contracts <- list(
+    rt_convert = list(fields = c("rt_asset", "dicom_asset", "rois"),
+      assets = c("rt_asset", "dicom_asset"), asset_type = "mask_root",
+      tag = "rt_convert"),
+    rt_dose_plan = list(fields = c("dose_asset", "plan_asset", "mask_asset"),
+      assets = c("dose_asset", "plan_asset", "mask_asset"),
+      asset_type = "dose_table", tag = "rt_dose_plan"),
+    wsi_tile = list(fields = c("wsi_asset", "tile_size", "stride", "max_tiles",
+      "tissue_threshold", "write_tiles"), assets = "wsi_asset",
+      asset_type = "wsi_tile_root", tag = "wsi_tile"),
     dicom_convert = list(fields = c("dicom_asset", "converter"),
       assets = "dicom_asset", asset_type = "image_root", tag = "dicom_convert"),
     image_preprocess = list(fields = c("image_asset", "operations", "spacing",
@@ -1307,7 +1317,7 @@ imagingListProfilesDS <- function() {
       assets = c("image_asset", "mask_asset"), asset_type = "qc_table",
       tag = "qc_metrics"),
     imaging_qc_visuals = list(fields = c("image_asset", "mask_asset",
-      "max_size"),
+      "max_size", "max_tiles"),
       assets = c("image_asset", "mask_asset"), asset_type = "qc_visual_asset",
       tag = "qc_visuals"),
     image_spatial = list(fields = c("image_asset", "operations", "mask_asset",
@@ -1328,11 +1338,17 @@ imagingListProfilesDS <- function() {
   contract <- .imaging_runner_contract(runner)
   config <- .imaging_allowed_list(config, contract$fields, "runner config")
   defaults <- switch(runner,
+    rt_convert = list(rt_asset = "rt_struct", dicom_asset = "dicom"),
+    rt_dose_plan = list(dose_asset = "rt_dose", plan_asset = "rt_plan"),
+    wsi_tile = list(wsi_asset = "wsi", tile_size = 512L,
+      stride = config$tile_size %||% 512L, max_tiles = 2048L,
+      tissue_threshold = 0.10, write_tiles = TRUE),
     dicom_convert = list(dicom_asset = "images", converter = "simpleitk"),
     image_preprocess = list(image_asset = "images", operations = "float32"),
     mask_ops = list(mask_asset = "masks"),
     imaging_qc_metrics = list(image_asset = "images"),
-    imaging_qc_visuals = list(image_asset = "images"),
+    imaging_qc_visuals = list(image_asset = "images", max_size = 192L,
+      max_tiles = 64L),
     image_spatial = list(image_asset = "images", operations = "resample"),
     image_embeddings = list(image_asset = "images",
       model = "intensity_histogram", bins = 32L))
@@ -1345,6 +1361,12 @@ imagingListProfilesDS <- function() {
   }
   if (identical(runner, "dicom_convert") && !is.null(out$converter)) {
     out$converter <- match.arg(as.character(out$converter), "simpleitk")
+  }
+  if (identical(runner, "rt_convert") && !is.null(out$rois)) {
+    out$rois <- .imaging_csv_values(out$rois, "rois")
+  }
+  if (identical(runner, "wsi_tile")) {
+    out$write_tiles <- .imaging_scalar_logical(out$write_tiles, "write_tiles")
   }
   operation_fields <- switch(runner,
     image_preprocess = list(field = "operations", values = c("resample",
@@ -1378,7 +1400,9 @@ imagingListProfilesDS <- function() {
     upper = c(-1e12, 1e12, 0), threshold = c(-1e12, 1e12, 0),
     radius = c(0, 10000, 1), min_voxels = c(1, 1e12, 1),
     max_components = c(1, 1e6, 1), max_size = c(16, 4096, 1),
-    bins = c(2, 4096, 1)
+    bins = c(2, 4096, 1), tile_size = c(16, 4096, 1),
+    stride = c(1, 4096, 1), tissue_threshold = c(0, 1, 0),
+    max_tiles = c(1, if (identical(runner, "wsi_tile")) 100000 else 1024, 1)
   )
   csv_numeric <- c("spacing", "crop_size")
   for (field in intersect(names(numeric_fields), names(out))) {

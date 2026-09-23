@@ -78,8 +78,12 @@ identify it as an Aerts-inspired four-feature historical profile: Energy,
 Compactness1, original GLRLM RunLengthNonUniformity and wavelet-HLH GLRLM
 RunLengthNonUniformity. A separate `aerts_signature_v2` will select the published
 Energy, Compactness and original/wavelet-HLH GLRLM GrayLevelNonUniformity,
-using the same PyRadiomics settings; the Compactness implementation will be
-identified explicitly against the primary publication. No historical demo is
+using the same PyRadiomics settings. Compactness is implemented as
+Compactness2 (sphericity cubed), identified in Figure 1 and feature 16 of the
+original supplementary material:
+<https://www.ebi.ac.uk/europepmc/webservices/rest/PMC4059926/supplementaryFiles>.
+The author-coauthored replication also states this mapping:
+<https://pmc.ncbi.nlm.nih.gov/articles/PMC6805885/>. No historical demo is
 rerun or rewritten.
 
 ## Verification

@@ -1,27 +1,17 @@
 #!/usr/bin/env python3
-"""MONAI bundle inference runner for dsImaging.
+"""MONAI inference with an exact image and mask contract for every sample."""
 
-Uses MONAI Model Zoo bundles for segmentation.
-"""
-import argparse, json, os, sys
+import argparse
+import json
+import os
+import re
+import sys
+import tempfile
 
 from dsimaging_utils import (
-    image_files,
-    package_versions,
-    resolve_asset_path,
-    sample_token,
-    strip_extensions,
+    IMAGE_EXTS, cfg, mapped_sample_files, package_versions,
+    sample_token, validate_input_file, write_collection_output_manifest, write_json,
 )
-
-
-def find_images(input_dir):
-    root = resolve_asset_path("images", "images")
-    images = image_files(root)
-    if images:
-        return [(path, strip_extensions(os.path.basename(path))) for path in images]
-    return [(os.path.join(input_dir, f), os.path.splitext(f)[0])
-            for f in sorted(os.listdir(input_dir))
-            if not f.startswith(".") and os.path.isfile(os.path.join(input_dir, f))]
 
 
 def main():
@@ -29,83 +19,89 @@ def main():
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--bundle", required=True)
-    parser.add_argument("--image", default=None,
-                        help="Single image path (single-image mode)")
-    parser.add_argument("--sample-id", default=None,
-                        help="Sample identifier (single-image mode)")
+    parser.add_argument("--image", default=None)
+    parser.add_argument("--sample-id", default=None)
     args = parser.parse_args()
-
-    models_dir = os.environ.get("DSIMAGING_MODELS", "/var/lib/dsimaging/models")
-    bundle_dir = os.path.join(models_dir, "monai", args.bundle)
-
-    print(f"MONAI bundle inference")
-    print(f"  Bundle: {args.bundle}")
-    print(f"  Bundle path: {bundle_dir}")
-
-    if not os.path.isdir(bundle_dir):
-        print(f"ERROR: Bundle not found at {bundle_dir}", file=sys.stderr)
-        print("Install with: dsImaging::install_model('monai', '<bundle_name>')", file=sys.stderr)
-        sys.exit(1)
-
-    # Merge CLI args with env vars (dsHPC sets DSHPC_CFG_* from config)
-    image = args.image or os.environ.get("DSHPC_CFG_IMAGE")
-    sample_id = getattr(args, "sample_id", None) or os.environ.get("DSHPC_CFG_SAMPLE_ID")
-
-    if image:
-        sid = sample_id or os.path.splitext(os.path.basename(image))[0]
-        images = [(image, sid)]
-        print("  Single-image mode")
-    else:
-        images = find_images(args.input)
-
-    print(f"  Found {len(images)} images")
     os.makedirs(args.output, exist_ok=True)
+    try:
+        import numpy as np
+        import SimpleITK as sitk
+        from monai.bundle import run
 
-    from monai.bundle import run
-
-    results = []
-    for img_path, sample_id in images:
-        try:
-            print("  Inferring admitted image")
-            out_path = os.path.join(
-                args.output, f"{sample_token(sample_id)}_seg.nii.gz"
-            )
-            run(
-                runner_id="inference",
-                meta_file=os.path.join(bundle_dir, "configs", "metadata.json"),
-                config_file=os.path.join(bundle_dir, "configs", "inference.json"),
-                logging_file=os.path.join(bundle_dir, "configs", "logging.conf"),
-                bundle_root=bundle_dir,
-                image=img_path,
-                output_dir=os.path.dirname(out_path),
-            )
-            results.append({"sample_id": sample_id, "status": "done"})
-        except Exception as e:
-            print("  FAILED: admitted image inference failed", file=sys.stderr)
-            results.append({"sample_id": sample_id, "status": "failed", "error": str(e)})
-
-    summary = {"n_total": len(images), "n_done": sum(1 for r in results if r["status"] == "done"),
-               "n_failed": sum(1 for r in results if r["status"] == "failed"), "bundle": args.bundle,
-               "versions": package_versions(["monai", "SimpleITK", "numpy", "torch"])}
-    with open(os.path.join(args.output, "segmentation_summary.json"), "w") as f:
-        json.dump(summary, f, indent=2)
-
-    # Write seg_manifest.json
-    seg_manifest = {"provider": "monai", "bundle": args.bundle, "samples": {}}
-    for r in results:
-        sid = r["sample_id"]
-        if r["status"] == "done":
-            mask_path = os.path.join(
-                args.output, f"{sample_token(sid)}_seg.nii.gz"
-            )
-            seg_manifest["samples"][sid] = {
-                "sample_id": sid, "primary_mask": mask_path,
-                "mask_files": [mask_path], "status": "done"
-            }
-    with open(os.path.join(args.output, "seg_manifest.json"), "w") as f:
-        json.dump(seg_manifest, f, indent=2)
-
-    print(f"  Done: {summary['n_done']}/{summary['n_total']}")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", args.bundle) or ".." in args.bundle:
+            raise RuntimeError("Invalid MONAI bundle name")
+        bundle = os.path.join(os.environ.get("DSIMAGING_MODELS", "/var/lib/dsimaging/models"),
+                              "monai", args.bundle)
+        inference_path = os.path.join(bundle, "configs", "inference.json")
+        with open(inference_path) as handle:
+            config = json.load(handle)
+        if not isinstance(config, dict) or not {"image", "output_dir", "run"}.issubset(config):
+            raise RuntimeError("MONAI bundle lacks the dsImaging input/output binding contract")
+        single_image = args.image or cfg("image")
+        sid = args.sample_id or cfg("sample_id")
+        collection_mode = not bool(single_image)
+        if single_image:
+            if not sid:
+                raise RuntimeError("Single-image mode requires sample_id")
+            validate_input_file(single_image, IMAGE_EXTS)
+            images = [(single_image, sid)]
+        else:
+            images = mapped_sample_files(cfg("image_asset", "images"), "images",
+                artifact_types=("image_root",), extensions=IMAGE_EXTS)
+        outputs = {}
+        seg_samples = {}
+        for image_path, sid in images:
+            token = sample_token(sid)
+            if image_path.lower().endswith(".dcm"):
+                from dsimaging_dicom import read_object
+                read_object(image_path, sid)
+            source = sitk.ReadImage(image_path)
+            with tempfile.TemporaryDirectory(prefix=".monai-", dir=args.output) as stage:
+                # A pseudonymous local copy keeps source filenames out of bundle outputs.
+                input_path = os.path.join(stage, token + ".nii.gz")
+                sitk.WriteImage(source, input_path)
+                output_root = os.path.join(stage, "output")
+                os.mkdir(output_root)
+                run(run_id="run", meta_file=os.path.join(bundle, "configs", "metadata.json"),
+                    config_file=inference_path, bundle_root=bundle,
+                    image=input_path, output_dir=output_root)
+                masks = []
+                for base, directories, filenames in os.walk(stage):
+                    if any(os.path.islink(os.path.join(base, name))
+                           for name in directories + filenames):
+                        raise RuntimeError("MONAI output contains a symlink")
+                    masks.extend(os.path.join(base, name) for name in filenames
+                                 if name.lower().endswith((".nii", ".nii.gz")) and
+                                 os.path.join(base, name) != input_path)
+                if len(masks) != 1 or os.path.islink(masks[0]):
+                    raise RuntimeError("MONAI did not produce exactly one mask")
+                real = os.path.realpath(masks[0])
+                if os.path.commonpath([os.path.realpath(output_root), real]) != os.path.realpath(output_root):
+                    raise RuntimeError("MONAI mask leaves the sample output directory")
+                mask = sitk.ReadImage(real)
+                if (source.GetSize() != mask.GetSize() or
+                        not np.allclose(source.GetSpacing(), mask.GetSpacing(), atol=1e-5) or
+                        not np.allclose(source.GetOrigin(), mask.GetOrigin(), atol=1e-4) or
+                        not np.allclose(source.GetDirection(), mask.GetDirection(), atol=1e-5)):
+                    raise RuntimeError("MONAI mask geometry does not match its sample")
+                array = sitk.GetArrayFromImage(mask)
+                if not np.all(np.isfinite(array)) or np.any(array < 0) or not np.all(array == np.floor(array)):
+                    raise RuntimeError("MONAI output is not a discrete segmentation mask")
+                final = os.path.join(args.output, token + "_seg.nii.gz")
+                sitk.WriteImage(mask, final)
+            outputs[sid] = {"primary": final, "files": [final]}
+            seg_samples[sid] = {"sample_id": sid, "primary_mask": final,
+                                "mask_files": [final], "status": "done"}
+        if collection_mode:
+            write_collection_output_manifest(args.output, "mask_root", outputs)
+        write_json(os.path.join(args.output, "seg_manifest.json"), {
+            "provider": "monai", "bundle": args.bundle, "samples": seg_samples})
+        write_json(os.path.join(args.output, "segmentation_summary.json"), {
+            "n_total": len(images), "n_done": len(images), "n_failed": 0,
+            "bundle": args.bundle, "versions": package_versions(["monai", "SimpleITK", "numpy", "torch"])})
+    except Exception:
+        print("ERROR: Exact MONAI input/output association or inference failed", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

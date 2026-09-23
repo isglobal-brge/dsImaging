@@ -31,7 +31,7 @@
   provenance$output <- .imaging_output_metadata(output_dir)
   scope <- .imaging_publisher_scope(db, job_id)
   collection_seal <- .assert_publishable_imaging_feature_asset(
-    output_dir, asset_type, cfg)
+    output_dir, asset_type, cfg, step$runner)
 
   asset_id <- register_derived_asset(
     dataset_id = dataset_id,
@@ -88,7 +88,7 @@
   provenance$output <- .imaging_output_metadata(output_dir)
   scope <- .imaging_publisher_scope(db, job_id)
   collection_seal <- .assert_publishable_imaging_feature_asset(
-    output_dir, asset_type, cfg)
+    output_dir, asset_type, cfg, step$runner)
 
   asset_id <- register_derived_asset(
     dataset_id = dataset_id,
@@ -114,10 +114,11 @@
 #' Validate collection cardinality before an analytical asset enters catalog.
 #' @keywords internal
 .assert_publishable_imaging_feature_asset <- function(output_dir, asset_type,
-                                                      config = list()) {
+                                                      config = list(),
+                                                      runner = NULL) {
   feature_kinds <- c("radiomics_collection", "feature_table", "qc_table",
     "dose_table", "embedding_table")
-  mapped_kinds <- c("image_root", "mask_root", "qc_visual_asset")
+  mapped_kinds <- c("image_root", "mask_root", "qc_visual_asset", "wsi_tile_root")
   if (!asset_type %in% c(feature_kinds, mapped_kinds)) {
     stop("Imaging publication type is not supported.", call. = FALSE)
   }
@@ -152,7 +153,7 @@
     privacy_roster = admission$roster)
   if (asset_type %in% mapped_kinds) {
     .assert_mapped_imaging_output(output_dir, asset_type,
-                                  admission$roster)
+                                  admission$roster, config, runner)
     return(invisible(collection_seal))
   }
 
@@ -162,27 +163,43 @@
   if (length(tables) != 1L) {
     stop("Feature publication output is unavailable.", call. = FALSE)
   }
-  asset <- list(path_or_root = output_dir)
+  asset <- list(path_or_root = output_dir, kind = asset_type)
   feature_data <- tryCatch(
     .read_feature_asset(asset, manifest$dataset_id, resolved = authorized),
     error = function(e) NULL)
   if (is.null(feature_data)) {
     stop("Feature publication output is unavailable.", call. = FALSE)
   }
-  .assert_feature_asset_privacy(feature_data, authorized,
-    context = "published imaging feature asset")
+  if (identical(asset_type, "dose_table")) {
+    .assert_dose_asset_privacy(feature_data, authorized)
+    has_masks <- any(feature_data$roi == "mask")
+    if (!identical(has_masks, !is.null(config$mask_asset) &&
+        nzchar(config$mask_asset))) {
+      stop("Imaging dose asset ROI mapping is unavailable.", call. = FALSE)
+    }
+  } else {
+    .assert_feature_asset_privacy(feature_data, authorized,
+      context = "published imaging feature asset")
+  }
   invisible(collection_seal)
 }
 
 #' Validate a runner's exact per-sample output map and artifact confinement.
 #' @keywords internal
-.assert_mapped_imaging_output <- function(output_dir, asset_type, roster) {
+.assert_mapped_imaging_output <- function(output_dir, asset_type, roster,
+                                          config = list(), runner = NULL) {
   if (!is.character(output_dir) || length(output_dir) != 1L ||
       is.na(output_dir) || !dir.exists(output_dir)) {
     stop("Imaging publication output is unavailable.", call. = FALSE)
   }
   root <- tryCatch(normalizePath(output_dir, winslash = "/", mustWork = TRUE),
                    error = function(e) NULL)
+  entries <- list.files(output_dir, all.files = TRUE, no.. = TRUE,
+    recursive = TRUE, full.names = TRUE, include.dirs = TRUE)
+  links <- Sys.readlink(c(output_dir, entries))
+  if (any(!is.na(links) & nzchar(links))) {
+    stop("Imaging publication contains a symbolic link.", call. = FALSE)
+  }
   path <- file.path(output_dir, "dsimaging_output_manifest.json")
   manifest <- tryCatch(
     jsonlite::fromJSON(path, simplifyVector = FALSE),
@@ -203,18 +220,39 @@
   }, character(1))
   .assert_exact_imaging_roster(ids, roster,
     context = "Published imaging asset")
+  if (!identical(ids, .canonical_imaging_privacy_ids(ids))) {
+    stop("Imaging publication sample mapping is invalid.", call. = FALSE)
+  }
 
   mapped <- character(0)
   allowed <- "[.](nii([.]gz)?|nrrd|mha|mhd|dcm|png|jpe?g)$"
+  if (identical(asset_type, "wsi_tile_root")) allowed <- "[.](json|png)$"
+  rendered <- character(0)
   for (sample in samples) {
     files <- unlist(sample$files, use.names = FALSE)
     primary <- sample$primary %||% NULL
     integrity <- sample$file_integrity %||% NULL
+    if (identical(asset_type, "qc_visual_asset") &&
+        identical(sample$status, "omitted_by_cap")) {
+      if (!is.null(primary) || length(files) != 0L ||
+          !is.list(integrity) || length(integrity) != 0L) {
+        stop("QC publication cap mapping is invalid.", call. = FALSE)
+      }
+      next
+    }
+    if (!is.null(sample$status)) {
+      stop("Imaging publication sample status is invalid.", call. = FALSE)
+    }
     if (!is.character(files) || length(files) == 0L || anyNA(files) ||
         anyDuplicated(files) || !is.character(primary) ||
         length(primary) != 1L || is.na(primary) || !primary %in% files ||
         !is.list(integrity) || length(integrity) != length(files)) {
       stop("Imaging publication sample mapping is invalid.", call. = FALSE)
+    }
+    if (identical(asset_type, "mask_root") &&
+        isTRUE(runner %in% c("rt_convert", "monai_bundle_infer")) &&
+        length(files) != 1L) {
+      stop("Imaging publication requires one mask per sample.", call. = FALSE)
     }
     integrity_paths <- vapply(integrity, function(record) {
       if (!is.list(record) || !is.character(record$path) ||
@@ -259,13 +297,24 @@
       }
       mapped <- c(mapped, candidate)
     }
+    if (identical(asset_type, "wsi_tile_root")) {
+      .assert_wsi_sample_output(root, sample, config)
+    }
+    rendered <- c(rendered, sample$sample_id)
   }
   if (anyDuplicated(mapped)) {
     stop("Imaging publication attributes an artifact more than once.",
          call. = FALSE)
   }
   payload <- list.files(root, pattern = allowed, recursive = TRUE,
-                        full.names = TRUE, ignore.case = TRUE)
+                        full.names = TRUE, ignore.case = TRUE,
+                        all.files = TRUE, no.. = TRUE)
+  if (identical(asset_type, "wsi_tile_root")) {
+    payload <- list.files(root, all.files = TRUE, no.. = TRUE,
+      recursive = TRUE, full.names = TRUE)
+    payload <- setdiff(payload, file.path(root,
+      c("dsimaging_output_manifest.json", "wsi_tiling_summary.json")))
+  }
   payload <- vapply(payload, normalizePath, character(1), winslash = "/",
                     mustWork = TRUE)
   if (!setequal(mapped, payload)) {
@@ -273,16 +322,79 @@
          call. = FALSE)
   }
   if (identical(asset_type, "qc_visual_asset")) {
+    max_tiles <- config$max_tiles %||% 64L
+    if (!is.numeric(max_tiles) || length(max_tiles) != 1L ||
+        is.na(max_tiles) || max_tiles < 1 || max_tiles > 1024 ||
+        max_tiles %% 1 != 0 ||
+        !identical(sort(rendered, method = "radix"),
+          head(sort(ids, method = "radix"), max_tiles))) {
+      stop("QC publication cap mapping is invalid.", call. = FALSE)
+    }
     table <- tryCatch(utils::read.csv(
       file.path(root, "qc_visual_manifest.csv"),
-      stringsAsFactors = FALSE, check.names = FALSE),
+      stringsAsFactors = FALSE, check.names = FALSE,
+      colClasses = c("character", "character", "character", NA, NA)),
       error = function(e) NULL)
-    if (!is.data.frame(table) || !"sample_id" %in% names(table)) {
+    if (!is.data.frame(table) ||
+        !identical(names(table), c("sample_id", "qc_id", "file",
+                                  "has_mask", "width_px")) ||
+        anyNA(table$sample_id) || anyDuplicated(table$sample_id) ||
+        !identical(as.character(table$sample_id),
+                   sort(rendered, method = "radix"))) {
       stop("QC publication has no exact sample table.", call. = FALSE)
     }
-    .assert_exact_imaging_roster(table$sample_id, roster,
-      context = "Published QC visual table")
+    for (i in seq_len(nrow(table))) {
+      sample <- samples[[match(table$sample_id[[i]], ids)]]
+      if (length(sample$files) != 1L ||
+          !identical(table$file[[i]], sample$primary) ||
+          !identical(paste0(table$qc_id[[i]], ".png"), sample$primary) ||
+          !grepl("^case_[0-9]{4,}_[0-9a-f]{12}[.]png$", sample$primary)) {
+        stop("QC publication thumbnail mapping is invalid.", call. = FALSE)
+      }
+    }
   }
+  invisible(TRUE)
+}
+
+#' Bind each private slide manifest to exactly its own tile files.
+#' @keywords internal
+.assert_wsi_sample_output <- function(root, sample, config) {
+  fail <- function() stop("WSI publication tile mapping is invalid.",
+                          call. = FALSE)
+  if (!grepl("[.]json$", sample$primary)) fail()
+  manifest <- tryCatch(jsonlite::fromJSON(
+    file.path(root, sample$primary), simplifyVector = FALSE),
+    error = function(e) NULL)
+  if (!is.list(manifest) ||
+      !identical(manifest$sample_id, sample$sample_id) ||
+      !is.numeric(manifest$n_tiles) || length(manifest$n_tiles) != 1L ||
+      is.na(manifest$n_tiles) || manifest$n_tiles < 0 ||
+      manifest$n_tiles %% 1 != 0 || !is.list(manifest$tiles) ||
+      manifest$n_tiles != length(manifest$tiles) ||
+      manifest$n_tiles > (config$max_tiles %||% 2048L)) fail()
+  write_tiles <- config$write_tiles %||% TRUE
+  tile_files <- character(0)
+  positions <- character(0)
+  for (tile in manifest$tiles) {
+    if (!is.list(tile) || !setequal(names(tile),
+        c("tile_file", "x", "y", "tile_size", "tissue_fraction")) ||
+        !is.character(tile$tile_file) || length(tile$tile_file) != 1L ||
+        is.na(tile$tile_file)) fail()
+    for (field in c("x", "y", "tile_size", "tissue_fraction")) {
+      value <- tile[[field]]
+      if (!is.numeric(value) || length(value) != 1L || is.na(value) ||
+          !is.finite(value) || value < 0) fail()
+    }
+    if (tile$x %% 1 != 0 || tile$y %% 1 != 0 || tile$tile_size < 1 ||
+        tile$tile_size %% 1 != 0 || tile$tissue_fraction > 1 ||
+        (isTRUE(write_tiles) && !grepl("[.]png$", tile$tile_file)) ||
+        (!isTRUE(write_tiles) && nzchar(tile$tile_file))) fail()
+    tile_files <- c(tile_files, tile$tile_file[nzchar(tile$tile_file)])
+    positions <- c(positions, paste(tile$x, tile$y, sep = ":"))
+  }
+  files <- unlist(sample$files, use.names = FALSE)
+  if (anyDuplicated(tile_files) || anyDuplicated(positions) ||
+      !setequal(files, c(sample$primary, tile_files))) fail()
   invisible(TRUE)
 }
 
@@ -388,7 +500,7 @@
     rel <- normalizePath(path, winslash = "/", mustWork = FALSE)
     prefix <- paste0(root, "/")
     if (startsWith(rel, prefix)) rel <- substring(rel, nchar(prefix) + 1L)
-    compact <- obj[setdiff(names(obj), c("columns", "samples", "images"))]
+    compact <- obj[setdiff(names(obj), c("columns", "samples", "images", "tiles"))]
     compact$file <- rel
     summaries[[key]] <- compact
     if (is.list(obj$versions)) versions[[key]] <- obj$versions
