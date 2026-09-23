@@ -1,0 +1,7 @@
+package,version,source_commit,validation,tests,passed_expectations,failed_expectations,errors,warnings,skipped_tests,notes,exit_status,status
+dsImaging,0.5.0,fe8a6eeea381fa17bdda3bb51cf6eaec10ef2f49,testthat::test_local,265,1308,0,0,0,1,0,0,OK
+dsImaging,0.5.0,fe8a6eeea381fa17bdda3bb51cf6eaec10ef2f49,R CMD build,,,,,,,0,0,OK
+dsImaging,0.5.0,fe8a6eeea381fa17bdda3bb51cf6eaec10ef2f49,R CMD check --no-multiarch,,1308,0,0,0,1,0,0,OK
+dsImagingClient,0.5.0,e723ba9112f693d92d9ae51932c73d2e282b86da,testthat::test_local,70,409,0,0,0,0,0,0,OK
+dsImagingClient,0.5.0,e723ba9112f693d92d9ae51932c73d2e282b86da,R CMD build,,,,,,,0,0,OK
+dsImagingClient,0.5.0,e723ba9112f693d92d9ae51932c73d2e282b86da,R CMD check --no-multiarch,,409,0,0,0,0,0,0,OK

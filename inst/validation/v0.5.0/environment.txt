@@ -1,0 +1,24 @@
+R version 4.5.2 (2025-10-31)
+ sysname  release  machine
+"Darwin" "24.4.0"  "arm64"
+
+R dependencies
+            Package       Version
+dsHPC       "dsHPC"       "0.3.0"
+dsHPCClient "dsHPCClient" "0.4.0"
+testthat    "testthat"    "3.3.2"
+DSI         "DSI"         "1.8.0"
+DSLite      "DSLite"      "1.4.1"
+arrow       "arrow"       "22.0.0"
+
+Python: 3.11.14 (main, Oct  9 2025, 16:16:55) [Clang 17.0.0 (clang-1700.4.4.1)]
+Platform: macOS-15.4.1-arm64-arm-64bit
+numpy 1.26.4
+pydicom 3.0.1
+SimpleITK 2.5.3
+Pillow 12.0.0
+rt-utils 1.2.7
+PyRadiomics 3.0.1
+pandas 3.0.3
+pyarrow 23.0.1
+PyYAML 6.0.3
