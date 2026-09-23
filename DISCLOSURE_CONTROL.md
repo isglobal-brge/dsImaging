@@ -46,7 +46,7 @@ and does not pass it a raw manifest, bucket path, credential, or image table.
    arguments. Server-only publication helpers and raw dsHPC submission APIs are
    not reachable by composing them below an allowlisted outer call.
 5. Dataset enumeration, raw manifests/backends, raw asset details/lineage,
-   generation identifiers, exact per-image progress, hashes, paths, and worker
+   generation identifiers, exact per-image progress, patient-data hashes, paths, and worker
    diagnostics are absent from the registered analyst surface. Legacy exported
    method names remain only as fail-closed stubs for persisted old allowlists.
 6. Public metadata projects only bounded identifiers. Patient/sample values and
@@ -107,6 +107,15 @@ and does not pass it a raw manifest, bucket path, credential, or image table.
     grids, multiframe reference series, sidecar slides, Analyze
     `.img/.hdr` pairs, missing expected series counts and unsupported geometry
     remain fail-closed. See `DESIGN_ADMISSION.md` for exact contracts.
+12. Learned segmentation uses administrator-registered model bundles. A
+    protected registry pins each manifest SHA-256; verification checks the
+    exact manifest and every declared file's size and digest before inference.
+    Missing, unregistered, changed or incomplete bundles fail closed. Providers
+    receive explicit verified local paths under the configured model root,
+    with offline flags and network guards active before provider import or
+    inference. No first-use weight download is permitted. Capabilities expose
+    only public provider/task identifiers, readiness and the administrator's
+    manifest digest; analysts never select filesystem paths or source URLs.
 
 ## Store boundary and multiple collections
 
@@ -125,6 +134,19 @@ resolution and cannot select or authenticate an object-store backend.
 
 ## Trust boundary and residual signals
 
+- Model bundles, source recipes and the registry are administrator-provisioned
+  material and must be protected against analyst and inference-worker writes.
+  This includes serialized checkpoints and executable MONAI configurations,
+  which are trusted like installed server code. Digest checks verify the
+  material the administrator approved; they are not a sandbox for hostile
+  models or configuration code. The administrator reviews source/licence,
+  pins every required file including auxiliary models, completes installation
+  before analysis, and changes the dsHPC runtime seal when a bundle changes.
+  Public manifest digests identify deployment material, not patient files.
+  The offline runtime guard blocks normal provider downloads and subprocess
+  escape paths; deployment network isolation remains the operating-system
+  boundary for native or administrator-supplied executable code. See
+  `DESIGN_MODEL_BUNDLES.md` for exact bundle and provisioning contracts.
 - RT per-ROI rows are individual-level derived data. The complete table may be
   assigned to an authorized server session, as with radiomics, but is never an
   aggregate response. Only the declared label can be joined automatically;

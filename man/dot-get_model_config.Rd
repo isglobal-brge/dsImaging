@@ -2,11 +2,11 @@
 % Please edit documentation in R/analysis_model_registry.R
 \name{.get_model_config}
 \alias{.get_model_config}
-\title{Get a segmentation model config by name}
+\title{Get a verified segmentation model by its administrator-assigned name}
 \usage{
 .get_model_config(model_name)
 }
 \description{
-Get a segmentation model config by name
+Get a verified segmentation model by its administrator-assigned name
 }
 \keyword{internal}

@@ -236,7 +236,7 @@ provision_analysis_envs() {
   fi
 
   provision_framework "seg_totalseg" "totalsegmentator" \
-    "TotalSegmentator>=2.0.0" "torch>=2.0.0" "SimpleITK>=2.0.0" "nibabel>=4.0.0"
+    "TotalSegmentator==2.4.0" "torch>=2.0.0" "SimpleITK>=2.0.0" "nibabel>=4.0.0"
   provision_framework "seg_lungmask" "lungmask" \
     "lungmask>=0.2.0" "torch>=2.0.0" "SimpleITK>=2.0.0" "nibabel>=4.0.0"
   provision_framework "seg_nnunetv2" "nnunetv2" \

@@ -5,6 +5,10 @@ Uses site-registered nnU-Net model packs for segmentation.
 """
 import argparse, json, os, sys
 
+from dsimaging_model_bundles import (
+    ModelBundleError, bundle_path, prepare_inference, disable_provider_downloads,
+)
+
 from dsimaging_utils import (
     IMAGE_EXTS,
     cfg,
@@ -34,17 +38,8 @@ def main():
                         help="Sample identifier (single-image mode)")
     args = parser.parse_args()
 
-    models_dir = os.environ.get("DSIMAGING_MODELS", "/var/lib/dsimaging/models")
-    model_path = os.path.join(models_dir, "nnunetv2", args.model)
-
-    print(f"nnU-Net v2 inference")
+    print("nnU-Net v2 inference")
     print(f"  Model: {args.model}")
-    print(f"  Model path: {model_path}")
-
-    if not os.path.isdir(model_path):
-        print(f"ERROR: Model not found at {model_path}", file=sys.stderr)
-        print("Install with: dsImaging::install_model('nnunetv2', '<model_name>')", file=sys.stderr)
-        sys.exit(1)
 
     # Merge CLI args with env vars (dsHPC sets DSHPC_CFG_* from config)
     image = args.image or os.environ.get("DSHPC_CFG_IMAGE")
@@ -73,11 +68,28 @@ def main():
     print(f"  Found {len(images)} images")
     os.makedirs(args.output, exist_ok=True)
 
-    # nnU-Net prediction
+    try:
+        bundle = prepare_inference("nnunetv2", args.model)
+        runtime = bundle["manifest"]["runtime"]
+        requested_fold = cfg("fold", "all")
+        folds = runtime["folds"]
+        if requested_fold != "all":
+            try:
+                selected = int(requested_fold)
+            except (TypeError, ValueError):
+                raise ModelBundleError("Requested nnU-Net fold is not registered")
+            if str(selected) != str(requested_fold) or selected not in folds:
+                raise ModelBundleError("Requested nnU-Net fold is not registered")
+            folds = [selected]
+    except ModelBundleError as exc:
+        print("ERROR: Model bundle unavailable: " + str(exc), file=sys.stderr)
+        sys.exit(1)
     from nnunetv2.inference.predict_from_raw_data import nnUNetPredictor
-
+    disable_provider_downloads(bundle)
     predictor = nnUNetPredictor()
-    predictor.initialize_from_trained_model_folder(model_path)
+    predictor.initialize_from_trained_model_folder(
+        bundle_path(bundle, runtime["model_folder"]), use_folds=folds,
+        checkpoint_name=runtime["checkpoint"])
 
     # nnU-Net expects a specific input format -- create temp folder
     import shutil, tempfile
@@ -94,12 +106,14 @@ def main():
         shutil.rmtree(tmpdir)
 
     summary = {"n_total": len(images), "model": args.model,
+               "model_bundle_manifest_sha256": bundle["manifest_sha256"],
                "versions": package_versions(["nnunetv2", "numpy", "torch"])}
     with open(os.path.join(args.output, "segmentation_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
 
     # Write seg_manifest.json
-    seg_manifest = {"provider": "nnunetv2", "model": args.model, "samples": {}}
+    seg_manifest = {"provider": "nnunetv2", "model": args.model,
+                    "model_bundle_manifest_sha256": bundle["manifest_sha256"], "samples": {}}
     output_samples = {}
     for img_path, sid in images:
         mask_path = os.path.join(args.output, f"{tokens[sid]}.nii.gz")

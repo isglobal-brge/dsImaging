@@ -11,8 +11,7 @@
 imagingCapabilitiesDS <- function() {
   .dsimaging_require_literal_arguments()
   models <- tryCatch(.safe_installed_models(), error = function(e) {
-    data.frame(provider = character(0), task = character(0),
-               ready = logical(0), stringsAsFactors = FALSE)
+    .empty_public_model_bundles()
   })
   runners <- tryCatch(.imaging_runner_health(), error = function(e) {
     data.frame(runner = character(0), present = logical(0),
@@ -43,7 +42,8 @@ imagingCapabilitiesDS <- function() {
 #' Install a Segmentation Model (admin only)
 #'
 #' DataSHIELD AGGREGATE method. Protected by dshpc.admin_key.
-#' Downloads model weights to the server.
+#' Downloads every file from an administrator-owned, digest-pinned source
+#' recipe and registers the fully verified bundle. No paths are accepted.
 #'
 #' @param admin_key_encoded Character; B64-encoded admin key.
 #' @param provider Character; "totalsegmentator", "lungmask", "monai", "nnunetv2".
@@ -61,8 +61,12 @@ imagingInstallModelDS <- function(admin_key_encoded, provider, task) {
   }
 
   result <- tryCatch({
-    suppressWarnings(suppressMessages(install_model(provider, task)))
-    list(status = "installed", provider = provider, task = task)
+    installed <- suppressWarnings(suppressMessages(install_model(provider, task)))
+    sha <- installed$manifest_sha256
+    if (!is.character(sha) || length(sha) != 1L || is.na(sha) ||
+        !grepl("^[0-9a-f]{64}$", sha)) stop("Bundle digest is unavailable.")
+    list(status = "installed", provider = provider, task = task,
+         manifest_sha256 = sha)
   }, error = function(e) {
     list(status = "failed", provider = provider, task = task,
          error = "installation_failed")
@@ -84,17 +88,19 @@ imagingListModelsDS <- function() {
 
 #' @keywords internal
 .safe_installed_models <- function() {
-  # A damaged marker can make filesystem readers report its absolute path in a
-  # warning. Model readiness is public; node storage diagnostics are not.
+  # Bundle verification diagnostics may include node paths. Only readiness and
+  # the pinned public manifest digest cross the analyst boundary.
   models <- tryCatch(
     suppressWarnings(list_installed_models()),
     error = function(e) NULL)
-  required <- c("provider", "task", "installed_at")
+  required <- c("provider", "task", "ready", "manifest_sha256")
   if (!is.data.frame(models) || !all(required %in% names(models)) ||
       nrow(models) == 0L) {
-    return(data.frame(provider = character(0), task = character(0),
-                      ready = logical(0), stringsAsFactors = FALSE))
+    return(.empty_public_model_bundles())
   }
+  digests <- as.character(models$manifest_sha256)
+  valid_digest <- !is.na(digests) & grepl("^[0-9a-f]{64}$", digests)
+  digests[!valid_digest] <- NA_character_
   data.frame(
     provider = unname(vapply(
       models$provider, .safe_public_identifier, character(1),
@@ -102,9 +108,16 @@ imagingListModelsDS <- function() {
     task = unname(vapply(
       models$task, .safe_public_identifier, character(1),
       default = "unknown")),
-    ready = !is.na(models$installed_at) & nzchar(models$installed_at),
+    ready = !is.na(models$ready) & models$ready & valid_digest,
+    manifest_sha256 = digests,
     stringsAsFactors = FALSE
   )
+}
+
+#' @keywords internal
+.empty_public_model_bundles <- function() {
+  data.frame(provider = character(), task = character(), ready = logical(),
+    manifest_sha256 = character(), stringsAsFactors = FALSE)
 }
 
 # --- Admin verification (reuses dshpc.admin_key) ---

@@ -1,82 +1,60 @@
-# Module: Segmentation Model Registry
-# Tracks available models, their locations, and metadata.
-# Models are installed by admin, not auto-downloaded.
+# Module: Administrator-owned Segmentation Model Registry
 
 #' Get model registry path
 #' @keywords internal
 .model_registry_path <- function() {
-  .imaging_analysis_option("model_registry",
-    file.path(.imaging_analysis_option("home", "/var/lib/dsimaging"), "models"))
+  .imaging_analysis_option("model_registry", file.path(.models_dir(), "registry"))
 }
 
-#' List installed segmentation models
+#' List registered segmentation model bundles
 #'
-#' @return Data frame with model name, provider, task, and path.
+#' @return Data frame with name, provider, task, path, installed_at,
+#'   manifest_sha256 and ready, after verifying registered bundle contents.
 #' @export
 list_segmentation_models <- function() {
-  registry_dir <- .model_registry_path()
-  if (!dir.exists(registry_dir)) {
-    return(data.frame(name = character(0), provider = character(0),
-      task = character(0), path = character(0), stringsAsFactors = FALSE))
-  }
-
-  manifests <- list.files(registry_dir, pattern = "\\.json$", full.names = TRUE)
-  if (length(manifests) == 0) {
-    return(data.frame(name = character(0), provider = character(0),
-      task = character(0), path = character(0), stringsAsFactors = FALSE))
-  }
-
-  rows <- lapply(manifests, function(f) {
-    tryCatch({
-      m <- jsonlite::fromJSON(f, simplifyVector = FALSE)
-      data.frame(name = m$name %||% basename(f),
-        provider = m$provider %||% "unknown",
-        task = m$task %||% "segmentation",
-        path = m$path %||% dirname(f),
-        stringsAsFactors = FALSE)
-    }, error = function(e) NULL)
-  })
-  rows <- Filter(Negate(is.null), rows)
-  if (length(rows) == 0) return(data.frame(
-    name = character(0), provider = character(0),
-    task = character(0), path = character(0), stringsAsFactors = FALSE))
-  do.call(rbind, rows)
+  list_installed_models()
 }
 
-#' Get a segmentation model config by name
+#' Get a verified segmentation model by its administrator-assigned name
 #' @keywords internal
 .get_model_config <- function(model_name) {
-  registry_dir <- .model_registry_path()
-  manifest_path <- file.path(registry_dir, paste0(model_name, ".json"))
-  if (!file.exists(manifest_path)) return(NULL)
-  jsonlite::fromJSON(manifest_path, simplifyVector = FALSE)
+  model_name <- .model_bundle_identifier(model_name, "name")
+  models <- list_installed_models()
+  found <- which(models$name == model_name & models$ready)
+  if (length(found) != 1L) return(NULL)
+  as.list(models[found, , drop = FALSE])
 }
 
-#' Register a segmentation model
+#' Register an existing verified segmentation model bundle
 #'
-#' Server-side admin utility for adding an already available segmentation model
-#' to the dsImaging registry.
+#' Server-side administrator utility. The bundle must already have a complete
+#' manifest at `<models>/<provider>/<task>/manifest.json`. Registration checks
+#' every file and provider dependency before pinning the manifest SHA-256 in
+#' the protected registry. Arbitrary external model paths are not accepted.
 #'
-#' @param name Model name used by dsImaging.
-#' @param provider Provider identifier, such as `"lungmask"`, `"monai"`,
-#'   `"nnunetv2"`, or `"totalsegmentator"`.
+#' @param name Administrator-assigned model name.
+#' @param provider Provider identifier: "lungmask", "monai", "nnunetv2", or
+#'   "totalsegmentator".
 #' @param task Provider-specific task/model name.
-#' @param path Filesystem path to the model files.
-#' @param python_deps Optional character vector of Python dependency hints.
-#' @param extra Optional named list of extra manifest fields.
-#' @return Invisibly returns the path to the written model manifest.
+#' @param path Canonical bundle directory below the configured models root.
+#' @param python_deps Retained for compatibility; must be NULL. The manifest
+#'   pins the provider version.
+#' @param extra Retained for compatibility; must be empty. Metadata belongs in
+#'   the verified manifest.
+#' @return Invisibly, the path to the pinned registry entry.
 #' @export
 register_segmentation_model <- function(name, provider, task, path,
                                          python_deps = NULL, extra = list()) {
-  registry_dir <- .model_registry_path()
-  dir.create(registry_dir, recursive = TRUE, showWarnings = FALSE)
-
-  manifest <- c(list(name = name, provider = provider, task = task,
-    path = path, python_deps = python_deps,
-    registered_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z")), extra)
-
-  manifest_path <- file.path(registry_dir, paste0(name, ".json"))
-  writeLines(jsonlite::toJSON(manifest, auto_unbox = TRUE, pretty = TRUE),
-             manifest_path)
-  invisible(manifest_path)
+  name <- .model_bundle_identifier(name, "name")
+  provider <- .model_bundle_identifier(provider, "provider")
+  task <- .model_bundle_identifier(task, "task")
+  if (!is.character(path) || length(path) != 1L || is.na(path) || !nzchar(path)) {
+    stop("A canonical model bundle path is required.", call. = FALSE)
+  }
+  if (!is.null(python_deps) || !is.list(extra) || length(extra)) {
+    stop("Model metadata must be recorded in the verified bundle manifest.", call. = FALSE)
+  }
+  .model_bundle_command("register", c("--provider", provider, "--task", task,
+    "--path", path, "--name", name))
+  invisible(file.path(.model_registry_path(), provider, paste0(task, ".json")))
 }

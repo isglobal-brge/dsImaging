@@ -2,10 +2,16 @@
 % Please edit documentation in R/analysis_install_models.R
 \name{list_installed_models}
 \alias{list_installed_models}
-\title{List installed models}
+\title{List registered model bundles and verify their contents}
 \usage{
 list_installed_models()
 }
+\value{
+Data frame with name, provider, task, path, installed_at,
+manifest_sha256 and ready. Paths are for server administrators only.
+}
 \description{
-List installed models
+Reads the administrator registry and verifies its pinned manifest digest and
+every model file. Unregistered directories and legacy markers are ignored.
+A damaged registered bundle is listed with \code{ready = FALSE}.
 }

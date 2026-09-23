@@ -9,7 +9,7 @@
                 "boto3>=1.28.0", "botocore>=1.31.0"),
   seg_lungmask = c("lungmask>=0.2.0", "torch>=2.0.0",
                    "SimpleITK>=2.0.0", "nibabel>=4.0.0"),
-  seg_totalseg = c("TotalSegmentator>=2.0.0", "torch>=2.0.0",
+  seg_totalseg = c("TotalSegmentator==2.4.0", "torch>=2.0.0",
                     "SimpleITK>=2.0.0", "nibabel>=4.0.0"),
   seg_nnunetv2 = c("nnunetv2>=2.0.0", "torch>=2.0.0",
                     "SimpleITK>=2.0.0", "nibabel>=4.0.0"),

@@ -629,7 +629,7 @@ test_that("registered metadata methods keep node storage diagnostics private", {
   withr::local_options(list(dsimaging.analysis.models_dir = models_dir))
   models <- capture_conditions(imagingListModelsDS())
   expect_s3_class(models$value, "data.frame")
-  expect_named(models$value, c("provider", "task", "ready"))
+  expect_named(models$value, c("provider", "task", "ready", "manifest_sha256"))
   expect_equal(nrow(models$value), 0L)
   expect_length(models$warnings, 0L)
 
@@ -803,6 +803,8 @@ test_that("capability metadata omits server paths and scheduler diagnostics", {
       task = c("task", "s3://private/task"),
       path = c("/private/model", "/private/model-2"),
       installed_at = c("2026-01-01", "2026-01-02"),
+      ready = c(TRUE, TRUE),
+      manifest_sha256 = c(strrep("a", 64), "/private/digest"),
       stringsAsFactors = FALSE),
     list_imaging_radiomics_profiles = function() c(
       "safe_profile", "s3://private/profile", "file:private-profile",
@@ -817,9 +819,11 @@ test_that("capability metadata omits server paths and scheduler diagnostics", {
   capabilities <- imagingCapabilitiesDS()
   expect_false(any(c("envs", "scheduler", "onload_errors") %in%
                    names(capabilities)))
-  expect_named(capabilities$models, c("provider", "task", "ready"))
+  expect_named(capabilities$models, c("provider", "task", "ready", "manifest_sha256"))
   expect_equal(capabilities$models$provider, c("example", "unknown"))
   expect_equal(capabilities$models$task, c("task", "unknown"))
+  expect_identical(capabilities$models$ready, c(TRUE, FALSE))
+  expect_identical(capabilities$models$manifest_sha256, c(strrep("a", 64), NA_character_))
   expect_identical(capabilities$profiles, "safe_profile")
   expect_named(capabilities$runners, c("runner", "present"))
   expect_identical(capabilities$runners$runner,
@@ -838,7 +842,7 @@ test_that("model installation never reflects non-canonical identifiers", {
       calls <<- calls + 1L
       warning(private_diagnostic, call. = FALSE)
       message(private_diagnostic)
-      invisible(TRUE)
+      invisible(list(manifest_sha256 = strrep("a", 64)))
     },
     .package = "dsImaging")
   provider <- "/srv/private/model-provider"
@@ -867,7 +871,8 @@ test_that("model installation never reflects non-canonical identifiers", {
       invokeRestart("muffleMessage")
     })
   expect_identical(valid, list(
-    status = "installed", provider = "nnunetv2", task = "Task001"))
+    status = "installed", provider = "nnunetv2", task = "Task001",
+    manifest_sha256 = strrep("a", 64)))
   expect_identical(calls, 1L)
   expect_length(warnings, 0L)
   expect_length(messages, 0L)

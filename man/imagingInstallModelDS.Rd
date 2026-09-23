@@ -18,5 +18,6 @@ Named list with install status.
 }
 \description{
 DataSHIELD AGGREGATE method. Protected by dshpc.admin_key.
-Downloads model weights to the server.
+Downloads every file from an administrator-owned, digest-pinned source
+recipe and registers the fully verified bundle. No paths are accepted.
 }

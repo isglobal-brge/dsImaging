@@ -31,6 +31,8 @@ external/HPC backend configured in `dsHPC`.
   correction.
 - Segmentation runners: existing masks, CT lung threshold, LungMask,
   TotalSegmentator, nnU-Net v2, and conforming administrator-installed MONAI bundles.
+- Administrator-registered model bundles with manifest SHA-256 identities,
+  complete file verification and offline inference for every learned segmenter.
 - Mask/ROI operations: label selection, binarization, union, intersection,
   difference, morphology, connected components, and mask-to-image resampling.
 - QC metrics for images and masks, including size, spacing, intensity summaries,
@@ -230,6 +232,56 @@ images.
 The radiomics analysis environment also carries the shared clinical imaging IO
 dependencies used by the lightweight runners: `pydicom`, `rt-utils`,
 `highdicom`, `Pillow`, `openslide-python`, and `openslide-bin`.
+
+### Model bundles
+
+Provision learned models before analysis. A bundle lives at
+`/var/lib/dsimaging/models/<provider>/<task>/`, or beneath the configured
+`DSIMAGING_MODELS` root. Its `manifest.json` records the provider, task,
+upstream version, licence, source URL, download date, and every file's size and
+SHA-256. An administrator-owned registry separately pins the manifest digest.
+The model tree, registry and source recipes must be writable only by the node
+administrator; inference needs read access.
+
+Create a complete, digest-pinned source recipe under
+`<models-root>/sources/<provider>/<task>.json`, then run on the node:
+
+```r
+dsImaging::install_model(provider = "lungmask", task = "R231")
+```
+
+The existing remote administrator route uses the same `dshpc.admin_key` or
+`DSHPC_ADMIN_KEY` protection:
+
+```r
+dsImagingClient::ds.imaging.install_model(
+  conns, admin_key, provider = "lungmask", task = "R231")
+```
+
+The installer downloads every declared file once, verifies its pinned size and
+digest, checks the provider's required files, and registers the manifest only
+after success. Importing a package, running `--help`, or leaving an old
+`.installed` marker cannot make a model ready. Models already available on the
+node can be registered only from a complete verified manifest in the canonical
+bundle directory. See [DESIGN_MODEL_BUNDLES.md](DESIGN_MODEL_BUNDLES.md) for the
+recipe schema, supported TotalSegmentator profiles and migration procedure.
+
+`imagingCapabilitiesDS()$models` and `imagingListModelsDS()` expose only
+`provider`, `task`, `ready` and `manifest_sha256`. Analysts select these names
+through segmenter constructors; paths and source recipes remain server-side.
+Missing registration, a changed manifest, absent files, digest mismatches or
+an incompatible provider version prevent inference. Runners pass explicit
+verified local paths to providers and enforce offline flags and network
+guards; there is no weight download fallback. TotalSegmentator bundles include
+the required auxiliary/crop weights, and fused LungMask includes its fill model.
+nnU-Net folds/checkpoints and MONAI inference configurations are also verified.
+Existing masks, CT threshold segmentation and the deterministic embedding
+baseline use no model weights.
+
+MONAI configurations and serialized checkpoints are trusted administrator
+material. Integrity verification preserves the administrator's approval; it
+does not make executable configurations or untrusted model files safe.
+Model changes also require updating the dsHPC `runtime_revision` seal.
 
 ## Important Options
 

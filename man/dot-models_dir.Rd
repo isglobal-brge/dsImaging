@@ -2,11 +2,11 @@
 % Please edit documentation in R/analysis_install_models.R
 \name{.models_dir}
 \alias{.models_dir}
-\title{Get the models directory}
+\title{Get the administrator-owned models directory}
 \usage{
 .models_dir()
 }
 \description{
-Get the models directory
+Get the administrator-owned models directory
 }
 \keyword{internal}

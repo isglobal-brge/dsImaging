@@ -4,9 +4,13 @@
 import argparse
 import json
 import os
-import re
 import sys
 import tempfile
+
+from dsimaging_model_bundles import (
+    ModelBundleError, bundle_path, prepare_inference, disable_provider_downloads,
+    monai_weight_bindings,
+)
 
 from dsimaging_utils import (
     IMAGE_EXTS, cfg, mapped_sample_files, package_versions,
@@ -24,19 +28,6 @@ def main():
     args = parser.parse_args()
     os.makedirs(args.output, exist_ok=True)
     try:
-        import numpy as np
-        import SimpleITK as sitk
-        from monai.bundle import run
-
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", args.bundle) or ".." in args.bundle:
-            raise RuntimeError("Invalid MONAI bundle name")
-        bundle = os.path.join(os.environ.get("DSIMAGING_MODELS", "/var/lib/dsimaging/models"),
-                              "monai", args.bundle)
-        inference_path = os.path.join(bundle, "configs", "inference.json")
-        with open(inference_path) as handle:
-            config = json.load(handle)
-        if not isinstance(config, dict) or not {"image", "output_dir", "run"}.issubset(config):
-            raise RuntimeError("MONAI bundle lacks the dsImaging input/output binding contract")
         single_image = args.image or cfg("image")
         sid = args.sample_id or cfg("sample_id")
         collection_mode = not bool(single_image)
@@ -48,6 +39,17 @@ def main():
         else:
             images = mapped_sample_files(cfg("image_asset", "images"), "images",
                 artifact_types=("image_root",), extensions=IMAGE_EXTS)
+        # Materialize admitted inputs before disabling provider network access.
+        verified = prepare_inference("monai", args.bundle)
+        bundle = verified["path"]
+        runtime = verified["manifest"]["runtime"]
+        inference_path = bundle_path(verified, runtime["inference_config"])
+        weight_bindings = {key: bundle_path(verified, name)
+                           for key, name in monai_weight_bindings(runtime).items()}
+        import numpy as np
+        import SimpleITK as sitk
+        from monai.bundle import run
+        disable_provider_downloads(verified)
         outputs = {}
         seg_samples = {}
         for image_path, sid in images:
@@ -62,9 +64,9 @@ def main():
                 sitk.WriteImage(source, input_path)
                 output_root = os.path.join(stage, "output")
                 os.mkdir(output_root)
-                run(run_id="run", meta_file=os.path.join(bundle, "configs", "metadata.json"),
+                run(run_id="run", meta_file=bundle_path(verified, runtime["metadata"]),
                     config_file=inference_path, bundle_root=bundle,
-                    image=input_path, output_dir=output_root)
+                    image=input_path, output_dir=output_root, **weight_bindings)
                 masks = []
                 for base, directories, filenames in os.walk(stage):
                     if any(os.path.islink(os.path.join(base, name))
@@ -95,10 +97,15 @@ def main():
         if collection_mode:
             write_collection_output_manifest(args.output, "mask_root", outputs)
         write_json(os.path.join(args.output, "seg_manifest.json"), {
-            "provider": "monai", "bundle": args.bundle, "samples": seg_samples})
+            "provider": "monai", "bundle": args.bundle,
+            "model_bundle_manifest_sha256": verified["manifest_sha256"], "samples": seg_samples})
         write_json(os.path.join(args.output, "segmentation_summary.json"), {
             "n_total": len(images), "n_done": len(images), "n_failed": 0,
-            "bundle": args.bundle, "versions": package_versions(["monai", "SimpleITK", "numpy", "torch"])})
+            "bundle": args.bundle, "model_bundle_manifest_sha256": verified["manifest_sha256"],
+            "versions": package_versions(["monai", "SimpleITK", "numpy", "torch"])})
+    except ModelBundleError as exc:
+        print("ERROR: Model bundle unavailable: " + str(exc), file=sys.stderr)
+        sys.exit(1)
     except Exception:
         print("ERROR: Exact MONAI input/output association or inference failed", file=sys.stderr)
         sys.exit(1)

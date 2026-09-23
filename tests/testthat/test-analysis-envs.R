@@ -116,6 +116,18 @@ test_that("radiomics runners declare scheduler resources", {
   expect_true("DSIMAGING_CREDENTIALS_PATH" %in% names(pyradiomics$env))
   expect_false(any(c("DSIMAGING_ASSET_DB", "DSIMAGING_REGISTRY_PATH") %in%
                    names(pyradiomics$env)))
+  expect_identical(lungmask$env$DSIMAGING_MODELS,
+    file.path(imaging_home, "models"))
+  expect_identical(lungmask$env$DSIMAGING_MODEL_REGISTRY,
+    file.path(imaging_home, "models", "registry"))
+  for (name in c("totalsegmentator_infer", "nnunetv2_predict", "monai_bundle_infer")) {
+    model_runner <- yaml::read_yaml(file.path(home, "runners", paste0(name, ".yml")))
+    expect_identical(model_runner$env$DSIMAGING_MODELS, lungmask$env$DSIMAGING_MODELS)
+    expect_identical(model_runner$env$DSIMAGING_MODEL_REGISTRY,
+      lungmask$env$DSIMAGING_MODEL_REGISTRY)
+    expect_false(any(c("bundle_path", "model_path", "models_dir", "model_registry") %in%
+      model_runner$allowed_params))
+  }
 
   permission_bits <- function(path) bitwAnd(
     as.integer(file.info(path)$mode), strtoi("0777", base = 8L))

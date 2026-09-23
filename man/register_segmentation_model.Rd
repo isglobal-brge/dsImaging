@@ -2,7 +2,7 @@
 % Please edit documentation in R/analysis_model_registry.R
 \name{register_segmentation_model}
 \alias{register_segmentation_model}
-\title{Register a segmentation model}
+\title{Register an existing verified segmentation model bundle}
 \usage{
 register_segmentation_model(
   name,
@@ -14,23 +14,27 @@ register_segmentation_model(
 )
 }
 \arguments{
-\item{name}{Model name used by dsImaging.}
+\item{name}{Administrator-assigned model name.}
 
-\item{provider}{Provider identifier, such as \code{"lungmask"}, \code{"monai"},
-\code{"nnunetv2"}, or \code{"totalsegmentator"}.}
+\item{provider}{Provider identifier: "lungmask", "monai", "nnunetv2", or
+"totalsegmentator".}
 
 \item{task}{Provider-specific task/model name.}
 
-\item{path}{Filesystem path to the model files.}
+\item{path}{Canonical bundle directory below the configured models root.}
 
-\item{python_deps}{Optional character vector of Python dependency hints.}
+\item{python_deps}{Retained for compatibility; must be NULL. The manifest
+pins the provider version.}
 
-\item{extra}{Optional named list of extra manifest fields.}
+\item{extra}{Retained for compatibility; must be empty. Metadata belongs in
+the verified manifest.}
 }
 \value{
-Invisibly returns the path to the written model manifest.
+Invisibly, the path to the pinned registry entry.
 }
 \description{
-Server-side admin utility for adding an already available segmentation model
-to the dsImaging registry.
+Server-side administrator utility. The bundle must already have a complete
+manifest at \verb{<models>/<provider>/<task>/manifest.json}. Registration checks
+every file and provider dependency before pinning the manifest SHA-256 in
+the protected registry. Arbitrary external model paths are not accepted.
 }

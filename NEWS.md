@@ -1,3 +1,21 @@
+# dsImaging 0.6.0
+
+* Replace segmentation installation markers and first-use downloads with
+  administrator-registered model bundles. Manifests record provider/task,
+  upstream version, source/licence/download metadata and every file's size and
+  SHA-256; the protected registry pins the manifest digest separately.
+* Administrator installation downloads a complete set of pinned files and
+  verifies it before registration. LungMask includes fused fill weights;
+  audited TotalSegmentator profiles include task, crop and auxiliary models;
+  nnU-Net and MONAI include their inference configuration and checkpoints.
+* Resolve learned models by verified local paths and enforce offline provider
+  execution. Missing registration, files or hashes, changed manifests and
+  incompatible provider versions fail closed before inference. Legacy
+  `.installed` markers confer no readiness.
+* Capabilities/model status expose provider, task, readiness and manifest
+  SHA-256 without paths. Synthetic provider fixtures cover integrity failures,
+  complete installation, explicit paths, offline guards and public listings.
+
 # dsImaging 0.5.0
 
 * Admit binary DICOM SEG voxels through `rt_convert` with exact mapped reference

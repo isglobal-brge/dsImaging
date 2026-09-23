@@ -6,6 +6,10 @@ mask NIfTI files.
 """
 import argparse, json, os, sys
 
+from dsimaging_model_bundles import (
+    ModelBundleError, prepare_inference, disable_provider_downloads,
+)
+
 from dsimaging_utils import (
     IMAGE_EXTS,
     cfg,
@@ -39,9 +43,6 @@ def main():
     print(f"TotalSegmentator inference")
     print(f"  Task: {args.task}")
 
-    models_dir = os.environ.get("DSIMAGING_MODELS", "/var/lib/dsimaging/models")
-    os.environ["TOTALSEG_WEIGHTS_PATH"] = os.path.join(models_dir, "totalsegmentator", args.task)
-
     # Merge CLI args with env vars (dsHPC sets DSHPC_CFG_* from config)
     image = args.image or os.environ.get("DSHPC_CFG_IMAGE")
     sample_id = getattr(args, "sample_id", None) or os.environ.get("DSHPC_CFG_SAMPLE_ID")
@@ -73,7 +74,20 @@ def main():
         print(f"  Using fast mode (3mm resolution)")
     os.makedirs(args.output, exist_ok=True)
 
+    try:
+        bundle = prepare_inference("totalsegmentator", args.task)
+    except ModelBundleError as exc:
+        print("ERROR: Model bundle unavailable: " + str(exc), file=sys.stderr)
+        sys.exit(1)
+    # Keep mutable usage configuration separate from the immutable weight tree.
+    import tempfile
+    runtime_home = tempfile.TemporaryDirectory(prefix=".totalseg-", dir=args.output)
+    os.environ["TOTALSEG_HOME_DIR"] = runtime_home.name
+    with open(os.path.join(runtime_home.name, "config.json"), "w") as handle:
+        json.dump({"totalseg_id": "dsimaging-offline", "send_usage_stats": False,
+                   "statistics_disclaimer_shown": True, "prediction_counter": 0}, handle)
     from totalsegmentator.python_api import totalsegmentator
+    disable_provider_downloads(bundle)
 
     results = []
     output_samples = {}
@@ -102,14 +116,17 @@ def main():
             print("  FAILED: admitted image segmentation failed", file=sys.stderr)
             results.append({"sample_id": sample_id, "status": "failed", "error": str(e)})
 
+    runtime_home.cleanup()
     summary = {"n_total": len(images), "n_done": sum(1 for r in results if r["status"] == "done"),
                "n_failed": sum(1 for r in results if r["status"] == "failed"), "task": args.task,
+               "model_bundle_manifest_sha256": bundle["manifest_sha256"],
                "versions": package_versions(["totalsegmentator", "SimpleITK", "numpy", "torch"])}
     with open(os.path.join(args.output, "segmentation_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
 
     # Write seg_manifest.json (explicit contract with extraction step)
-    seg_manifest = {"provider": "totalsegmentator", "task": args.task, "samples": {}}
+    seg_manifest = {"provider": "totalsegmentator", "task": args.task,
+                    "model_bundle_manifest_sha256": bundle["manifest_sha256"], "samples": {}}
     for r in results:
         sid = r["sample_id"]
         if r["status"] == "done":

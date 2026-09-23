@@ -30,8 +30,14 @@ Defaults to \code{dsimaging.data_dir} or \verb{/var/lib/dsimaging}.
 \item \code{dsimaging.analysis.venv_root}: Python env root for PyRadiomics,
 LungMask, TotalSegmentator, nnU-Net, and MONAI runners. Defaults to
 \verb{/var/lib/dsimaging/venvs}.
-\item \code{dsimaging.analysis.models_dir}: segmentation model directory.
-\item \code{dsimaging.analysis.model_registry}: model registry path.
+\item \code{dsimaging.analysis.models_dir} / \code{DSIMAGING_MODELS}: administrator model
+bundle root (default \verb{/var/lib/dsimaging/models}).
+\item \code{dsimaging.analysis.model_registry}: protected bundle registry directory
+(default \verb{<models>/registry}).
+\item \code{dsimaging.analysis.model_sources}: pinned administrator download recipes
+(default \verb{<models>/sources}).
+\item \code{dsimaging.analysis.model_python}: existing Python 3 for bundle verification;
+never automatically provisions an interpreter.
 \item \code{dsimaging.max_inflight}: per-generation active image-analysis job cap.
 \item \code{dsimaging.batch_size}: server-side drip-feed batch size.
 \item \code{dsimaging.analysis.claim_timeout_secs}: age after which interrupted

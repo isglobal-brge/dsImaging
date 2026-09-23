@@ -2,21 +2,24 @@
 % Please edit documentation in R/analysis_install_models.R
 \name{install_model}
 \alias{install_model}
-\title{Install a segmentation model}
+\title{Install and register a verified segmentation model bundle}
 \usage{
 install_model(provider, task, force = FALSE)
 }
 \arguments{
 \item{provider}{Character; "totalsegmentator", "lungmask", "monai", "nnunetv2".}
 
-\item{task}{Character; model/task name (e.g. "total", "R231", "wholebody_ct_segmentation").}
+\item{task}{Character; administrator-registered model/task name.}
 
-\item{force}{Logical; re-download even if already installed.}
+\item{force}{Logical; replace an existing bundle from the administrator recipe.}
 }
 \value{
-Invisible TRUE on success.
+Invisibly, verified bundle metadata including \code{manifest_sha256}.
 }
 \description{
-Downloads model weights to the server. Run once by the admin.
-After install, the model is available for all dsImaging jobs.
+Administrator-only provisioning from a pinned source recipe at
+\verb{<models>/sources/<provider>/<task>.json}. Every file is downloaded and
+verified before the manifest and its registry digest are published.
+Existing bundles are reverified; old \code{.installed} markers are not accepted.
+No model weights are downloaded during inference.
 }

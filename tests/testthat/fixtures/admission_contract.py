@@ -530,6 +530,7 @@ def case_wsi(root, context, path, env):
 
 
 def install_fake_monai(root):
+    from model_bundles import fake_distribution, make_bundle
     modules = root / "fake_modules" / "monai"
     modules.mkdir(parents=True)
     (modules / "__init__.py").write_text("")
@@ -550,10 +551,8 @@ def run(**kwargs):
         os.symlink(kwargs["image"], os.path.join(kwargs["output_dir"], "linked.nii.gz"))
 ''')
     model_root = root / "models"
-    configs = model_root / "monai" / "synthetic" / "configs"
-    configs.mkdir(parents=True)
-    (configs / "inference.json").write_text(json.dumps({"image": "", "output_dir": "", "run": "inference"}))
-    (configs / "metadata.json").write_text("{}")
+    make_bundle(model_root, "monai", "synthetic")
+    fake_distribution(modules.parent, "monai", "0.0.1")
     return model_root, modules.parent
 
 

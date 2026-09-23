@@ -2,13 +2,14 @@
 % Please edit documentation in R/analysis_model_registry.R
 \name{list_segmentation_models}
 \alias{list_segmentation_models}
-\title{List installed segmentation models}
+\title{List registered segmentation model bundles}
 \usage{
 list_segmentation_models()
 }
 \value{
-Data frame with model name, provider, task, and path.
+Data frame with name, provider, task, path, installed_at,
+manifest_sha256 and ready, after verifying registered bundle contents.
 }
 \description{
-List installed segmentation models
+List registered segmentation model bundles
 }

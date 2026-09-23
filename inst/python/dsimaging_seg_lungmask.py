@@ -6,6 +6,10 @@ Models: R231, LTRCLobes, LTRCLobes_R231, R231CovidWeb
 """
 import argparse, json, os, sys
 
+from dsimaging_model_bundles import (
+    ModelBundleError, bundle_path, prepare_inference, disable_provider_downloads,
+)
+
 from dsimaging_utils import (
     IMAGE_EXTS,
     cfg,
@@ -65,10 +69,22 @@ def main():
     print(f"  Found {len(images)} images")
     os.makedirs(args.output, exist_ok=True)
 
+    try:
+        bundle = prepare_inference("lungmask", args.model)
+    except ModelBundleError as exc:
+        print("ERROR: Model bundle unavailable: " + str(exc), file=sys.stderr)
+        sys.exit(1)
     import SimpleITK as sitk
     from lungmask import LMInferer
-
-    inferer = LMInferer(modelname=args.model)
+    disable_provider_downloads(bundle)
+    runtime = bundle["manifest"]["runtime"]
+    model_args = {"modelpath": bundle_path(bundle, runtime["model_path"])}
+    if args.model == "LTRCLobes_R231":
+        model_args.update(modelname="LTRCLobes", fillmodel="R231",
+                          fillmodel_path=bundle_path(bundle, runtime["fillmodel_path"]))
+    else:
+        model_args["modelname"] = args.model
+    inferer = LMInferer(**model_args)
     results = []
     output_samples = {}
     for img_path, sample_id in images:
@@ -96,12 +112,14 @@ def main():
 
     summary = {"n_total": len(images), "n_done": sum(1 for r in results if r["status"] == "done"),
                "n_failed": sum(1 for r in results if r["status"] == "failed"), "model": args.model,
+               "model_bundle_manifest_sha256": bundle["manifest_sha256"],
                "versions": package_versions(["lungmask", "SimpleITK", "numpy", "torch"])}
     with open(os.path.join(args.output, "segmentation_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
 
     # Write seg_manifest.json
-    seg_manifest = {"provider": "lungmask", "model": args.model, "samples": {}}
+    seg_manifest = {"provider": "lungmask", "model": args.model,
+                    "model_bundle_manifest_sha256": bundle["manifest_sha256"], "samples": {}}
     for r in results:
         sid = r["sample_id"]
         if r["status"] == "done":

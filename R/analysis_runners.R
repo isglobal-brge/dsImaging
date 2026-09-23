@@ -47,6 +47,10 @@
     DSIMAGING_WORKER_CONTEXT_DIR = .imaging_worker_context_dir(),
     DSIMAGING_CREDENTIALS_PATH = .imaging_credentials_path()
   )
+  model_env <- c(rosetta_mkl_env, list(
+    DSIMAGING_MODELS = .models_dir(),
+    DSIMAGING_MODEL_REGISTRY = .model_registry_path()
+  ))
 
   # PyRadiomics extraction runner
   .write_runner_yaml(runners_dir, "pyradiomics_extract", .with_container(list(
@@ -104,7 +108,7 @@
       "--task", "{task}"
     ),
     timeout_secs = 7200L,
-    env = rosetta_mkl_env,
+    env = model_env,
     allowed_params = c("task", "fast", "roi_subset", "statistics",
                         "dataset_id", "worker_context", "image_asset", "provider",
                         "image", "sample_id", "generation_id")
@@ -137,7 +141,7 @@
       "--model", "{model_name}"
     ),
     timeout_secs = 3600L,
-    env = rosetta_mkl_env,
+    env = model_env,
     allowed_params = c("model_name", "image_asset", "provider",
                         "dataset_id", "worker_context", "image", "sample_id", "generation_id")
   ), "lungmask_infer", list(
@@ -204,7 +208,7 @@
       "--model", "{model_name}"
     ),
     timeout_secs = 7200L,
-    env = rosetta_mkl_env,
+    env = model_env,
     allowed_params = c("model_name", "fold", "checkpoint", "step_size",
                         "dataset_id", "worker_context", "image_asset", "provider",
                         "image", "sample_id", "generation_id")
@@ -236,8 +240,8 @@
       "--bundle", "{bundle_name}"
     ),
     timeout_secs = 7200L,
-    env = rosetta_mkl_env,
-    allowed_params = c("bundle_name", "bundle_path", "device",
+    env = model_env,
+    allowed_params = c("bundle_name", "device",
                         "dataset_id", "worker_context", "image_asset", "provider",
                         "image", "sample_id", "generation_id")
   ), "monai_bundle_infer", list(
