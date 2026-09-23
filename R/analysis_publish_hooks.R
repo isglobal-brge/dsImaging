@@ -327,7 +327,7 @@
         is.na(max_tiles) || max_tiles < 1 || max_tiles > 1024 ||
         max_tiles %% 1 != 0 ||
         !identical(sort(rendered, method = "radix"),
-          head(sort(ids, method = "radix"), max_tiles))) {
+          utils::head(sort(ids, method = "radix"), max_tiles))) {
       stop("QC publication cap mapping is invalid.", call. = FALSE)
     }
     table <- tryCatch(utils::read.csv(
