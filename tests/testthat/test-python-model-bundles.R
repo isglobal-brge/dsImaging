@@ -28,7 +28,7 @@ test_that("registered bundles verify exact bytes, safe paths and complete provid
   expect_identical(result$listed_bundles, 1L)
   expect_true(result$digest_pinned)
   expect_true(result$crop_required)
-  expect_identical(result$checkpoint_refusals, 4L)
+  expect_identical(result$checkpoint_refusals, 6L)
 })
 
 test_that("admin installation registers only complete verified downloads and is idempotent", {
