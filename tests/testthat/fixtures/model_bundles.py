@@ -176,12 +176,12 @@ def case_verification(root):
     bundle = bundles.verify_bundle("lungmask", "R231", root=str(loader_root))
     outside = root / "undeclared-checkpoint.bin"
     outside.write_bytes(b"not in manifest")
-    for module_name in ("torch", "torch.jit"):
+    for module_name in ("torch", "torch.jit", "torch.serialization"):
         module = types.ModuleType(module_name)
         module.load = lambda *args, **kwargs: "loaded"
         sys.modules[module_name] = module
     bundles.guard_checkpoint_loads(bundle)
-    for module_name in ("torch", "torch.jit"):
+    for module_name in ("torch", "torch.jit", "torch.serialization"):
         load = sys.modules[module_name].load
         assert load(directory / "weights/model.pth") == "loaded"
         with open(directory / "weights/model.pth", "rb") as handle:
@@ -189,7 +189,7 @@ def case_verification(root):
         expect_refusal(lambda: load(outside), "unlisted checkpoint with arbitrary extension")
         expect_refusal(lambda: load(io.BytesIO(b"undeclared checkpoint")), "anonymous checkpoint stream")
     return {"negative_cases": count, "listed_bundles": 1, "digest_pinned": True,
-            "crop_required": True, "checkpoint_refusals": 4}
+            "crop_required": True, "checkpoint_refusals": 6}
 
 
 def case_installer(root):
@@ -346,6 +346,13 @@ def check():
         assert os.environ.get(name) == "1", name
     record("import", offline=True)
     mode = os.environ.get("FAKE_PROVIDER_MODE", "normal")
+    if mode == "warm-cache":
+        try:
+            pathlib.Path(os.environ["FAKE_CACHE_MODEL"]).read_bytes()
+        except Exception as error:
+            record("cache_refused", error=str(error))
+            raise
+        raise AssertionError("Unregistered cached model was read during provider import")
     if mode == "download":
         try:
             urllib.request.urlopen(os.environ["FAKE_DOWNLOAD_URL"], timeout=1).read()
@@ -462,6 +469,9 @@ def case_runners(root):
                  "monai": ("synthetic", "monai", "--bundle")}
     negative = 0
     download_refusals = 0
+    cache_refusals = 0
+    outside = root / "pytorch_model.bin"
+    outside.write_bytes(b"unregistered warm-cache checkpoint")
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen()
@@ -506,6 +516,12 @@ def case_runners(root):
                 assert Path(used["modelpath"]) == composite / "weights/model.pth"
                 assert Path(used["fillmodel_path"]) == composite / "weights/fill.pth"
                 task = primary_task
+            result, events = execute("warm-cache", FAKE_PROVIDER_MODE="warm-cache",
+                                     FAKE_CACHE_MODEL=str(outside))
+            assert result.returncode != 0, "Unregistered cached model reached inference"
+            assert any(event["event"] == "cache_refused" and "verified bundle" in event["error"]
+                       for event in events), events
+            cache_refusals += 1
             for mode in ("download", "child-download", "spawn-download"):
                 result, events = execute(mode, FAKE_PROVIDER_MODE=mode)
                 assert result.returncode != 0, f"{provider} permitted {mode}"
@@ -540,7 +556,7 @@ def case_runners(root):
             negative += 1
     return {"providers": 4, "negative_cases": negative,
             "download_refusals": download_refusals, "explicit_paths": True,
-            "offline": True, "composite_lungmask": True}
+            "offline": True, "composite_lungmask": True, "cache_refusals": cache_refusals}
 
 
 if __name__ == "__main__":

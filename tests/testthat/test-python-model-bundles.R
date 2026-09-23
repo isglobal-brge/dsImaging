@@ -51,6 +51,7 @@ test_that("every provider uses local bundles and refuses direct and child downlo
   expect_identical(result$providers, 4L)
   expect_identical(result$download_refusals, 12L)
   expect_identical(result$negative_cases, 13L)
+  expect_identical(result$cache_refusals, 4L)
   expect_true(result$explicit_paths)
   expect_true(result$offline)
   expect_true(result$composite_lungmask)

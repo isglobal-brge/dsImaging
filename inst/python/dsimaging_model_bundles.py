@@ -505,7 +505,7 @@ def install_offline_guard():
     os.environ["PYTHONPATH"] = os.pathsep.join([scripts] + [p for p in paths if p and p != scripts])
 
     verified_files = set(json.loads(os.environ.get("DSIMAGING_VERIFIED_MODEL_FILES", "[]")))
-    checkpoint_suffixes = (".pth", ".pt", ".ckpt", ".onnx", ".safetensors", ".h5", ".hdf5", ".npz")
+    checkpoint_suffixes = (".pth", ".pt", ".bin", ".ckpt", ".onnx", ".safetensors", ".h5", ".hdf5", ".npz")
 
     def audit(event, args):
         if event == "open" and verified_files and isinstance(args[0], (str, bytes)):
@@ -564,6 +564,7 @@ def guard_checkpoint_loads(bundle):
         return load
 
     for module_name, names in {"torch": ("load",), "torch.jit": ("load",),
+                               "torch.serialization": ("load",),
                                "safetensors.torch": ("load_file",),
                                "safetensors.numpy": ("load_file",)}.items():
         module = sys.modules.get(module_name)
