@@ -1,0 +1,20 @@
+* installing *source* package ‘dsImaging’ ...
+** this is package ‘dsImaging’ version ‘0.6.0’
+** using staged installation
+[dsImaging configure] Preparing state directory: /var/lib/dsimaging
+[dsImaging configure] WARNING: Cannot create /var/lib/dsimaging. Will retry at runtime.
+[dsImaging configure] Checking R dependencies...
+[dsImaging configure] Python: /Users/david/Library/Application Support/uv/python/cpython-3.11.14-macos-aarch64-none/bin/python3.11 (Python 3.11.14)
+[dsImaging configure] WARNING: Cannot create utility venv parent.
+[dsImaging configure] WARNING: Cannot create /var/lib/dsimaging/venvs. Analysis runners can still use containers.
+[dsImaging configure] dsImaging setup complete.
+** R
+** inst
+** byte-compile and prepare package for lazy loading
+** help
+*** installing help indices
+** building package indices
+** testing if installed package can be loaded from temporary location
+** testing if installed package can be loaded from final location
+** testing if installed package keeps a record of temporary installation path
+* DONE (dsImaging)

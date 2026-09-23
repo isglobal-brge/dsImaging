@@ -1,0 +1,51 @@
+DSIMAGING_MODELS_2026-09-23: independent TotalSegmentator dependency audit
+Recorded UTC: 2026-09-23T16:06:43.825092+00:00
+Status: PASS (static upstream source audit; no real model weights downloaded)
+
+Scope: TotalSegmentator v2.4.0 only; independently compared the implementation
+constants TS_MODELS/TS_TASK_MODELS with the pinned upstream provider sources.
+
+Primary source URL and SHA-256 of exact downloaded source bytes:
+https://raw.githubusercontent.com/wasserth/TotalSegmentator/v2.4.0/totalsegmentator/python_api.py
+73a35286c7f39b34ef96b8ba3b0cf2ce2f03d30dd74279c50f1cf60058416ef0  python_api.py
+https://raw.githubusercontent.com/wasserth/TotalSegmentator/v2.4.0/totalsegmentator/libs.py
+d0ca5c8c383375e6a6a7b2f40f0b31910f1c568aa0ccf3fc2f51c0e47ba501e1  libs.py
+https://raw.githubusercontent.com/wasserth/TotalSegmentator/v2.4.0/totalsegmentator/nnunet.py
+1003d804f46b82219461b6b66162878ffcea3d81fb9adf8d9b10e4e16fbb8ad3  nnunet.py
+https://raw.githubusercontent.com/wasserth/TotalSegmentator/v2.4.0/totalsegmentator/config.py
+10baf34b1ab97d357a66c8e328315e4f1e17afc39fb0c05a9e79c3a6c70a0fc4  config.py
+
+Method:
+1. Download the four pinned sources with curl --fail --silent --show-error;
+   no upstream code or weight downloader was imported or executed.
+2. Use Python ast to extract libs.py task_id branches and weights_path
+   assignments; compare all 23 ID/folder pairs to TS_MODELS: PASS.
+3. Extract only python_api.py task-selection assignments/conditions; evaluate
+   normal/fast/fastest flag variants while stripping expression calls.
+   Compare each permitted task_id/trainer/model tuple to registered constants:
+   27 accepted mode branches across 12 supported tasks: PASS.
+4. Inspect downstream crop and predictor logic: CT crop uses 298 (robust 297),
+   MR uses 733 (robust 732); all required crop IDs are in the closures.
+   Final folds=[0] overrides earlier pleural folds=None, confirming fold_0.
+   Auxiliary body model 300 is used only for body_seg=True; dsImaging leaves
+   that provider option unexposed/default False.
+
+Checked supported task closures:
+  total: 291,292,293,294,295,297,298
+  total_mr: 730,731,732,733
+  body: 299,300
+  lung_vessels: 258,298
+  cerebral_bleed: 150,298
+  hip_implant: 260,298
+  coronary_arteries: 503,298
+  pleural_pericard_effusion: 315,298
+  head_glands_cavities: 775,298
+  headneck_bones_vessels: 776,298
+  head_muscles: 777,298
+  headneck_muscles: 778,779,298
+
+Limitations: source-level audit of required provider model IDs/layouts only.
+Actual upstream ZIP contents, checkpoint bytes, GPU execution and clinical
+prediction accuracy were not evaluated. Installer and inference contracts are
+exercised separately by synthetic bundle/fake-provider tests. No live model
+weights were downloaded and no historical imaging demonstration was rerun.

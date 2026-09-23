@@ -1,0 +1,48 @@
+Command: /opt/homebrew/bin/python3.11 - <<'PY'
+import json, os, pathlib, sys, tempfile
+sys.path.insert(0, str(pathlib.Path.cwd() / "inst/python"))
+import torch
+from dsimaging_model_bundles import ModelBundleError, install_offline_guard, disable_provider_downloads
+with tempfile.TemporaryDirectory() as tmp:
+    directory = pathlib.Path(tmp)
+    (directory / "models").mkdir()
+    registered = directory / "models" / "local.pth"
+    warm_cache = directory / "pytorch_model.bin"
+    torch.save({"weight": torch.ones(1)}, registered)
+    torch.save({"weight": torch.zeros(1)}, warm_cache)
+    os.environ["DSIMAGING_VERIFIED_MODEL_FILES"] = json.dumps([str(registered.resolve())])
+    captured_load = torch.serialization.load
+    install_offline_guard()
+    assert torch.load(registered, weights_only=True)["weight"].tolist() == [1.0]
+    print("PASS registered checkpoint loads before provider wrappers")
+    try:
+        torch.load(warm_cache, weights_only=True)
+    except ModelBundleError:
+        print("PASS import-time external pytorch_model.bin refused before provider wrappers")
+    else:
+        raise AssertionError("External warm-cache checkpoint escaped audit")
+    bundle = {"provider": "monai", "path": str(directory),
+              "manifest": {"files": [{"path": "models/local.pth"}]}}
+    disable_provider_downloads(bundle)
+    for name, loader in (("torch.load", torch.load),
+                         ("torch.serialization.load", torch.serialization.load),
+                         ("captured torch.serialization.load alias", captured_load)):
+        assert loader(registered, weights_only=True)["weight"].tolist() == [1.0]
+        try:
+            loader(warm_cache, weights_only=True)
+        except ModelBundleError:
+            print("PASS " + name + ": registered checkpoint loads; external warm-cache checkpoint refused")
+        else:
+            raise AssertionError(name + " escaped audit")
+    print("Torch version:", torch.__version__)
+    print("Python executable:", sys.executable)
+PY
+
+Results:
+PASS registered checkpoint loads before provider wrappers
+PASS import-time external pytorch_model.bin refused before provider wrappers
+PASS torch.load: registered checkpoint loads; external warm-cache checkpoint refused
+PASS torch.serialization.load: registered checkpoint loads; external warm-cache checkpoint refused
+PASS captured torch.serialization.load alias: registered checkpoint loads; external warm-cache checkpoint refused
+Torch version: 2.10.0
+Python executable: /opt/homebrew/opt/python@3.11/bin/python3.11
