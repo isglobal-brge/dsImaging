@@ -42,17 +42,17 @@ expected count. Unsupported geometry and ambiguous references are refused.
 | Route | Exact input and output association | Analyst obtains | Remains on node |
 | --- | --- | --- | --- |
 | `dicom_convert` | One sealed single-file DICOM or complete series per sample; one spatially valid NIfTI per sample, with size/hash and full-roster output manifest. | Opaque workflow/asset reference and coarse completion state; subsequent authorized server workflows can consume it. | All DICOM instances, headers, identifiers, NIfTI bodies, paths and exact progress. |
-| `rt_convert` | One mapped RTSTRUCT and its mapped reference series per sample; patient, study, frame, referenced series and SOP instances must agree. Selected ROIs are combined into exactly one binary mask per sample; missing ROIs, invalid contours or ambiguous references fail. DICOM SEG remains refused unless equivalent frame association is implemented and tested. | Opaque mask asset usable by segmentation/radiomics workflows. | Contours, ROI labels, reference images, mask bodies and local manifests. |
-| `rt_dose_plan` | Exactly one mapped RTDOSE and RTPLAN per sample, with matching canonical patient and DICOM study/frame and referenced plan. Optional mapped masks are joined by sample ID and require compatible spatial geometry. Output is a long per-ROI dose table keyed uniquely by `(sample_id, roi)`; every admitted sample must occur. | Opaque asset reference; an authorized ASSIGN can place the complete derived table in the server session, subject to the same patient admission and downstream disclosure controls as radiomics. | Per-ROI rows, numeric individual results, plan metadata, paths and all DICOM bodies; no aggregate method returns the raw table. |
+| `rt_convert` | One mapped RTSTRUCT or binary DICOM SEG and its mapped reference series per sample; patient, study, frame, referenced series and SOP instances must agree. SEG additionally binds every voxel frame to its source grid and segment. Labels or numbers select one segment or a union, publishing exactly one mask per sample. See the additional admission contract below. | Opaque mask asset usable by segmentation/radiomics workflows. | Contours, ROI labels, reference images, mask bodies and local manifests. |
+| `rt_dose_plan` | Exactly one mapped RTDOSE and RTPLAN per sample, with matching canonical patient and DICOM study/frame and referenced plan. Optional mapped masks are joined by sample ID and require compatible spatial geometry. Output is a long per-ROI dose table keyed uniquely by `(sample_id, roi_label)` for a declared public vocabulary (legacy tables retain `roi`); every sample/declared-label pair occurs, including missing measurements for absent labels. | Opaque asset reference; an authorized ASSIGN can place the complete derived table in the server session, subject to the same patient admission and downstream disclosure controls as radiomics. | Per-ROI rows, numeric individual results, plan metadata, paths and all DICOM bodies; no aggregate method returns the raw table. |
 | `wsi_tile` | Exactly one mapped self-contained slide per sample. Each slide has a private manifest, including zero-tile cases, and an exact integrity map covering every emitted tile. Sidecar-based slide formats without a complete mapping remain refused. | Opaque tile asset and coarse workflow state; public metadata retains its existing threshold/bucket policy. | Per-slide tile counts (private fan-out), coordinates, tissue fractions, tile manifests and tile bodies. No per-slide count or identifier is added to public metadata. |
 | MONAI | Exact mapped image per sample. A locally installed, administrator-controlled bundle runs in a fresh per-sample output directory; exactly one mask is required, checked against the input geometry and renamed pseudonymously. Zero, multiple or misplaced masks fail. | Opaque mask asset and the existing segment-and-extract workflows. | Model paths, input images, output masks, worker files and diagnostics. |
 
 Dose-table fan-out is a dedicated validation branch, not a relaxation of the
 one-row-per-sample invariant for radiomics, QC or embedding tables. It verifies
 the distinct sample roster, each sample's canonical patient mapping, unique ROI
-keys and a fixed numeric schema. Supported ROI keys are `whole_grid` and one
-optional `mask`, the union of positive voxels in the mapped mask; arbitrary
-multi-label ROI export is not admitted. The minimum cohort threshold uses distinct
+keys and a fixed numeric schema. The initial ROI keys `whole_grid` and one optional `mask` (positive-voxel
+union) remain compatible. The additional admission below adds a declared
+public vocabulary for labelled masks and sets of masks. The minimum cohort threshold uses distinct
 patients, never ROI rows. Only the declared training label may be joined.
 Repeated-observation analysis remains the responsibility of the downstream
 trusted DataSHIELD package. Raw dose-table assignment cannot make rows public.
@@ -100,3 +100,71 @@ state. Profile and QC tests check selection and bounds. Both full test suites
 and R CMD check run against clean committed checkouts; the validation receipt
 records exact tested commits, commands, counts, runtime versions and any skips
 or unclosed limitations. No tags or pushes are part of this change.
+
+## Additional admission: SEG voxels and declared dose ROIs
+
+Decision: 2026-09-23, `DSIMAGING_RAISE2_2026-09-23`, still version 0.5.0.
+This section supersedes the initial SEG refusal and restriction to two dose
+ROI groups above. The complete sealed patient roster, source integrity,
+publication and DataSHIELD trust boundaries remain mandatory.
+
+`rt_convert` accepts exactly one mapped DICOM SEG object per sample and that
+sample's mapped, complete CT/MR reference series. Each file is size/SHA-256
+verified. PatientID, StudyInstanceUID and FrameOfReferenceUID must match;
+the SEG's single referenced series must enumerate exactly the mapped SOP
+instances with matching SOP classes. Each voxel frame identifies exactly one
+segment and one mapped source slice, with matching rows, columns, orientation,
+position and spacing. Duplicate segment numbers/labels, duplicate segment/slice
+frames, ambiguous references and unsupported grids are refused. The admitted
+profile is BINARY Segmentation Storage. Fractional/LABELMAP segmentations,
+resampled grids and multiframe reference images remain unsupported. Sparse
+frames mean zero on omitted slices only when the full source series is
+explicitly referenced and each declared segment has a frame.
+
+The analyst selects SEG SegmentLabel values with `rois`, or positive
+`segment_numbers`, never both. Selecting one segment produces its individual
+binary mask asset; separate requests/output names produce per-segment assets.
+Selecting several (or omitting selection) produces their binary union. Each
+request still publishes exactly one hashed NIfTI mask per admitted sample;
+there is no implicit primary chosen from several segment files. Labels,
+segment inventory, mask bytes and individual presence remain private.
+
+`rt_dose_plan` accepts either one mapped labelled `mask_asset` or a set of
+mapped `mask_assets`. In labelled mode the analyst declares `roi_labels`
+(public names, 1–128 distinct tokens) and corresponding positive integer
+`mask_labels`. A single asset supplies all mask values, or `mask_assets`
+provides one asset per public name/value pair. Repeating an asset for distinct
+values is allowed; assigning the same asset/value pair to several names is
+ambiguous and refused. Every distinct asset covers the exact admitted roster,
+is hashed, and is joined by sample ID. Every mask must have the dose grid's
+size, origin, spacing and direction; dose/plan patient, study, frame and plan
+references retain their existing checks. Source mask identity comes from the
+sealed sample map; NIfTI files cannot supply DICOM identity themselves.
+
+The output has exactly one `(sample_id, roi_label)` row for every admitted
+sample and every declared public label, in the declared order. Columns are
+`dose_min`, `dose_max`, `dose_mean`, `dose_std` (population standard deviation),
+`dose_voxels`, and the existing plan counts `n_beams`, `n_fraction_groups`,
+`n_fractions`. Dose values are physical Gy. An absent label has four missing
+measurements and zero voxels; its row is retained, and workflow success never
+depends on that label being present. Undeclared private mask values are ignored,
+not discovered or included in errors. Invalid geometry/bytes/label encoding
+still fails with the runner's generic private error. No labelled request adds
+an implicit `whole_grid` row. Without the public schema, legacy `roi` rows
+(`whole_grid` and optional positive-mask union `mask`) remain compatible.
+
+Publication and ASSIGN both validate the complete public cross-product,
+unique keys, numeric/missing-value rules and distinct patient threshold.
+The submitted schema is retained in private asset provenance and rechecked on
+ASSIGN; the observed private table never defines its own permitted vocabulary.
+Only the manifest-declared training label may join these repeated sample rows.
+Dose fan-out remains refused by feature views requiring one row per sample.
+Opaque asset references and coarse workflow state cross the boundary; raw dose
+rows enter only the authorized server-side ASSIGN, with radiomics-equivalent
+controls and downstream trusted-package disclosure responsibilities.
+
+Verification adds pydicom-built binary SEG, several labelled dose regions,
+missing-label rows, sets of mapped masks, positive admission/publication/ASSIGN,
+and mutations of association, ambiguity, integrity and disclosure. Complete
+suites and clean-checkout R package checks are recorded as a new receipt,
+retaining the initial admission results.
