@@ -33,7 +33,7 @@ test_that("registered bundles verify exact bytes, safe paths and complete provid
 
 test_that("admin installation registers only complete verified downloads and is idempotent", {
   result <- run_python_model_case("installer")
-  expect_identical(result$downloads, 7L)
+  expect_identical(result$downloads, 8L)
   expect_identical(result$negative_cases, 7L)
   expect_true(result$idempotent)
   expect_true(result$complete_manifest)

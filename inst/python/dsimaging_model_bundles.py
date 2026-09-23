@@ -171,7 +171,7 @@ def _manifest(manifest, provider, task):
         name = _relative(entry.get("path"))
         if name == "manifest.json" or name in listed:
             raise ModelBundleError("Duplicate or reserved model manifest file path")
-        if type(entry.get("size")) is not int or entry["size"] <= 0:
+        if type(entry.get("size")) is not int or entry["size"] < 0:
             raise ModelBundleError("Invalid model file size")
         if not isinstance(entry.get("sha256"), str) or not re.fullmatch(r"[a-f0-9]{64}", entry["sha256"]):
             raise ModelBundleError("Invalid model file SHA-256")
@@ -231,6 +231,8 @@ def _closure(manifest, files):
             required.extend(model_root + "/" + name for name in ("dataset.json", "plans.json", "fold_0/checkpoint_final.pth"))
     if any(name not in files for name in required):
         raise ModelBundleError("Model bundle is missing a required weight, configuration or auxiliary file")
+    if any(files[name]["size"] == 0 for name in required):
+        raise ModelBundleError("Required model weights and configuration must not be empty")
 
 
 def monai_weight_bindings(runtime):
@@ -336,7 +338,7 @@ def _source(entry):
         raise ModelBundleError("Administrator source files require explicit HTTPS or file URLs")
     if parsed.scheme == "file" and parsed.netloc not in ("", "localhost"):
         raise ModelBundleError("Local source URLs cannot name a remote host")
-    if type(entry.get("size")) is not int or entry["size"] <= 0 or not re.fullmatch(r"[a-f0-9]{64}", str(entry.get("sha256", ""))):
+    if type(entry.get("size")) is not int or entry["size"] < 0 or not re.fullmatch(r"[a-f0-9]{64}", str(entry.get("sha256", ""))):
         raise ModelBundleError("Model download sources require pinned sizes and SHA-256")
 
 

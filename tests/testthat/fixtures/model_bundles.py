@@ -153,6 +153,14 @@ def case_verification(root):
     write_json(directory / "manifest.json", manifest)
     expect_refusal(lambda: bundles.register_bundle("totalsegmentator", "lung_vessels", root=str(model_root)), "missing TS crop model")
     count += 1
+    model_root = root / "empty-required-weight"
+    directory, manifest = make_bundle(model_root, register=False)
+    weight = directory / "weights/model.pth"
+    weight.write_bytes(b"")
+    manifest["files"] = [file_entry(weight, "weights/model.pth")]
+    write_json(directory / "manifest.json", manifest)
+    expect_refusal(lambda: bundles.register_bundle("lungmask", "R231", root=str(model_root)), "empty required weight")
+    count += 1
     model_root = root / "listing"
     directory, manifest = make_bundle(model_root)
     listed = bundles.list_bundles(root=str(model_root))
@@ -186,6 +194,12 @@ def case_verification(root):
 
 def case_installer(root):
     source, manifest = make_bundle(root / "source", register=False)
+    # A complete bundle may contain an empty Python package marker; required
+    # checkpoints still cannot be empty. Direct and archive transport agree.
+    support = source / "scripts" / "__init__.py"
+    support.parent.mkdir()
+    support.touch()
+    manifest["files"].append(file_entry(support, "scripts/__init__.py"))
     recipe = copy.deepcopy(manifest)
     recipe.pop("download_date")
     for item in recipe["files"]:
@@ -198,6 +212,7 @@ def case_installer(root):
     written = json.loads((installed / "manifest.json").read_text())
     assert written["download_date"] and written["provider"] == "lungmask"
     assert written["files"][0]["sha256"] == manifest["files"][0]["sha256"]
+    assert (installed / "scripts/__init__.py").stat().st_size == 0
     assert bundles.verify_bundle("lungmask", "R231", root=str(model_root))
     # A second install must use its verified registration even if the source is gone.
     (source / recipe["files"][0]["path"]).unlink()
@@ -265,7 +280,7 @@ def case_installer(root):
     assert restored["ready"] and restored["manifest_sha256"] == prior["manifest_sha256"]
     assert pin_path.read_bytes() == old_pin
     assert (installed / "weights/model.pth").read_bytes() == b"synthetic primary weight"
-    return {"downloads": 1 + len(ts_manifest["files"]), "idempotent": True, "negative_cases": 7,
+    return {"downloads": len(manifest["files"]) + len(ts_manifest["files"]), "idempotent": True, "negative_cases": 7,
             "complete_manifest": True, "rollback_preserved": True}
 
 
@@ -284,10 +299,13 @@ def case_archives(root):
                 zipped.writestr("../outside.pth", content)
             else:
                 zipped.writestr("model.pth", content)
+                zipped.writestr("__init__.py", b"")
                 if mode == "undeclared":
                     zipped.writestr("hidden.pth", b"unlisted weight")
         recipe = copy.deepcopy(manifest)
         recipe.pop("download_date")
+        recipe["files"].append({"path": "weights/__init__.py", "size": 0,
+                                "sha256": hashlib.sha256(b"").hexdigest()})
         archive_source = {"url": archive.as_uri(), "size": archive.stat().st_size,
                           "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
                           "destination": "weights"}
@@ -303,6 +321,7 @@ def case_archives(root):
             bundle = bundles.verify_bundle("lungmask", "R231", root=str(model_root))
             assert bundle["ready"]
             assert (Path(bundle["path"]) / "weights/model.pth").read_bytes() == content
+            assert (Path(bundle["path"]) / "weights/__init__.py").read_bytes() == b""
             assert bundle["manifest"]["archives"][0]["sha256"] == archive_source["sha256"]
         else:
             expect_refusal(lambda: bundles.install_bundle("lungmask", "R231", root=str(model_root)), mode + " ZIP")

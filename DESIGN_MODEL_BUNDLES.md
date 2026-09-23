@@ -44,8 +44,10 @@ never a model path, registry location, source URL or checksum.
 | `runtime` | Provider-specific local entry points and inference requirements. |
 
 All weight files, model plans, inference configuration, metadata and other
-supporting files belong in `files`. File paths must remain inside the bundle;
-absolute paths, traversal, duplicate entries and symlinks are refused. Extra
+supporting files belong in `files`. Empty supporting files such as Python
+package markers are allowed; provider-required weights and configuration must
+be nonempty. File paths must remain inside the bundle. Absolute paths,
+traversal, duplicate entries and symlinks are refused. Extra
 files cannot silently augment the bundle. The manifest itself is excluded
 from its file list: its exact bytes are SHA-256-pinned separately in the
 administrator registry. Rewriting either model bytes or manifest metadata
