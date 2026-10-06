@@ -85,6 +85,14 @@ imagingLineageDS <- function(asset_id) {
 #' asset into the server session as a data.frame, after validating the complete
 #' sample roster and distinct-patient threshold used for imaging resources.
 #'
+#' Unchanged exports containing the original sample key and manifest-declared
+#' label can be consumed directly by dsFlower in the same session, including
+#' lossless conversion to an Arrow Table/RecordBatch that preserves export row
+#' order. The admitted patient mapping remains private. Reordered copies,
+#' subsets, changed values, missing structural columns,
+#' ambiguous provenance and revoked source handles cannot regain a training
+#' view. For clinical joins use \code{imagingFeatureViewDS()}.
+#'
 #' Supported asset kinds are \code{radiomics_collection},
 #' \code{feature_table}, \code{qc_table}, \code{dose_table}, and
 #' \code{embedding_table}.
@@ -108,9 +116,12 @@ imagingLoadAssetDS <- function(handle_symbol, asset_id_or_alias, columns = NULL,
   owner_env <- parent.frame()
   authorized <- .authorized_imaging_dataset(
     handle_symbol, owner_env = owner_env)
-  data <- .imaging_load_asset(authorized, asset_id_or_alias, columns,
-                              include_metadata, syntactic_names)
+  loaded <- .imaging_load_asset(authorized, asset_id_or_alias, columns,
+    include_metadata, syntactic_names, return_export_metadata = TRUE)
+  data <- loaded$data
   .mark_imaging_feature_table_export(owner_env)
+  .register_imaging_feature_table_export(data, authorized, handle_symbol,
+    owner_env, syntactic_names, loaded$original_names)
   data
 }
 
@@ -140,7 +151,8 @@ imagingLoadAssetDS <- function(handle_symbol, asset_id_or_alias, columns = NULL,
 #' @keywords internal
 .imaging_load_asset <- function(authorized, asset_id_or_alias, columns = NULL,
                                 include_metadata = FALSE,
-                                syntactic_names = FALSE) {
+                                syntactic_names = FALSE,
+                                return_export_metadata = FALSE) {
   dataset_id <- authorized$dataset_id
   db <- .asset_db_connect()
   on.exit(.asset_db_close(db))
@@ -192,8 +204,12 @@ imagingLoadAssetDS <- function(handle_symbol, asset_id_or_alias, columns = NULL,
     df <- df[, columns, drop = FALSE]
   }
 
+  original_names <- names(df)
   if (isTRUE(syntactic_names)) {
     names(df) <- make.names(names(df), unique = TRUE)
+  }
+  if (isTRUE(return_export_metadata)) {
+    return(list(data = df, original_names = original_names))
   }
   df
 }

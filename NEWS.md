@@ -1,3 +1,17 @@
+# dsImaging 0.6.1
+
+* Radiomics feature tables loaded with `imagingLoadAssetDS()` (and the radiomics
+  workflow loader) can be passed directly to `dsFlower::ds.flower.fit()` as an R
+  data frame or an Arrow table, as the specification describes. dsImaging now
+  registers each exact admitted export privately (same session, authoritative
+  patient roster, collection seal and declared target) so dsFlower 0.7.1 can
+  admit it through the existing imaging feature-view path with the patient
+  privacy unit. Modified, subset, reordered or joined copies and unrelated
+  tables remain blocked, exactly as before; no table attribute is trusted.
+* Export admission preserves the exact row order while normalizing container
+  representation and incidental attributes, so a lossless Parquet/Arrow round
+  trip is recognised as the same admitted table and reordered copies are rejected.
+
 # dsImaging 0.6.0
 
 * Replace segmentation installation markers and first-use downloads with

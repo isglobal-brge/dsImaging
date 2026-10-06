@@ -1,13 +1,12 @@
 # Module: Opaque Imaging Feature Views
 #
-# Feature tables intended for dsFlower remain behind a session-bound capability.
-# The private registry retains the complete admitted sample-to-patient roster;
-# only the opaque reference is assigned into the DataSHIELD workspace.
+# The private registry retains the complete admitted sample-to-patient roster.
+# dsFlower accepts opaque views and exact snapshots of admitted legacy exports;
+# patient mappings stay private in both cases.
 
-# A naked feature table is intentionally still available to legacy
-# DataSHIELD packages. Once one has entered a session, however, no trusted
-# consumer can prove that a later data.frame is not a copied or row-subsetted
-# derivative. Conservatively mark the whole owner environment for its lifetime.
+# A naked feature table is still available to legacy DataSHIELD packages. Mark
+# the whole session for its lifetime: only a complete unchanged registered
+# export in its original row order can regain a patient-bound view.
 #' @keywords internal
 .mark_imaging_feature_table_export <- function(owner_env) {
   if (!is.environment(owner_env)) {
@@ -28,6 +27,130 @@
     .imaging_session_state(owner_env, create = FALSE),
     error = function(e) NULL)
   !is.null(state) && isTRUE(state$flags$feature_table_exported)
+}
+
+# Normalize only the container and incidental attributes, preserving export row
+# order. Values, types and columns stay exact. A missing/duplicate/changed sample key
+# fails the same complete-roster guard used by opaque feature views.
+# No analyst-controlled attribute grants authority: entries live in session state.
+#' @keywords internal
+.imaging_export_frame <- function(object, contract = NULL, roster = NULL) {
+  if (inherits(object, c("Table", "RecordBatch"))) {
+    object <- as.data.frame(object)
+  }
+  if (!is.data.frame(object)) return(NULL)
+  object <- as.data.frame(object)
+  if (!is.null(contract) || !is.null(roster)) {
+    roster <- .validate_imaging_privacy_roster(roster)
+    id_col <- contract$id_col
+    if (!is.character(id_col) || length(id_col) != 1L || is.na(id_col) ||
+        !id_col %in% names(object) || anyDuplicated(names(object))) {
+      stop("Imaging export sample key is unavailable.", call. = FALSE)
+    }
+    sample_ids <- .canonical_imaging_privacy_ids(object[[id_col]])
+    .assert_exact_imaging_roster(sample_ids, roster,
+                                context = "Imaging feature table export")
+  }
+  attributes(object) <- list(names = names(object),
+    row.names = .set_row_names(nrow(object)), class = "data.frame")
+  object
+}
+
+# Retain the already-admitted roster alongside an exact legacy table export.
+# Exports without a sample key or the declared label remain available to legacy
+# consumers, but cannot be promoted to a patient-bound dsFlower training view.
+#' @keywords internal
+.register_imaging_feature_table_export <- function(
+    data, authorized, handle_symbol, owner_env, syntactic_names = FALSE,
+    original_names = names(data)) {
+  contract <- authorized$privacy
+  manifest <- authorized$manifest
+  if (is.null(contract$label_col) ||
+      !all(c(contract$id_col, contract$label_col) %in% original_names)) {
+    return(invisible(NULL))
+  }
+  if (isTRUE(syntactic_names)) {
+    structural <- unlist(contract[c("id_col", "privacy_unit_col", "label_col")],
+                         use.names = FALSE)
+    # Preserve exact structural names: repaired-name collisions must not change
+    # the identity or target role. Non-structural feature names may be repaired.
+    if (!identical(structural, make.names(structural))) return(invisible(NULL))
+    positions <- match(structural, original_names)
+    present <- !is.na(positions)
+    if (!identical(unname(names(data)[positions[present]]),
+                   unname(structural[present]))) return(invisible(NULL))
+  }
+  if (is.null(contract$label_col) ||
+      !all(c(contract$id_col, contract$label_col) %in% names(data))) {
+    return(invisible(NULL))
+  }
+  roster <- .validate_imaging_privacy_roster(authorized$privacy_roster)
+  sample_ids <- .canonical_imaging_privacy_ids(data[[contract$id_col]])
+  complete <- tryCatch({
+    .assert_exact_imaging_roster(sample_ids, roster,
+                               context = "Imaging feature table export")
+    TRUE
+  }, error = function(e) FALSE)
+  # Legacy loadable assets (for example dose ROI rows) can have multiplicities
+  # outside the feature-view contract. Do not change their loading semantics.
+  if (!complete) return(invisible(NULL))
+  exported_data <- .imaging_export_frame(data, contract, roster)
+  sample_ids <- .canonical_imaging_privacy_ids(exported_data[[contract$id_col]])
+  patient_map <- stats::setNames(roster$privacy_ids, roster$sample_ids)
+  private_data <- exported_data
+  private_data[[contract$privacy_unit_col]] <- unname(patient_map[sample_ids])
+  state <- .imaging_session_state(owner_env, create = TRUE)
+  feature_views <- state$feature_views
+  export_sha256 <- digest::digest(exported_data, algo = "sha256", serialize = TRUE)
+  data_sha256 <- digest::digest(private_data, algo = "sha256", serialize = TRUE)
+  for (existing in ls(feature_views, all.names = TRUE)) {
+    entry <- feature_views[[existing]]
+    if (is.list(entry) && identical(entry$export_sha256, export_sha256) &&
+        identical(entry$data_sha256, data_sha256) &&
+        identical(entry$source_handle_capability, authorized$handle_capability)) {
+      return(invisible(existing))
+    }
+  }
+  capability <- .new_imaging_feature_view_capability()
+  feature_views[[capability]] <- list(
+    source_handle_symbol = as.character(handle_symbol),
+    source_handle_capability = authorized$handle_capability,
+    dataset_id = authorized$dataset_id,
+    collection_seal = .imaging_authorized_collection_seal(authorized),
+    source_privacy = authorized$privacy,
+    manifest = manifest, privacy = contract, privacy_roster = roster,
+    data = private_data,
+    data_sha256 = data_sha256, exported_data = exported_data,
+    export_sha256 = export_sha256)
+  invisible(capability)
+}
+
+#' @keywords internal
+.imaging_export_reference <- function(object, owner_env,
+                                       expected_capability = NULL) {
+  frame <- .imaging_export_frame(object)
+  state <- .imaging_session_state(owner_env, create = FALSE)
+  if (is.null(frame) || is.null(state)) return(NULL)
+  candidates <- if (is.null(expected_capability)) {
+    ls(state$feature_views, all.names = TRUE)
+  } else expected_capability
+  matched <- character(0)
+  for (capability in candidates) {
+    entry <- state$feature_views[[capability]]
+    if (!is.list(entry) || is.null(entry$exported_data)) next
+    normalized <- tryCatch(.imaging_export_frame(
+      frame, entry$privacy, entry$privacy_roster), error = function(e) NULL)
+    if (is.null(normalized)) next
+    fingerprint <- digest::digest(normalized, algo = "sha256", serialize = TRUE)
+    if (identical(entry$export_sha256, fingerprint) &&
+        identical(entry$exported_data, normalized)) {
+      matched <- c(matched, capability)
+    }
+  }
+  # Equal table values alone cannot distinguish different admitted datasets or
+  # patient mappings. Ambiguous provenance must never select an arbitrary unit.
+  if (length(matched) != 1L) return(NULL)
+  structure(list(capability = matched[[1L]]), class = "dsimaging_feature_view_ref")
 }
 
 #' @keywords internal
@@ -366,7 +489,12 @@ imagingFeatureViewDS <- function(handle_symbol, asset_id_or_alias,
       !exists(symbol, envir = owner_env, inherits = FALSE)) {
     unavailable()
   }
+  if (bindingIsActive(symbol, owner_env)) unavailable()
   reference <- get(symbol, envir = owner_env, inherits = FALSE)
+  if (!.is_imaging_feature_view_reference(reference)) {
+    reference <- .imaging_export_reference(
+      reference, owner_env, expected_capability)
+  }
   if (!.is_imaging_feature_view_reference(reference)) unavailable()
   if (!is.null(expected_capability) &&
       (!is.character(expected_capability) ||
