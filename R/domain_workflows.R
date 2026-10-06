@@ -429,13 +429,17 @@ imagingLoadRadiomicsFeaturesDS <- function(request_encoded) {
     "workflow request")
   context <- .imaging_authorized_request(req, owner_env)
   req <- context$request
-  data <- .imaging_load_asset(context$authorized,
+  loaded <- .imaging_load_asset(context$authorized,
     .required_scalar(req$asset_id_or_alias %||% req$asset_id %||% req$alias,
       "asset_id_or_alias"),
     columns = req$columns %||% NULL,
     include_metadata = isTRUE(req$include_metadata),
-    syntactic_names = isTRUE(req$syntactic_names))
+    syntactic_names = isTRUE(req$syntactic_names),
+    return_export_metadata = TRUE)
+  data <- loaded$data
   .mark_imaging_feature_table_export(owner_env)
+  .register_imaging_feature_table_export(data, context$authorized, req$handle,
+    owner_env, isTRUE(req$syntactic_names), loaded$original_names)
   data
 }
 

@@ -35,6 +35,14 @@ asset into the server session as a data.frame, after validating the complete
 sample roster and distinct-patient threshold used for imaging resources.
 }
 \details{
+Unchanged exports containing the original sample key and manifest-declared
+label can be consumed directly by dsFlower in the same session, including
+lossless conversion to an Arrow Table/RecordBatch and complete row
+permutations. The admitted patient
+mapping remains private. Subsets, changed values, missing structural columns,
+ambiguous provenance and revoked source handles cannot regain a training
+view. For clinical joins use \code{imagingFeatureViewDS()}.
+
 Supported asset kinds are \code{radiomics_collection},
 \code{feature_table}, \code{qc_table}, \code{dose_table}, and
 \code{embedding_table}.
