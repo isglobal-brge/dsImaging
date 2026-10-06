@@ -37,9 +37,9 @@ sample roster and distinct-patient threshold used for imaging resources.
 \details{
 Unchanged exports containing the original sample key and manifest-declared
 label can be consumed directly by dsFlower in the same session, including
-lossless conversion to an Arrow Table/RecordBatch and complete row
-permutations. The admitted patient
-mapping remains private. Subsets, changed values, missing structural columns,
+lossless conversion to an Arrow Table/RecordBatch that preserves export row
+order. The admitted patient mapping remains private. Reordered copies,
+subsets, changed values, missing structural columns,
 ambiguous provenance and revoked source handles cannot regain a training
 view. For clinical joins use \code{imagingFeatureViewDS()}.
 

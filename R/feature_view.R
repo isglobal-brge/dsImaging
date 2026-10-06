@@ -6,7 +6,7 @@
 
 # A naked feature table is still available to legacy DataSHIELD packages. Mark
 # the whole session for its lifetime: only a complete unchanged registered
-# export (in any row order) can regain a patient-bound view.
+# export in its original row order can regain a patient-bound view.
 #' @keywords internal
 .mark_imaging_feature_table_export <- function(owner_env) {
   if (!is.environment(owner_env)) {
@@ -29,9 +29,8 @@
   !is.null(state) && isTRUE(state$flags$feature_table_exported)
 }
 
-# Normalize the container and row names; when the trusted contract is supplied,
-# put one row per admitted sample into the roster's canonical sample-key order.
-# Values, types and columns stay exact. A missing/duplicate/changed sample key
+# Normalize only the container and incidental attributes, preserving export row
+# order. Values, types and columns stay exact. A missing/duplicate/changed sample key
 # fails the same complete-roster guard used by opaque feature views.
 # No analyst-controlled attribute grants authority: entries live in session state.
 #' @keywords internal
@@ -51,7 +50,6 @@
     sample_ids <- .canonical_imaging_privacy_ids(object[[id_col]])
     .assert_exact_imaging_roster(sample_ids, roster,
                                 context = "Imaging feature table export")
-    object <- object[match(roster$sample_ids, sample_ids), , drop = FALSE]
   }
   attributes(object) <- list(names = names(object),
     row.names = .set_row_names(nrow(object)), class = "data.frame")
@@ -140,12 +138,12 @@
   for (capability in candidates) {
     entry <- state$feature_views[[capability]]
     if (!is.list(entry) || is.null(entry$exported_data)) next
-    canonical <- tryCatch(.imaging_export_frame(
+    normalized <- tryCatch(.imaging_export_frame(
       frame, entry$privacy, entry$privacy_roster), error = function(e) NULL)
-    if (is.null(canonical)) next
-    fingerprint <- digest::digest(canonical, algo = "sha256", serialize = TRUE)
+    if (is.null(normalized)) next
+    fingerprint <- digest::digest(normalized, algo = "sha256", serialize = TRUE)
     if (identical(entry$export_sha256, fingerprint) &&
-        identical(entry$exported_data, canonical)) {
+        identical(entry$exported_data, normalized)) {
       matched <- c(matched, capability)
     }
   }

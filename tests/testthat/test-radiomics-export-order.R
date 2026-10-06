@@ -27,7 +27,7 @@ local_export_policy <- function(.local_envir = parent.frame()) {
     default.nfilter.subset = 3L), .local_envir = .local_envir)
 }
 
-test_that("complete exported frames and Arrow containers ignore only row order", {
+test_that("exact exports normalize containers and incidental attributes only", {
   local_export_policy()
   env <- new.env(parent = globalenv())
   fixture <- radiomics_export_fixture(env)
@@ -35,18 +35,19 @@ test_that("complete exported frames and Arrow containers ignore only row order",
     dsImaging:::.resolve_imaging_feature_view_for_consumer(symbol, capability, env)
   }
   first <- resolve()
-  expected_ids <- sort(fixture$rows$sample_id, method = "radix")
+  expected_ids <- fixture$raw$sample_id
   expect_identical(first$data$sample_id, expected_ids)
   expect_identical(first$data$patient_id,
     fixture$rows$patient_id[match(expected_ids, fixture$rows$sample_id)])
   expect_identical(first$privacy_roster$sample_count, 4L)
   expect_identical(first$privacy_roster$privacy_unit_count, 3L)
-  reversed <- fixture$raw[c(4, 2, 1, 3), , drop = FALSE]
-  rownames(reversed) <- c("arbitrary", "row", "names", "ignored")
+  copied <- fixture$raw
+  rownames(copied) <- c("arbitrary", "row", "names", "ignored")
+  attr(copied, "incidental") <- "ignored"
   path <- tempfile(fileext = ".parquet")
-  arrow::write_parquet(reversed, path)
-  containers <- list(reversed, arrow::Table$create(reversed),
-    arrow::RecordBatch$create(reversed),
+  arrow::write_parquet(copied, path)
+  containers <- list(copied, arrow::Table$create(copied),
+    arrow::RecordBatch$create(copied),
     arrow::read_parquet(path, as_data_frame = FALSE))
   for (candidate in containers) {
     assign("renamed", candidate, env)
@@ -58,13 +59,13 @@ test_that("complete exported frames and Arrow containers ignore only row order",
   state <- dsImaging:::.imaging_session_state(env, create = FALSE)
   before <- ls(state$feature_views, all.names = TRUE)
   registered <- dsImaging:::.register_imaging_feature_table_export(
-    reversed, fixture$authorized, "img", env)
+    copied, fixture$authorized, "img", env)
   expect_identical(registered, first$feature_view_capability)
   expect_identical(ls(state$feature_views, all.names = TRUE), before)
   expect_identical(get("rad", env), fixture$raw)
 })
 
-test_that("export order normalization rejects subsets duplicates and changed cells", {
+test_that("exact export admission rejects permutations subsets duplicates and changed cells", {
   local_export_policy()
   env <- new.env(parent = globalenv())
   fixture <- radiomics_export_fixture(env)
@@ -75,16 +76,20 @@ test_that("export order normalization rejects subsets duplicates and changed cel
   key_alias <- raw; key_alias$sample_id[[1L]] <- paste0(" ", key_alias$sample_id[[1L]])
   type <- raw; type$radiomics_mean <- as.character(type$radiomics_mean)
   missing <- raw; missing$sample_id[[1L]] <- NA_character_
-  variants <- list(subset = raw[-1L, ], duplicate = raw[c(1, 1, 3, 4), ],
+  variants <- list(reordered = raw[c(4, 2, 1, 3), ],
+    subset = raw[-1L, ], duplicate = raw[c(1, 1, 3, 4), ],
     added = rbind(raw, raw[1L, ]), missing = missing, value = value, label = label,
     key = key, key_alias = key_alias, type = type,
     missing_key = raw[setdiff(names(raw), "sample_id")],
     missing_label = raw[setdiff(names(raw), "diagnosis")],
     columns = raw[rev(names(raw))])
   for (name in names(variants)) {
-    for (arrow in c(FALSE, TRUE)) {
-      candidate <- variants[[name]]
-      if (arrow) candidate <- arrow::Table$create(candidate)
+    variant <- variants[[name]]
+    path <- tempfile(fileext = ".parquet")
+    arrow::write_parquet(variant, path)
+    for (candidate in list(variant, arrow::Table$create(variant),
+                            arrow::RecordBatch$create(variant),
+                            arrow::read_parquet(path, as_data_frame = FALSE))) {
       assign("changed", candidate, env)
       expect_error(dsImaging:::.resolve_imaging_feature_view_for_consumer(
         "changed", owner_env = env), "Unknown, stale, or cross-session", info = name)
@@ -96,7 +101,7 @@ test_that("export order normalization rejects subsets duplicates and changed cel
     "rad", owner_env = other), "Unknown, stale, or cross-session")
 })
 
-test_that("row permutations cannot disambiguate different source authorities", {
+test_that("exact exports cannot disambiguate different source authorities", {
   local_export_policy()
   env <- new.env(parent = globalenv())
   fixture <- radiomics_export_fixture(env)
@@ -105,9 +110,8 @@ test_that("row permutations cannot disambiguate different source authorities", {
                             label_col = "diagnosis")
   second <- dsImaging:::.authorized_imaging_dataset("img2", owner_env = env)
   dsImaging:::.register_imaging_feature_table_export(
-    fixture$raw[4:1, ], second, "img2", env)
-  for (candidate in list(fixture$raw, fixture$raw[4:1, ],
-                         arrow::Table$create(fixture$raw[4:1, ]))) {
+    fixture$raw, second, "img2", env)
+  for (candidate in list(fixture$raw, arrow::Table$create(fixture$raw))) {
     assign("ambiguous", candidate, env)
     expect_error(dsImaging:::.resolve_imaging_feature_view_for_consumer(
       "ambiguous", owner_env = env), "Unknown, stale, or cross-session")
@@ -115,12 +119,21 @@ test_that("row permutations cannot disambiguate different source authorities", {
       "ambiguous", first$feature_view_capability, env)
     expect_identical(pinned$data, first$data)
   }
+  for (candidate in list(fixture$raw[4:1, ],
+                         arrow::Table$create(fixture$raw[4:1, ]))) {
+    assign("reordered", candidate, env)
+    expect_error(dsImaging:::.resolve_imaging_feature_view_for_consumer(
+      "reordered", owner_env = env), "Unknown, stale, or cross-session")
+    expect_error(dsImaging:::.resolve_imaging_feature_view_for_consumer(
+      "reordered", first$feature_view_capability, env),
+      "Unknown, stale, or cross-session")
+  }
   evalq(dsImaging::imagingDestroyDS("img"), env)
   expect_error(dsImaging:::.resolve_imaging_feature_view_for_consumer(
     "rad", first$feature_view_capability, env), "Unknown, stale, or cross-session")
 })
 
-test_that("canonical export lookup preserves source roster and private-state guards", {
+test_that("exact export lookup preserves source roster and private-state guards", {
   local_export_policy()
   env <- new.env(parent = globalenv())
   fixture <- radiomics_export_fixture(env)

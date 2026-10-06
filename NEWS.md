@@ -8,8 +8,9 @@
   admit it through the existing imaging feature-view path with the patient
   privacy unit. Modified, subset, reordered or joined copies and unrelated
   tables remain blocked, exactly as before; no table attribute is trusted.
-* Export normalization fixes attribute order so a lossless Parquet/Arrow round
-  trip is recognised as the same admitted table.
+* Export admission preserves the exact row order while normalizing container
+  representation and incidental attributes, so a lossless Parquet/Arrow round
+  trip is recognised as the same admitted table and reordered copies are rejected.
 
 # dsImaging 0.6.0
 
